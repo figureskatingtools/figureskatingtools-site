@@ -31,7 +31,7 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
   }
 }
 
-// Custom domain binding — requires CNAME/TXT records to exist BEFORE deployment
+// Step 1: Bind the custom domain (no SSL yet — cert needs this first)
 resource customHostNameBinding 'Microsoft.Web/sites/hostNameBindings@2023-12-01' =
   if (!empty(customDomain)) {
     name: customDomain
@@ -43,7 +43,7 @@ resource customHostNameBinding 'Microsoft.Web/sites/hostNameBindings@2023-12-01'
     }
   }
 
-// App Service Managed Certificate (free TLS) — depends on hostname binding
+// Step 2: Provision a managed certificate (requires the binding above)
 resource managedCertificate 'Microsoft.Web/certificates@2023-12-01' =
   if (!empty(customDomain)) {
     name: '${customDomain}-cert'
@@ -57,15 +57,13 @@ resource managedCertificate 'Microsoft.Web/certificates@2023-12-01' =
     ]
   }
 
-// Enable SNI SSL binding after certificate is provisioned
-resource sslBinding 'Microsoft.Web/sites/hostNameBindings@2023-12-01' =
+// Step 3: Enable SSL on the binding via a nested module to avoid duplicate resource error
+module sslBinding 'custom-domain-ssl.bicep' =
   if (!empty(customDomain)) {
-    name: customDomain
-    parent: webApp
-    properties: {
-      siteName: webApp.name
-      hostNameType: 'Verified'
-      sslState: 'SniEnabled'
+    name: 'sslBindingDeployment'
+    params: {
+      webAppName: webApp.name
+      customDomain: customDomain
       thumbprint: managedCertificate!.properties.thumbprint
     }
   }

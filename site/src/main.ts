@@ -1,15 +1,7 @@
 import './style.css'
-import { renderSiteNav, initSiteNav, injectSiteNavStyles } from '@figureskatingtools/shared-ui'
+import { renderSiteNav, initSiteNav, injectSiteNavStyles, getEnvPrefix } from '@figureskatingtools/shared-ui'
 
 const SITE_DOMAIN = 'figureskatingtools.com';
-
-/** Detect environment prefix from hostname (dev., test., or empty for prod) */
-function getEnvPrefix(): string {
-  const hostname = window.location.hostname;
-  if (hostname === 'localhost' || hostname === '127.0.0.1') return '';
-  const match = hostname.match(/^(dev|test)\./);
-  return match ? `${match[1]}.` : '';
-}
 
 /** Build a tool URL respecting environment */
 function buildToolUrl(subdomain: string): string {
@@ -39,7 +31,7 @@ const tools: ToolCard[] = [
   },
   {
     id: 'scoremodifier',
-    title: 'Judge Score Modifier',
+    title: 'Score Modifier',
     description: 'Modify and adjust judge scores for figure skating competitions. Tools for score correction and validation.',
     subdomain: 'scoremodifier',
     icon: '✏️',
@@ -70,7 +62,7 @@ function renderToolCards(): string {
 injectSiteNavStyles();
 
 appElement.innerHTML = `
-  ${renderSiteNav('home')}
+  ${renderSiteNav({ activeApp: 'home', logoUrl: '/logo.png' })}
 
   <main>
     <section class="hero">
