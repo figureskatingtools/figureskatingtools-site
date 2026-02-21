@@ -109,9 +109,10 @@ export function renderSiteNav(options: SiteNavOptions | string): string {
     })
     .join('');
 
-  // Downloads link
-  const downloadsHref =
-    opts.activeApp === 'home' ? '#downloads' : `${homeUrl}#downloads`;
+  // Downloads – coming soon
+  const downloadsItem = `<div class="fst-nav-item fst-nav-item--disabled">
+    <span class="fst-nav-item-label">Downloads <small>(coming soon)</small></span>
+  </div>`;
 
   return `<nav class="fst-nav" role="navigation">
     <div class="fst-nav-inner">
@@ -121,9 +122,7 @@ export function renderSiteNav(options: SiteNavOptions | string): string {
       </a>
       <div class="fst-nav-menu">
         ${toolsHtml}
-        <div class="fst-nav-item">
-          <a href="${downloadsHref}" class="fst-nav-item-link">Downloads</a>
-        </div>
+        ${downloadsItem}
       </div>
       <div class="fst-nav-right" id="fst-nav-right"></div>
     </div>
