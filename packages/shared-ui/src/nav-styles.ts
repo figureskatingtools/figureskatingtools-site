@@ -18,7 +18,7 @@ const NAV_STYLES = `
   padding: 0 1.5rem;
   display: flex;
   align-items: center;
-  height: 3.5rem;
+  height: 4rem;
   gap: 1.5rem;
 }
 
@@ -31,7 +31,7 @@ const NAV_STYLES = `
 }
 
 .fst-nav-logo img {
-  height: 28px;
+  height: 40px;
   width: auto;
 }
 
