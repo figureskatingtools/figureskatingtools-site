@@ -9,13 +9,14 @@ const NAV_STYLES = `
   position: sticky;
   top: 0;
   z-index: 100;
+  overflow: visible;
   -webkit-font-smoothing: antialiased;
 }
 
 .fst-nav-inner {
   max-width: 1280px;
   margin: 0 auto;
-  padding: 0 1.5rem 0 calc(1.5rem + 120px);
+  padding: 0 1.5rem;
   display: flex;
   align-items: center;
   height: 4rem;
@@ -23,15 +24,14 @@ const NAV_STYLES = `
   position: relative;
 }
 
-/* Logo — floats over nav + body on desktop, text on mobile */
+/* Logo — extends below the nav bar on desktop, text on mobile */
 .fst-nav-logo {
-  position: absolute;
-  left: 1.5rem;
-  top: 0;
   text-decoration: none;
   z-index: 120;
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  align-self: flex-start;
+  flex-shrink: 0;
 }
 
 .fst-nav-logo-img {
@@ -54,13 +54,10 @@ const NAV_STYLES = `
 /* Mobile: hide image, show text, collapse padding */
 @media (max-width: 768px) {
   .fst-nav-inner {
-    padding-left: 1.5rem;
     gap: 0.5rem;
   }
   .fst-nav-logo {
-    position: static;
-    transform: none;
-    flex-shrink: 0;
+    align-self: center;
   }
   .fst-nav-logo-img {
     display: none;
