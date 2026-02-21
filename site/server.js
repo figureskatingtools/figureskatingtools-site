@@ -1,5 +1,5 @@
 // Zero-dependency Node.js server for Azure App Service
-// Serves static files with SPA fallback — no API proxy needed for the landing page
+// Serves static files with SPA fallback, provides /userinfo for Easy Auth
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
@@ -23,6 +23,61 @@ const MIME_TYPES = {
     '.ttf': 'font/ttf',
     '.map': 'application/json',
 };
+
+// ── /userinfo endpoint ──
+// Reads X-MS-CLIENT-PRINCIPAL header set by Easy Auth (no tokens exposed)
+function handleUserInfo(req, res) {
+    const principal = req.headers['x-ms-client-principal'];
+    const principalName = req.headers['x-ms-client-principal-name'];
+
+    if (!principal && !principalName) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ authenticated: false }));
+        return;
+    }
+
+    let userInfo = { authenticated: true, userDetails: principalName || 'unknown' };
+
+    if (principal) {
+        try {
+            const decoded = Buffer.from(principal, 'base64').toString('utf-8');
+            const parsed = JSON.parse(decoded);
+
+            let displayName = parsed.userDetails || '';
+            const claims = parsed.claims || [];
+            if (Array.isArray(claims)) {
+                const nameClaim = claims.find(c =>
+                    c.typ === 'name' ||
+                    c.typ === 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name'
+                );
+                const emailClaim = claims.find(c =>
+                    c.typ === 'preferred_username' ||
+                    c.typ === 'email' ||
+                    c.typ === 'emails' ||
+                    c.typ === 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress'
+                );
+                displayName = (emailClaim && emailClaim.val) ||
+                              (nameClaim && nameClaim.val) ||
+                              parsed.userDetails ||
+                              principalName ||
+                              'unknown';
+            }
+
+            userInfo = {
+                authenticated: true,
+                userId: parsed.userId,
+                identityProvider: parsed.identityProvider,
+                userDetails: displayName || principalName || 'unknown',
+                userRoles: parsed.userRoles || [],
+            };
+        } catch (e) {
+            // parsing failed, use principalName fallback
+        }
+    }
+
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(userInfo));
+}
 
 // ── Static file serving with SPA fallback ──
 function serveStatic(req, res) {
@@ -69,12 +124,18 @@ const SECURITY_HEADERS = {
 
 // ── Request router ──
 const server = http.createServer((req, res) => {
+    const pathname = req.url.split('?')[0];
+
     // Apply security headers to all responses
     for (const [key, val] of Object.entries(SECURITY_HEADERS)) {
         res.setHeader(key, val);
     }
 
-    serveStatic(req, res);
+    if (pathname === '/userinfo') {
+        handleUserInfo(req, res);
+    } else {
+        serveStatic(req, res);
+    }
 });
 
 server.listen(PORT, () => {
