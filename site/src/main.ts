@@ -24,13 +24,20 @@ const appElement = document.querySelector<HTMLDivElement>('#app')!;
 injectSiteNavStyles();
 
 async function init() {
-  // 1. Check auth
+  // 1. Check auth via SWA's built-in endpoint
   let userInfo: any = null;
   try {
-    const resp = await fetch('/userinfo');
+    const resp = await fetch('/.auth/me');
     const data = await resp.json();
-    if (data && data.authenticated) {
-      userInfo = data;
+    if (data && data.clientPrincipal) {
+      const cp = data.clientPrincipal;
+      userInfo = {
+        authenticated: true,
+        userId: cp.userId,
+        identityProvider: cp.identityProvider,
+        userDetails: cp.userDetails,
+        userRoles: cp.userRoles || [],
+      };
     }
   } catch (_e) {
     // assume unauthenticated
@@ -47,7 +54,7 @@ function renderUnauthenticatedView() {
   appElement.innerHTML = `
     <div class="unauth-page">
       <div class="unauth-header">
-        <a href="/.auth/login/aad?post_login_redirect_url=/" class="btn btn-primary btn-sm unauth-signin-btn">Sign In</a>
+        <a href="/.auth/login/aad?post_login_redirect_uri=/" class="btn btn-primary btn-sm unauth-signin-btn">Sign In</a>
       </div>
       <div class="unauth-content">
         <img src="/logo.png" alt="Figure Skating Tools" class="unauth-logo">
@@ -58,7 +65,7 @@ function renderUnauthenticatedView() {
         <p class="unauth-contact">
           For access, contact <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>
         </p>
-        <a href="/.auth/login/aad?post_login_redirect_url=/" class="btn btn-primary">Sign In to Continue</a>
+        <a href="/.auth/login/aad?post_login_redirect_uri=/" class="btn btn-primary">Sign In to Continue</a>
       </div>
     </div>
   `;
