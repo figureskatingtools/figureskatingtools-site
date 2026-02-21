@@ -15,24 +15,60 @@ const NAV_STYLES = `
 .fst-nav-inner {
   max-width: 1280px;
   margin: 0 auto;
-  padding: 0 1.5rem;
+  padding: 0 1.5rem 0 calc(1.5rem + 120px);
   display: flex;
   align-items: center;
   height: 4rem;
-  gap: 1.5rem;
+  gap: 0.75rem;
+  position: relative;
 }
 
-/* Logo */
+/* Logo — floats over nav + body on desktop, text on mobile */
 .fst-nav-logo {
+  position: absolute;
+  left: 1.5rem;
+  top: 50%;
+  transform: translateY(-50%);
+  text-decoration: none;
+  z-index: 120;
   display: flex;
   align-items: center;
-  text-decoration: none;
-  flex-shrink: 0;
 }
 
-.fst-nav-logo img {
-  height: 40px;
+.fst-nav-logo-img {
+  height: 100px;
   width: auto;
+  filter: drop-shadow(0 2px 8px rgb(0 0 0 / 0.08));
+}
+
+.fst-nav-logo-text {
+  display: none;
+  font-weight: 700;
+  font-size: 1.125rem;
+  background: linear-gradient(135deg, #6366f1, #06b6d4);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  letter-spacing: -0.02em;
+}
+
+/* Mobile: hide image, show text, collapse padding */
+@media (max-width: 768px) {
+  .fst-nav-inner {
+    padding-left: 1.5rem;
+    gap: 0.5rem;
+  }
+  .fst-nav-logo {
+    position: static;
+    transform: none;
+    flex-shrink: 0;
+  }
+  .fst-nav-logo-img {
+    display: none;
+  }
+  .fst-nav-logo-text {
+    display: inline;
+  }
 }
 
 /* Menu items container */

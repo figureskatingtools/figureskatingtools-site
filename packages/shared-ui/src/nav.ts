@@ -116,7 +116,8 @@ export function renderSiteNav(options: SiteNavOptions | string): string {
   return `<nav class="fst-nav" role="navigation">
     <div class="fst-nav-inner">
       <a href="${homeUrl}" class="fst-nav-logo">
-        <img src="${logoUrl}" alt="Figure Skating Tools" height="40">
+        <img src="${logoUrl}" alt="Figure Skating Tools" class="fst-nav-logo-img">
+        <span class="fst-nav-logo-text">FSTools</span>
       </a>
       <div class="fst-nav-menu">
         ${toolsHtml}
