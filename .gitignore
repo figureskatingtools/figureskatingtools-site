@@ -1,0 +1,7 @@
+node_modules/
+dist/
+public/
+*.zip
+.env
+.env.local
+*.tsbuildinfo

@@ -1,0 +1,140 @@
+name: Deploy Site to Azure
+
+on:
+  push:
+    branches: [main, test, dev]
+    paths:
+      - 'site/**'
+      - 'infra/**'
+      - '.github/workflows/deploy-site.yml'
+
+permissions:
+  id-token: write
+  contents: read
+  packages: read
+
+jobs:
+  set-environment:
+    name: Determine Environment
+    runs-on: ubuntu-latest
+    outputs:
+      env_name: ${{ steps.set-env.outputs.env_name }}
+    steps:
+      - name: Set environment name
+        id: set-env
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "env_name=prod" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref }}" == "refs/heads/test" ]]; then
+            echo "env_name=test" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
+            echo "env_name=dev" >> "$GITHUB_OUTPUT"
+          fi
+
+  deploy-infra:
+    name: Deploy Infrastructure
+    needs: set-environment
+    runs-on: ubuntu-latest
+    environment: ${{ needs.set-environment.outputs.env_name }}
+    outputs:
+      web_app_name: ${{ steps.deploy.outputs.webAppName }}
+      web_app_hostname: ${{ steps.deploy.outputs.webAppDefaultHostName }}
+      resource_group_name: ${{ steps.deploy.outputs.resourceGroupName }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy Bicep template
+        id: deploy
+        run: |
+          ENV_NAME="${{ needs.set-environment.outputs.env_name }}"
+          DEPLOYMENT_NAME="deploy-fs-site-$(date +%s)"
+
+          OUTPUT=$(az deployment sub create \
+            --location "${{ vars.LOCATION }}" \
+            --template-file infra/main.bicep \
+            --parameters infra/parameters/${ENV_NAME}.bicepparam \
+            --name "$DEPLOYMENT_NAME" \
+            --query 'properties.outputs' \
+            -o json)
+
+          echo "webAppName=$(echo "$OUTPUT" | jq -r '.webAppName.value')" >> "$GITHUB_OUTPUT"
+          echo "webAppDefaultHostName=$(echo "$OUTPUT" | jq -r '.webAppDefaultHostName.value')" >> "$GITHUB_OUTPUT"
+          echo "resourceGroupName=$(echo "$OUTPUT" | jq -r '.resourceGroupName.value')" >> "$GITHUB_OUTPUT"
+
+  deploy-frontend:
+    name: Deploy Frontend (Web App)
+    needs: [set-environment, deploy-infra]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.set-environment.outputs.env_name }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: https://npm.pkg.github.com
+
+      - name: Install dependencies & build shared-ui
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build site
+        run: |
+          cd site
+          npm run build
+
+      - name: Create deployment package
+        run: |
+          STAGE_DIR=$(mktemp -d)
+          cp site/server.js "$STAGE_DIR/"
+          mkdir -p "$STAGE_DIR/public"
+          cp -r site/dist/* "$STAGE_DIR/public/"
+
+          cd "$STAGE_DIR"
+          zip -r "$GITHUB_WORKSPACE/frontend.zip" .
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Configure Web App settings
+        run: |
+          RESOURCE_GROUP="${{ needs.deploy-infra.outputs.resource_group_name }}"
+          WEBAPP_NAME="${{ needs.deploy-infra.outputs.web_app_name }}"
+
+          az webapp config appsettings set \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$WEBAPP_NAME" \
+            --settings \
+              SCM_DO_BUILD_DURING_DEPLOYMENT="false" \
+            --output none
+
+          az webapp config set \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$WEBAPP_NAME" \
+            --startup-file "node server.js" \
+            --linux-fx-version "NODE|22-lts" \
+            --output none
+
+      - name: Deploy to Azure Web App
+        run: |
+          az webapp deploy \
+            --resource-group "${{ needs.deploy-infra.outputs.resource_group_name }}" \
+            --name "${{ needs.deploy-infra.outputs.web_app_name }}" \
+            --src-path frontend.zip \
+            --type zip \
+            --clean true

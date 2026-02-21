@@ -1,0 +1,8 @@
+{
+  "name": "figureskatingtools-site",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "site"
+  ]
+}
