@@ -27,8 +27,7 @@ const NAV_STYLES = `
 .fst-nav-logo {
   position: absolute;
   left: 1.5rem;
-  top: 50%;
-  transform: translateY(-50%);
+  top: 0;
   text-decoration: none;
   z-index: 120;
   display: flex;
