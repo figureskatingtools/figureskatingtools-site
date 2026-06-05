@@ -86,36 +86,12 @@ jobs:
               AZURE_CLIENT_ID="${{ secrets.AUTH_CLIENT_ID }}" \
               AZURE_CLIENT_SECRET="${{ secrets.AUTH_CLIENT_SECRET }}"
 
-      - name: Update app registration redirect URIs
-        run: |
-          set -euo pipefail
-
-          AUTH_APP_OBJECT_ID="${{ secrets.AUTH_APP_OBJECT_ID }}"
-          SWA_HOSTNAME="${{ steps.deploy.outputs.swaDefaultHostname }}"
-          CUSTOM_DOMAIN="${{ vars.CUSTOM_DOMAIN }}"
-
-          if [ -z "${AUTH_APP_OBJECT_ID}" ]; then
-            echo "WARNING: AUTH_APP_OBJECT_ID not set, skipping redirect URI update."
-            exit 0
-          fi
-
-          echo "Updating redirect URIs on app registration..."
-          if [ -n "${CUSTOM_DOMAIN}" ]; then
-            REDIRECT_URIS=$(jq -n \
-              --arg swa "https://${SWA_HOSTNAME}/.auth/login/aad/callback" \
-              --arg custom "https://${CUSTOM_DOMAIN}/.auth/login/aad/callback" \
-              '{web: {redirectUris: [$swa, $custom]}}')
-          else
-            REDIRECT_URIS=$(jq -n \
-              --arg swa "https://${SWA_HOSTNAME}/.auth/login/aad/callback" \
-              '{web: {redirectUris: [$swa]}}')
-          fi
-
-          az rest --method PATCH \
-            --uri "https://graph.microsoft.com/v1.0/applications/${AUTH_APP_OBJECT_ID}" \
-            --headers 'Content-Type=application/json' \
-            --body "$REDIRECT_URIS"
-          echo "Redirect URIs updated."
+      # NOTE: Auth-app redirect URIs are managed manually (the deploy principal has no
+      # Microsoft Graph rights to PATCH the app registration). Add the per-environment
+      # callbacks once via Entra/az; they're stable for the life of the SWA + custom domain:
+      #   prod: https://figureskatingtools.com/.auth/login/aad/callback
+      #   test: https://test.figureskatingtools.com/.auth/login/aad/callback
+      #         https://<swa-default-hostname>/.auth/login/aad/callback
 
   deploy-frontend:
     name: Deploy Frontend (Static Web App)
