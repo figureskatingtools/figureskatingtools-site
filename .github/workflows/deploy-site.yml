@@ -131,9 +131,12 @@ jobs:
       - name: Generate changelog
         run: |
           chmod +x scripts/generate-changelog.sh
-          scripts/generate-changelog.sh site/public/changelog.json
+          # prod tracks the main branch; the test env tracks the test branch
+          if [ "$ENV_NAME" = "prod" ]; then BRANCH=main; else BRANCH=test; fi
+          scripts/generate-changelog.sh site/public/changelog.json "$BRANCH"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ENV_NAME: ${{ needs.set-environment.outputs.env_name }}
 
       - name: Build site
         run: |

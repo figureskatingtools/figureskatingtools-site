@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# Generate changelog.json from recent main-branch commits across all repos.
+# Generate changelog.json from recent commits across all repos.
 # Uses the GitHub CLI (gh) to fetch commits.
-# Output: site/public/changelog.json
+# Usage: generate-changelog.sh [output-file] [branch]
+#   output-file  defaults to site/public/changelog.json
+#   branch       git branch to read commits from (defaults to main). The deploy
+#                workflow passes 'main' for prod and 'test' for the test env.
 set -euo pipefail
 
 # Repos and their display labels
@@ -11,10 +14,11 @@ declare -A REPOS=(
 )
 
 OUTPUT_FILE="${1:-site/public/changelog.json}"
-MAX_COMMITS=30 # per repo
-BRANCH="main"
+BRANCH="${2:-main}"
+MAX_COMMITS=30 # per repo (fetched, then merged + sorted across repos)
+MAX_ENTRIES=4  # shown in the "What's New" panel
 
-echo "Generating changelog from GitHub commits..."
+echo "Generating changelog from GitHub commits (branch: ${BRANCH})..."
 
 ALL_ENTRIES="[]"
 
@@ -43,8 +47,8 @@ for repo in "${!REPOS[@]}"; do
   ALL_ENTRIES=$(echo "$ALL_ENTRIES" "$REPO_ENTRIES" | jq -s '.[0] + .[1]')
 done
 
-# Sort by date descending, limit to 50 total entries
-SORTED=$(echo "$ALL_ENTRIES" | jq 'sort_by(.date) | reverse | .[0:50]')
+# Sort by date descending, keep only the most recent entries across all repos
+SORTED=$(echo "$ALL_ENTRIES" | jq --argjson n "$MAX_ENTRIES" 'sort_by(.date) | reverse | .[0:$n]')
 
 # Ensure output directory exists
 mkdir -p "$(dirname "$OUTPUT_FILE")"
