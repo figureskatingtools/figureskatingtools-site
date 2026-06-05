@@ -113,6 +113,11 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build shared-ui
+        # site depends on the local @figureskatingtools/shared-ui workspace, whose
+        # main/types point at dist/. Build it first or site's tsc fails with TS2307.
+        run: npm run build --workspace=@figureskatingtools/shared-ui
+
       - name: Generate changelog
         run: |
           chmod +x scripts/generate-changelog.sh
