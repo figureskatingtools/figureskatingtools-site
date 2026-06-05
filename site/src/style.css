@@ -279,6 +279,12 @@ body {
   font-size: 0.8rem;
 }
 
+.changelog-showmore {
+  display: block;
+  margin: 0.75rem auto 0;
+  font-size: 0.85rem;
+}
+
 /* ── User Menu (same as judgepapers) ── */
 .user-menu-container {
   position: relative;
