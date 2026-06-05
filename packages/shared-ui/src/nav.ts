@@ -20,7 +20,6 @@ const SITE_DOMAIN = 'figureskatingtools.com';
 
 /**
  * Detect the environment prefix from the current hostname.
- * - dev.judgepapers.figureskatingtools.com → 'dev.'
  * - test.figureskatingtools.com → 'test.'
  * - figureskatingtools.com → '' (prod)
  * - localhost → '' (local dev)
@@ -29,7 +28,7 @@ export function getEnvPrefix(): string {
   if (typeof window === 'undefined') return '';
   const hostname = window.location.hostname;
   if (hostname === 'localhost' || hostname === '127.0.0.1') return '';
-  const match = hostname.match(/^(dev|test)\./);
+  const match = hostname.match(/^(test)\./);
   return match ? `${match[1]}.` : '';
 }
 

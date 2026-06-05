@@ -2,11 +2,21 @@ name: Deploy Site to Azure
 
 on:
   push:
-    branches: [main, test, dev]
+    branches: [main]
     paths:
       - 'site/**'
       - 'infra/**'
       - '.github/workflows/deploy-site.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        type: choice
+        required: true
+        default: test
+        options:
+          - test
+          - prod
 
 permissions:
   id-token: write
@@ -23,12 +33,10 @@ jobs:
       - name: Set environment name
         id: set-env
         run: |
-          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "env_name=${{ github.event.inputs.environment }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
             echo "env_name=prod" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.ref }}" == "refs/heads/test" ]]; then
-            echo "env_name=test" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.ref }}" == "refs/heads/dev" ]]; then
-            echo "env_name=dev" >> "$GITHUB_OUTPUT"
           fi
 
   deploy-infra:

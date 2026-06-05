@@ -1,7 +1,5 @@
 import './style.css'
-import { renderSiteNav, initSiteNav, injectSiteNavStyles, getEnvPrefix } from '@figureskatingtools/shared-ui'
-
-const SITE_DOMAIN = 'figureskatingtools.com';
+import { renderSiteNav, initSiteNav, injectSiteNavStyles } from '@figureskatingtools/shared-ui'
 
 /** Escape HTML */
 function escapeHtml(str: string): string {
