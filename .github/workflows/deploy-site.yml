@@ -77,6 +77,16 @@ jobs:
           echo "swaDefaultHostname=$(echo "$OUTPUT" | jq -r '.swaDefaultHostname.value')" >> "$GITHUB_OUTPUT"
           echo "resourceGroupName=$(echo "$OUTPUT" | jq -r '.resourceGroupName.value')" >> "$GITHUB_OUTPUT"
 
+          # Surface the zone's Azure name servers so they can be delegated at the
+          # registrar (Joker). Delegation is a one-time manual step done outside CI.
+          {
+            echo "## DNS zone $(echo "$OUTPUT" | jq -r '.dnsZoneName.value')"
+            echo "Delegate these name servers at the domain registrar:"
+            echo '```'
+            echo "$OUTPUT" | jq -r '.dnsNameServers.value[]'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Configure SWA auth app settings
         run: |
           az staticwebapp appsettings set \
