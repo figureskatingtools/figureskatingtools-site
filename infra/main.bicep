@@ -9,17 +9,15 @@ resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
   location: location
 }
 
-module webApp 'modules/webapp.bicep' = {
+module staticWebApp 'modules/staticwebapp.bicep' = {
   scope: rg
-  name: 'webAppDeployment'
+  name: 'staticWebAppDeployment'
   params: {
-    location: location
-    webAppName: 'app-fs-site-${uniqueString(rg.id)}'
-    appServicePlanName: 'asp-fs-site-web'
+    name: 'swa-fs-site-${uniqueString(rg.id)}'
     customDomain: customDomain
   }
 }
 
 output resourceGroupName string = rg.name
-output webAppName string = webApp.outputs.webAppName
-output webAppDefaultHostName string = webApp.outputs.webAppDefaultHostName
+output swaName string = staticWebApp.outputs.name
+output swaDefaultHostname string = staticWebApp.outputs.defaultHostname
