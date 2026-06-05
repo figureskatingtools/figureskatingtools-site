@@ -50,10 +50,10 @@ jobs:
       resource_group_name: ${{ steps.deploy.outputs.resourceGroupName }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Azure Login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
@@ -86,36 +86,12 @@ jobs:
               AZURE_CLIENT_ID="${{ secrets.AUTH_CLIENT_ID }}" \
               AZURE_CLIENT_SECRET="${{ secrets.AUTH_CLIENT_SECRET }}"
 
-      - name: Update app registration redirect URIs
-        run: |
-          set -euo pipefail
-
-          AUTH_APP_OBJECT_ID="${{ secrets.AUTH_APP_OBJECT_ID }}"
-          SWA_HOSTNAME="${{ steps.deploy.outputs.swaDefaultHostname }}"
-          CUSTOM_DOMAIN="${{ vars.CUSTOM_DOMAIN }}"
-
-          if [ -z "${AUTH_APP_OBJECT_ID}" ]; then
-            echo "WARNING: AUTH_APP_OBJECT_ID not set, skipping redirect URI update."
-            exit 0
-          fi
-
-          echo "Updating redirect URIs on app registration..."
-          if [ -n "${CUSTOM_DOMAIN}" ]; then
-            REDIRECT_URIS=$(jq -n \
-              --arg swa "https://${SWA_HOSTNAME}/.auth/login/aad/callback" \
-              --arg custom "https://${CUSTOM_DOMAIN}/.auth/login/aad/callback" \
-              '{web: {redirectUris: [$swa, $custom]}}')
-          else
-            REDIRECT_URIS=$(jq -n \
-              --arg swa "https://${SWA_HOSTNAME}/.auth/login/aad/callback" \
-              '{web: {redirectUris: [$swa]}}')
-          fi
-
-          az rest --method PATCH \
-            --uri "https://graph.microsoft.com/v1.0/applications/${AUTH_APP_OBJECT_ID}" \
-            --headers 'Content-Type=application/json' \
-            --body "$REDIRECT_URIS"
-          echo "Redirect URIs updated."
+      # NOTE: Auth-app redirect URIs are managed manually (the deploy principal has no
+      # Microsoft Graph rights to PATCH the app registration). Add the per-environment
+      # callbacks once via Entra/az; they're stable for the life of the SWA + custom domain:
+      #   prod: https://figureskatingtools.com/.auth/login/aad/callback
+      #   test: https://test.figureskatingtools.com/.auth/login/aad/callback
+      #         https://<swa-default-hostname>/.auth/login/aad/callback
 
   deploy-frontend:
     name: Deploy Frontend (Static Web App)
@@ -124,10 +100,10 @@ jobs:
     environment: ${{ needs.set-environment.outputs.env_name }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '22'
           registry-url: https://npm.pkg.github.com
@@ -136,6 +112,11 @@ jobs:
         run: npm ci
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build shared-ui
+        # site depends on the local @figureskatingtools/shared-ui workspace, whose
+        # main/types point at dist/. Build it first or site's tsc fails with TS2307.
+        run: npm run build --workspace=@figureskatingtools/shared-ui
 
       - name: Generate changelog
         run: |
@@ -150,7 +131,7 @@ jobs:
           npm run build
 
       - name: Azure Login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
