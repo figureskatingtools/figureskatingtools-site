@@ -32,6 +32,7 @@ for repo in "${!REPOS[@]}"; do
     --jq '.[] | {
       sha: .sha[0:7],
       date: (.commit.committer.date[0:10]),
+      iso: .commit.committer.date,
       title: (.commit.message | split("\n") | .[0]),
       description: (.commit.message | split("\n") | .[1:] | join("\n") | ltrimstr("\n")),
       author: .commit.author.name
@@ -47,8 +48,11 @@ for repo in "${!REPOS[@]}"; do
   ALL_ENTRIES=$(echo "$ALL_ENTRIES" "$REPO_ENTRIES" | jq -s '.[0] + .[1]')
 done
 
-# Sort by date descending, keep only the most recent entries across all repos
-SORTED=$(echo "$ALL_ENTRIES" | jq --argjson n "$MAX_ENTRIES" 'sort_by(.date) | reverse | .[0:$n]')
+# Keep only the most recent entries across all repos. Sort on the full ISO
+# timestamp (`iso`), not the day-granular `date`, so same-day commits order
+# correctly; then drop the sort-only helper field from the output.
+SORTED=$(echo "$ALL_ENTRIES" | jq --argjson n "$MAX_ENTRIES" \
+  'sort_by(.iso) | reverse | .[0:$n] | map(del(.iso))')
 
 # Ensure output directory exists
 mkdir -p "$(dirname "$OUTPUT_FILE")"
