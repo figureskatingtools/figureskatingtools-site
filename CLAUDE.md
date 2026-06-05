@@ -56,9 +56,18 @@ The tool/home URLs are derived from `window.location.hostname` in `packages/shar
 
 **Adding or toggling a tool is a single-list change:** edit `DEFAULT_TOOLS` in `packages/shared-ui/src/nav.ts` (id, label, subdomain, `enabled`). `enabled: false` renders "coming soon"; `true` renders a live link to the tool's subdomain. (`main.ts` no longer carries its own tool-card list — it only renders the shared nav.) After editing, **bump `packages/shared-ui/package.json` version** so the change publishes and downstream tool repos pick it up.
 
-## Changelog generation
+## Changelog ("What's New" panel)
 
-`scripts/generate-changelog.sh [output] [branch]` is run during deploy (not committed output). It uses `gh api` to pull recent commits from `figureskatingtools/figureskatingtools-site` and `figureskatingtools/fs-judgepapers`, merges/sorts them, and writes `site/public/changelog.json` (consumed by `loadChangelog()` in `main.ts`). The "What's New" panel is **environment-aware**: the deploy workflow passes the branch per environment — **`main` for prod, `test` for the test env** — and the script keeps only the **latest 4** entries across both repos (a repo without the requested branch is skipped with a warning). To add a repo to the feed, extend the `REPOS` map in the script.
+The panel fetches commits **live from the public GitHub API in the browser** (`loadChangelog()` in `main.ts`), so updates from the tool repos appear without a site redeploy. The repo→label list is single-sourced in **`site/public/changelog-sources.json`** — adding a future tool to the feed is one entry there, nothing else. All source repos must stay **public** (unauthenticated API). Mechanics:
+
+- **Environment-aware branch**: prod hostname → `main`, `test.*` → `test`, localhost → `test` (`changelogBranch()`).
+- **All-or-nothing**: if any repo's fetch fails (offline, rate-limit 403 — which returns a JSON *object*, not an array — or a repo gone private), the client falls back to the build-time `/changelog.json` rather than silently dropping a tool.
+- **Display**: 4 newest entries with a "Show more" toggle (up to 20), merged across repos and sorted on the full ISO committer timestamp.
+- **Caching**: merged result is kept in `sessionStorage` for 5 min (`changelog-cache-v1`) to stay well inside GitHub's 60 req/hr/IP unauthenticated limit.
+
+`scripts/generate-changelog.sh [output] [branch] [sources-file]` still runs during deploy, but only to produce the **fallback** `site/public/changelog.json` (not committed; 20 entries). It reads the same `changelog-sources.json` via jq, and the deploy workflow passes the branch per environment — **`main` for prod, `test` for the test env** (a repo without the requested branch is skipped with a warning). Keep the client mapping in `fetchRepoCommits()` and the script's jq mapping in sync (`sha[0:7]`, `date = iso[0:10]`, title = first message line, description = rest).
+
+When adding a tool to the feed, also add a `.changelog-badge--<tool-slug>` rule in `site/src/style.css` (slug = label lowercased, spaces → `-`); without it the badge renders unstyled.
 
 ## Commit messages
 
