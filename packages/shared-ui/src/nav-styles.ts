@@ -1,9 +1,13 @@
 const NAV_STYLES = `
-/* ── Figure Skating Tools — Unified Navigation ── */
+/* ── Figure Skating Tools — Unified Navigation ──
+   "Protocol" design language: glacial ink on frost paper,
+   hairline rules, medal-gold active marker. */
 .fst-nav {
-  background-color: #ffffff;
-  border-bottom: 1px solid #e2e8f0;
-  font-family: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
+  background-color: rgba(255, 255, 255, 0.82);
+  -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  backdrop-filter: blur(14px) saturate(1.4);
+  border-bottom: 1px solid #d7e1ea;
+  font-family: 'Instrument Sans', system-ui, Avenir, Helvetica, Arial, sans-serif;
   font-size: 0.875rem;
   line-height: 1.5;
   position: sticky;
@@ -16,7 +20,7 @@ const NAV_STYLES = `
 .fst-nav-inner {
   max-width: 1280px;
   margin: 0 auto;
-  padding: 0 1.5rem;
+  padding: 0 2rem;
   display: flex;
   align-items: center;
   height: 4rem;
@@ -37,24 +41,23 @@ const NAV_STYLES = `
 .fst-nav-logo-img {
   height: 100px;
   width: auto;
-  filter: drop-shadow(0 2px 8px rgb(0 0 0 / 0.08));
+  filter: drop-shadow(0 2px 10px rgb(13 31 51 / 0.12));
 }
 
 .fst-nav-logo-text {
   display: none;
-  font-weight: 700;
-  font-size: 1.125rem;
-  background: linear-gradient(135deg, #6366f1, #06b6d4);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
-  letter-spacing: -0.02em;
+  font-family: 'Fraunces', Georgia, 'Times New Roman', serif;
+  font-weight: 600;
+  font-size: 1.25rem;
+  color: #0d1f33;
+  letter-spacing: -0.01em;
 }
 
 /* Mobile: hide image, show text, collapse padding */
 @media (max-width: 768px) {
   .fst-nav-inner {
     gap: 0.5rem;
+    padding: 0 1rem;
   }
   .fst-nav-logo {
     align-self: center;
@@ -71,7 +74,7 @@ const NAV_STYLES = `
 .fst-nav-menu {
   display: flex;
   align-items: center;
-  gap: 0.125rem;
+  gap: 0.25rem;
   flex: 1;
 }
 
@@ -85,14 +88,15 @@ const NAV_STYLES = `
 .fst-nav-item-btn {
   display: flex;
   align-items: center;
-  gap: 0.375rem;
-  padding: 0.5rem 0.75rem;
+  gap: 0.4rem;
+  padding: 0.5rem 0.875rem;
   border-radius: 0.375rem;
-  color: #475569;
+  color: #41566c;
   text-decoration: none;
   font-size: 0.875rem;
   font-weight: 500;
   font-family: inherit;
+  letter-spacing: 0.005em;
   background: none;
   border: none;
   cursor: pointer;
@@ -102,20 +106,31 @@ const NAV_STYLES = `
 
 .fst-nav-item-link:hover,
 .fst-nav-item-btn:hover {
-  color: #1e293b;
-  background-color: #f1f5f9;
+  color: #0d1f33;
+  background-color: #e9f1f8;
 }
 
-/* Active tool highlight */
+/* Active tool — ink text with a medal-gold diamond marker */
 .fst-nav-item--active > .fst-nav-item-link,
 .fst-nav-item--active > .fst-nav-item-btn {
-  color: #6366f1;
+  color: #0d1f33;
   font-weight: 600;
+}
+
+.fst-nav-item--active > .fst-nav-item-link::before,
+.fst-nav-item--active > .fst-nav-item-btn::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, #d4af4f, #b08d2f);
+  transform: rotate(45deg);
+  border-radius: 1px;
 }
 
 .fst-nav-item--active > .fst-nav-item-link:hover,
 .fst-nav-item--active > .fst-nav-item-btn:hover {
-  background-color: #eef2ff;
+  background-color: #e9f1f8;
 }
 
 /* Disabled (coming soon) tool */
@@ -123,8 +138,8 @@ const NAV_STYLES = `
   display: flex;
   align-items: center;
   gap: 0.375rem;
-  padding: 0.5rem 0.75rem;
-  color: #94a3b8;
+  padding: 0.5rem 0.875rem;
+  color: #93a7ba;
   font-size: 0.875rem;
   font-weight: 500;
   cursor: default;
@@ -132,8 +147,12 @@ const NAV_STYLES = `
 }
 
 .fst-nav-item--disabled .fst-nav-item-label small {
-  font-size: 0.75rem;
-  font-style: italic;
+  font-size: 0.7rem;
+  font-style: normal;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #a8b9c9;
 }
 
 /* Chevron icon */
@@ -150,16 +169,16 @@ const NAV_STYLES = `
   display: none;
   position: absolute;
   left: 0;
-  top: calc(100% + 0.375rem);
+  top: calc(100% + 0.5rem);
   background-color: #ffffff;
-  border: 1px solid #e2e8f0;
+  border: 1px solid #d7e1ea;
   border-radius: 0.5rem;
-  box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
-  min-width: 200px;
+  box-shadow: 0 12px 32px -8px rgb(13 31 51 / 0.18), 0 2px 8px -2px rgb(13 31 51 / 0.08);
+  min-width: 210px;
   flex-direction: column;
   overflow: hidden;
   z-index: 110;
-  padding: 0.25rem 0;
+  padding: 0.3rem 0;
 }
 
 .fst-dropdown-menu--open {
@@ -168,32 +187,36 @@ const NAV_STYLES = `
 
 .fst-dropdown-item {
   display: block;
-  padding: 0.5rem 1rem;
-  color: #1e293b;
+  padding: 0.55rem 1rem;
+  color: #18324d;
   text-decoration: none;
   font-size: 0.875rem;
-  font-weight: 400;
-  transition: background-color 0.15s;
+  font-weight: 450;
+  transition: background-color 0.15s, color 0.15s;
   white-space: nowrap;
   cursor: pointer;
 }
 
 .fst-dropdown-item:hover {
-  background-color: #f1f5f9;
+  background-color: #e9f1f8;
+  color: #0d1f33;
 }
 
 .fst-dropdown-item--disabled {
-  color: #94a3b8;
+  color: #93a7ba;
   cursor: default;
 }
 
 .fst-dropdown-item--disabled:hover {
   background-color: transparent;
+  color: #93a7ba;
 }
 
 .fst-dropdown-item--disabled small {
-  font-size: 0.75rem;
-  font-style: italic;
+  font-size: 0.7rem;
+  font-style: normal;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 /* Right side slot (user menu, sign-in button) */
@@ -208,7 +231,7 @@ const NAV_STYLES = `
 .fst-nav-separator {
   width: 1px;
   height: 1.25rem;
-  background-color: #e2e8f0;
+  background-color: #d7e1ea;
   margin: 0 0.25rem;
 }
 `;

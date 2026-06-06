@@ -63,15 +63,16 @@ function renderUnauthenticatedView() {
         <a href="/.auth/login/aad?post_login_redirect_uri=/" class="btn btn-primary btn-sm unauth-signin-btn">Sign In</a>
       </div>
       <div class="unauth-content">
-        <img src="/logo.png" alt="Figure Skating Tools" class="unauth-logo">
-        <h1 class="unauth-title">Welcome to figureskatingtools.com</h1>
-        <p class="unauth-description">
+        <img src="/logo.png" alt="Figure Skating Tools" class="unauth-logo reveal reveal-1">
+        <p class="unauth-kicker reveal reveal-1">figureskatingtools.com</p>
+        <h1 class="unauth-title reveal reveal-2">Tools for figure skating <em>result service</em> operations.</h1>
+        <p class="unauth-description reveal reveal-3">
           There are several tools available for logged-on users to help figure skating result service operations.
         </p>
-        <p class="unauth-contact">
+        <p class="unauth-contact reveal reveal-3">
           For access, contact <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>
         </p>
-        <a href="/.auth/login/aad?post_login_redirect_uri=/" class="btn btn-primary">Sign In to Continue</a>
+        <a href="/.auth/login/aad?post_login_redirect_uri=/" class="btn btn-primary reveal reveal-4">Sign In to Continue</a>
       </div>
     </div>
   `;
@@ -83,8 +84,9 @@ function renderAuthenticatedView(userInfo: any) {
 
     <main class="auth-main">
       <div class="auth-layout">
-        <div class="welcome-panel">
+        <div class="welcome-panel reveal reveal-1">
           <div class="card">
+            <span class="micro-label">Welcome</span>
             <h2>Welcome to figureskatingtools.com</h2>
             <p>
               Please use the tools nicely and do not harm anyone.
@@ -99,8 +101,9 @@ function renderAuthenticatedView(userInfo: any) {
             </p>
           </div>
         </div>
-        <div class="changelog-panel">
+        <div class="changelog-panel reveal reveal-2">
           <div class="card">
+            <span class="micro-label">Changelog</span>
             <h2>What's New</h2>
             <div id="changelog-entries">
               <p class="text-secondary">Loading changelog...</p>
