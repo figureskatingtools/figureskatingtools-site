@@ -390,6 +390,10 @@ a {
   color: var(--success);
 }
 
+.changelog-badge--score-modifier {
+  color: var(--gold-bright);
+}
+
 .changelog-title {
   font-family: var(--font-body);
   font-size: 0.95rem;
