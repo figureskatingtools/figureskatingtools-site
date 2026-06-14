@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - 'packages/shared-ui/**'
+  # Manual trigger so a version bump on a non-default branch (e.g. test) can be
+  # published without first promoting to main. Publishes whatever version is in
+  # packages/shared-ui/package.json on the dispatched ref.
+  workflow_dispatch:
 
 permissions:
   contents: read

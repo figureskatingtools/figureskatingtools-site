@@ -12,7 +12,7 @@ const DEFAULT_TOOLS: NavTool[] = [
     id: 'scoremodifier',
     label: 'Score Modifier',
     subdomain: 'scoremodifier',
-    enabled: false,
+    enabled: true,
   },
 ];
 
