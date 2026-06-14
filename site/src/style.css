@@ -225,6 +225,43 @@ a {
   .reveal { animation: none; }
 }
 
+/* Scoresheet-style micro label */
+.micro-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin-bottom: 0.75rem;
+}
+
+/* ── Page-load reveal ── */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.reveal {
+  animation: rise-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.reveal-1 { animation-delay: 0.05s; }
+.reveal-2 { animation-delay: 0.14s; }
+.reveal-3 { animation-delay: 0.23s; }
+.reveal-4 { animation-delay: 0.32s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal { animation: none; }
+}
+
 /* ── Unauthenticated Page ── */
 .unauth-page {
   display: flex;
