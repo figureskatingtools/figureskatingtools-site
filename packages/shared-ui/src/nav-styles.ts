@@ -164,6 +164,21 @@ const NAV_STYLES = `
   transform: rotate(180deg);
 }
 
+/* Dropdown wrapper — invisible bridge across the gap to the menu,
+   so moving the cursor down doesn't fire mouseleave */
+.fst-nav-has-dropdown {
+  position: relative;
+}
+
+.fst-nav-has-dropdown::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 0.6rem;
+}
+
 /* Dropdown menu */
 .fst-dropdown-menu {
   display: none;

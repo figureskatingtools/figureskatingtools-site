@@ -20,6 +20,16 @@ export interface NavTool {
   enabled: boolean;
 }
 
+/** A small static tool hosted inside the main site (under /tools/...) */
+export interface NavSmallTool {
+  /** Unique key used to identify the active tool (matched against SiteNavOptions.activeApp) */
+  id: string;
+  /** Display label */
+  label: string;
+  /** Site-relative path, leading + trailing slash (e.g. '/tools/banner/') */
+  path: string;
+}
+
 /** Options passed to renderSiteNav */
 export interface SiteNavOptions {
   /** The id of the currently active tool (or 'home' for the main site) */
