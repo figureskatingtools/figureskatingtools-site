@@ -141,6 +141,23 @@ a {
   transform: translateY(1px);
 }
 
+.btn-secondary {
+  background-color: var(--paper);
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-secondary:hover {
+  background-color: var(--rink-tint);
+  border-color: var(--rink);
+  color: var(--rink-deep);
+}
+
+.btn-secondary:active {
+  transform: translateY(1px);
+}
+
 .btn-sm {
   padding: 0.375rem 0.875rem;
   font-size: 0.8125rem;

@@ -1,4 +1,4 @@
-import type { SiteNavOptions, NavTool } from './types.js';
+import type { SiteNavOptions, NavTool, NavSmallTool } from './types.js';
 
 /** Default tools listed in the site navigation */
 const DEFAULT_TOOLS: NavTool[] = [
@@ -14,6 +14,11 @@ const DEFAULT_TOOLS: NavTool[] = [
     subdomain: 'scoremodifier',
     enabled: true,
   },
+];
+
+/** Small tools hosted inside the main site under /tools/... */
+const SMALL_TOOLS: NavSmallTool[] = [
+  { id: 'banner', label: 'Competition Banner Generator', path: '/tools/banner/' },
 ];
 
 const SITE_DOMAIN = 'figureskatingtools.com';
@@ -50,8 +55,8 @@ function buildHomeUrl(envPrefix: string): string {
 
 /**
  * Render the unified site navigation bar HTML.
- * Contains logo, tool sections with dropdowns, downloads, and a right-side slot
- * for app-specific content (e.g., user menu).
+ * Contains logo, tool sections with dropdowns, a "Tools" dropdown for small
+ * in-site tools, and a right-side slot for app-specific content (e.g., user menu).
  *
  * @param options - Navigation configuration (or just the activeApp id string)
  * @returns HTML string to insert at the top of the page
@@ -108,9 +113,23 @@ export function renderSiteNav(options: SiteNavOptions | string): string {
     })
     .join('');
 
-  // Downloads – coming soon
-  const downloadsItem = `<div class="fst-nav-item fst-nav-item--disabled">
-    <span class="fst-nav-item-label">Downloads <small>(coming soon)</small></span>
+  // Small in-site tools → "Tools" dropdown with real links to the main site
+  const homeBase = homeUrl === '/' ? '' : homeUrl;
+  const smallToolsActive = SMALL_TOOLS.some((t) => t.id === opts.activeApp);
+  const smallToolsItemsHtml = SMALL_TOOLS.map(
+    (tool) =>
+      `<a href="${homeBase}${tool.path}" class="fst-dropdown-item">${tool.label}</a>`
+  ).join('');
+  const smallToolsItem = `<div class="fst-nav-item fst-nav-has-dropdown${
+    smallToolsActive ? ' fst-nav-item--active' : ''
+  }">
+    <button class="fst-nav-item-btn" data-dropdown="small-tools" aria-expanded="false" aria-haspopup="true">
+      Tools
+      <svg class="fst-chevron" width="10" height="6" viewBox="0 0 10 6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 1l4 4 4-4"/></svg>
+    </button>
+    <div class="fst-dropdown-menu" data-menu="small-tools">
+      ${smallToolsItemsHtml}
+    </div>
   </div>`;
 
   return `<nav class="fst-nav" role="navigation">
@@ -121,19 +140,37 @@ export function renderSiteNav(options: SiteNavOptions | string): string {
       </a>
       <div class="fst-nav-menu">
         ${toolsHtml}
-        ${downloadsItem}
+        ${smallToolsItem}
       </div>
       <div class="fst-nav-right" id="fst-nav-right"></div>
     </div>
   </nav>`;
 }
 
+/** Pending hover-close timer, shared across all dropdowns */
+let hoverCloseTimer: ReturnType<typeof setTimeout> | undefined;
+
 /**
- * Initialize site nav event listeners (dropdown toggles, click outside to close).
+ * Initialize site nav event listeners (dropdown toggles, hover-open on pointer
+ * devices, click outside to close).
  * Call this after the nav HTML has been inserted into the DOM.
  */
 export function initSiteNav(): void {
-  // Handle all dropdown toggles
+  const closeAll = (): void => {
+    document.querySelectorAll('.fst-nav-item-btn[data-dropdown]').forEach((t) => {
+      t.setAttribute('aria-expanded', 'false');
+    });
+    document.querySelectorAll('.fst-dropdown-menu').forEach((m) => {
+      m.classList.remove('fst-dropdown-menu--open');
+    });
+  };
+
+  const open = (toggle: Element, menu: Element): void => {
+    toggle.setAttribute('aria-expanded', 'true');
+    menu.classList.add('fst-dropdown-menu--open');
+  };
+
+  // Handle all dropdown toggles (also the touch / keyboard path)
   document.querySelectorAll('.fst-nav-item-btn[data-dropdown]').forEach((toggle) => {
     const menuId = toggle.getAttribute('data-dropdown');
     const menu = document.querySelector(`.fst-dropdown-menu[data-menu="${menuId}"]`);
@@ -143,36 +180,55 @@ export function initSiteNav(): void {
       e.stopPropagation();
       const expanded = toggle.getAttribute('aria-expanded') === 'true';
 
-      // Close all dropdowns first
-      document.querySelectorAll('.fst-nav-item-btn[data-dropdown]').forEach((t) => {
-        t.setAttribute('aria-expanded', 'false');
-      });
-      document.querySelectorAll('.fst-dropdown-menu').forEach((m) => {
-        m.classList.remove('fst-dropdown-menu--open');
-      });
-
-      // Toggle this one
-      if (!expanded) {
-        toggle.setAttribute('aria-expanded', 'true');
-        menu.classList.add('fst-dropdown-menu--open');
-      }
+      // Close all dropdowns first, then toggle this one
+      closeAll();
+      if (!expanded) open(toggle, menu);
     });
   });
 
   // Close dropdowns on click outside
   document.addEventListener('click', () => {
-    document.querySelectorAll('.fst-nav-item-btn[data-dropdown]').forEach((t) => {
-      t.setAttribute('aria-expanded', 'false');
-    });
-    document.querySelectorAll('.fst-dropdown-menu').forEach((m) => {
-      m.classList.remove('fst-dropdown-menu--open');
-    });
+    closeAll();
   });
 
   // Prevent dropdown menu clicks from closing the dropdown
   document.querySelectorAll('.fst-dropdown-menu').forEach((menu) => {
     menu.addEventListener('click', (e) => {
       e.stopPropagation();
+    });
+  });
+
+  // Hover-open on real pointer devices only (avoids sticky hover on touch)
+  const canHover =
+    typeof window !== 'undefined' &&
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+
+  if (!canHover) return;
+
+  document.querySelectorAll('.fst-nav-has-dropdown').forEach((wrapper) => {
+    const toggle = wrapper.querySelector('.fst-nav-item-btn[data-dropdown]');
+    const menuId = toggle?.getAttribute('data-dropdown');
+    const menu = menuId
+      ? document.querySelector(`.fst-dropdown-menu[data-menu="${menuId}"]`)
+      : null;
+    if (!toggle || !menu) return;
+
+    wrapper.addEventListener('mouseenter', () => {
+      if (hoverCloseTimer !== undefined) {
+        clearTimeout(hoverCloseTimer);
+        hoverCloseTimer = undefined;
+      }
+      closeAll();
+      open(toggle, menu);
+    });
+
+    wrapper.addEventListener('mouseleave', () => {
+      if (hoverCloseTimer !== undefined) clearTimeout(hoverCloseTimer);
+      hoverCloseTimer = setTimeout(() => {
+        hoverCloseTimer = undefined;
+        closeAll();
+      }, 150);
     });
   });
 }
