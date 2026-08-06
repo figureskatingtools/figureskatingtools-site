@@ -141,6 +141,23 @@ a {
   transform: translateY(1px);
 }
 
+.btn-secondary {
+  background-color: var(--paper);
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-secondary:hover {
+  background-color: var(--rink-tint);
+  border-color: var(--rink);
+  color: var(--rink-deep);
+}
+
+.btn-secondary:active {
+  transform: translateY(1px);
+}
+
 .btn-sm {
   padding: 0.375rem 0.875rem;
   font-size: 0.8125rem;
@@ -186,43 +203,6 @@ a {
 .card a {
   color: var(--rink);
   font-weight: 500;
-}
-
-/* Scoresheet-style micro label */
-.micro-label {
-  display: block;
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  font-weight: 500;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--ink-faint);
-  margin-bottom: 0.75rem;
-}
-
-/* ── Page-load reveal ── */
-@keyframes rise-in {
-  from {
-    opacity: 0;
-    transform: translateY(14px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.reveal {
-  animation: rise-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
-}
-
-.reveal-1 { animation-delay: 0.05s; }
-.reveal-2 { animation-delay: 0.14s; }
-.reveal-3 { animation-delay: 0.23s; }
-.reveal-4 { animation-delay: 0.32s; }
-
-@media (prefers-reduced-motion: reduce) {
-  .reveal { animation: none; }
 }
 
 /* Scoresheet-style micro label */
