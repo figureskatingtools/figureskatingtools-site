@@ -7,7 +7,7 @@
  * plumbing around it (typed state, asset loading, DOM wiring) is new.
  */
 
-import { getActiveCompetition } from '@figureskatingtools/shared-ui';
+import { formatDateFi, getActiveCompetition } from '@figureskatingtools/shared-ui';
 
 /* ── Asset + tuning constants ── */
 const RALEWAY_URL = '/tools/banner/assets/raleway.woff2';
@@ -80,7 +80,8 @@ function defaultTitle(): string {
 function defaultDateVenue(): string {
   const active = getActiveCompetition();
   if (!active) return FALLBACK_DATE_VENUE;
-  const parts = [active.date.trim(), active.venue.trim()].filter(Boolean);
+  // The banner is print-facing text, so the date goes on it Finnish (dd.MM.yyyy)
+  const parts = [formatDateFi(active.date), active.venue.trim()].filter(Boolean);
   return parts.length > 0 ? parts.join('  |  ') : FALLBACK_DATE_VENUE;
 }
 

@@ -2,6 +2,8 @@ export { renderSiteNav, initSiteNav, getEnvPrefix } from './nav.js';
 export { injectSiteNavStyles } from './nav-styles.js';
 export type { SiteNavOptions, NavSubItem, NavTool, NavSmallTool } from './types.js';
 
+export { formatDateFi } from './format.js';
+
 export {
   ACTIVE_COMPETITION_KEY,
   COMPETITIONS_API,

@@ -6,6 +6,7 @@ import {
     initCompetitionSelector,
     getActiveCompetition,
     subscribeActiveCompetition,
+    formatDateFi,
 } from '@figureskatingtools/shared-ui';
 import { escapeHtml, fetchUser, loginUrl, setupUserMenu, type UserInfo } from '../shell.js';
 
@@ -304,7 +305,8 @@ function prefillFromActiveCompetition() {
     const competition = getActiveCompetition();
     if (!competition) return;
     setIfEmpty('r-competition', competition.name);
-    setIfEmpty('r-date', competition.date);
+    // `r-date` is free text printed onto the results sheet — Finnish, not ISO
+    setIfEmpty('r-date', formatDateFi(competition.date));
     setIfEmpty('r-venue', competition.venue);
 }
 
@@ -324,7 +326,8 @@ async function fetchIndex() {
         }
         const data = await resp.json();
         set('r-competition', data.competition || '');
-        set('r-date', data.date || '');
+        // index.htm usually hands back Finnish text already; ISO gets converted
+        set('r-date', formatDateFi(data.date) || '');
         set('r-venue', data.venue || '');
         const sel = document.getElementById('r-catpage') as HTMLSelectElement;
         sel.innerHTML = `<option value="">— auto-match from index —</option>`;

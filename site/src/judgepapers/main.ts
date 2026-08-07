@@ -7,6 +7,7 @@ import {
     getActiveCompetition,
     subscribeActiveCompetition,
     competitionLabel,
+    formatDateFi,
 } from '@figureskatingtools/shared-ui';
 import {
     escapeHtml,
@@ -334,15 +335,12 @@ async function bindActiveCompetition(force = false): Promise<void> {
 
 /* ── retention ── */
 
+/** `dd.MM.yyyy`, or the `-` sentinel this UI uses for "no usable date". */
 function fmtDate(value: string | null | undefined): string {
     if (!value || value === '-') return '-';
-    try {
-        const d = new Date(value);
-        if (isNaN(d.getTime())) return '-';
-        const dd = String(d.getDate()).padStart(2, '0');
-        const mm = String(d.getMonth() + 1).padStart(2, '0');
-        return `${dd}.${mm}.${d.getFullYear()}`;
-    } catch (_e) { return '-'; }
+    const pretty = formatDateFi(value);
+    // formatDateFi hands unparsable input straight back — that means "no date" here
+    return /^\d{2}\.\d{2}\.\d{4}$/.test(pretty) ? pretty : '-';
 }
 
 /**
@@ -765,7 +763,8 @@ async function init() {
             // Process metadata
             document.getElementById('info-comp-type')!.textContent = data.type || '-';
             
-            document.getElementById('info-comp-dates')!.textContent = data.date || '-';
+            // ISO dates render Finnish; free-text ranges ("14.–15.2.2026") pass through
+            document.getElementById('info-comp-dates')!.textContent = formatDateFi(data.date) || '-';
             
             const nameEl = document.getElementById('info-comp-name')!;
 
@@ -802,14 +801,7 @@ async function init() {
                          } catch (e) {}
                          
                          // Expiration
-                         let expStr = '-';
-                         try {
-                              const expDate = new Date(f.expiration);
-                              const dd = String(expDate.getDate()).padStart(2, '0');
-                              const mm = String(expDate.getMonth() + 1).padStart(2, '0');
-                              const yyyy = expDate.getFullYear();
-                              expStr = `${dd}.${mm}.${yyyy}`;
-                         } catch(e) {}
+                         const expStr = fmtDate(f.expiration);
                          
                          // Size
                          let sizeStr = '';

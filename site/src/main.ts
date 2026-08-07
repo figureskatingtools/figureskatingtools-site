@@ -14,11 +14,14 @@ import {
   setActiveCompetition,
   subscribeActiveCompetition,
   competitionLabel,
+  formatDateFi,
   type PlatformCompetition,
 } from '@figureskatingtools/shared-ui'
 import { escapeHtml, fetchUser, renderSignInView, setupUserMenu, type UserInfo } from './shell.js'
 
 interface ChangelogEntry {
+  /** Commit day, ISO `YYYY-MM-DD` — stored ISO (cache + changelog.json),
+   *  formatted to `dd.MM.yyyy` only when rendered */
   date: string;
   title: string;
   description: string;
@@ -159,7 +162,7 @@ function renderCompetitionPanel(competitions: PlatformCompetition[] | null): voi
             <li class="comp-recent-row">
               <button type="button" class="comp-recent-item" data-competition-id="${escapeHtml(c.id)}">
                 <span class="comp-recent-name">${escapeHtml(competitionLabel(c))}</span>
-                <span class="comp-recent-meta">${escapeHtml([c.code, c.date, c.venue].filter(Boolean).join(' · '))}</span>
+                <span class="comp-recent-meta">${escapeHtml([c.code, formatDateFi(c.date), c.venue].filter(Boolean).join(' · '))}</span>
                 ${createdLineHtml(c, 'comp-recent-created')}
               </button>
               <button type="button" class="comp-delete" data-delete-competition-id="${escapeHtml(c.id)}">×</button>
@@ -261,14 +264,13 @@ async function handleDeleteCompetition(
  */
 function createdLineHtml(c: PlatformCompetition, cls: string): string {
   if (!c.createdBy && !c.createdUtc) return '';
-  const when = c.createdUtc ? new Date(c.createdUtc) : null;
-  const pretty = when && !isNaN(when.getTime()) ? when.toLocaleDateString() : '';
+  const pretty = formatDateFi(c.createdUtc);
   const text = ['Created', pretty, c.createdBy ? `by ${c.createdBy}` : ''].filter(Boolean).join(' ');
   return `<span class="${cls}">${escapeHtml(text)}</span>`;
 }
 
 function activeCompetitionHtml(active: PlatformCompetition): string {
-  const meta = [active.date, active.venue].filter(Boolean).join(' · ');
+  const meta = [formatDateFi(active.date), active.venue].filter(Boolean).join(' · ');
   return `
     <h2 class="comp-name">${escapeHtml(competitionLabel(active))}</h2>
     <p class="comp-code"><span class="comp-code-tag">${escapeHtml(active.code)}</span>${meta ? ` ${escapeHtml(meta)}` : ''}</p>
@@ -438,7 +440,7 @@ function renderChangelog(container: HTMLElement, entries: ChangelogEntry[], show
     return `
       <div class="changelog-entry">
         <div class="changelog-meta">
-          <span class="changelog-date">${escapeHtml(entry.date)}</span>
+          <span class="changelog-date">${escapeHtml(formatDateFi(entry.date))}</span>
           ${toolBadge}
         </div>
         <h3 class="changelog-title">${escapeHtml(entry.title)}</h3>

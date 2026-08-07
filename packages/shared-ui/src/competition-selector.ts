@@ -21,6 +21,7 @@ import {
   subscribeActiveCompetition,
   type PlatformCompetition,
 } from './competition.js';
+import { formatDateFi } from './format.js';
 
 /** Escape text for interpolation into HTML (also safe inside quoted attributes) */
 function esc(value: string): string {
@@ -88,7 +89,7 @@ function buildSelectorHtml(
 
   const items = competitions.slice(0, MENU_MAX_ITEMS).map((c) => {
     const selected = active && active.id === c.id ? ' fst-comp-item--selected' : '';
-    const meta = [c.code, c.date, c.venue].filter(Boolean).join(' · ');
+    const meta = [c.code, formatDateFi(c.date), c.venue].filter(Boolean).join(' · ');
     return `<button type="button" class="fst-comp-item${selected}" data-competition-id="${esc(c.id)}">
       <span class="fst-comp-item-name">${esc(competitionLabel(c))}</span>
       ${meta ? `<span class="fst-comp-item-meta">${esc(meta)}</span>` : ''}

@@ -6,6 +6,7 @@ import {
   initCompetitionSelector,
   getActiveCompetition,
   competitionLabel,
+  formatDateFi,
   subscribeActiveCompetition,
 } from '@figureskatingtools/shared-ui';
 import type { CompetitionDetails, Structure, Category, Segment, SlotTarget, FileMeta } from './types';
@@ -185,6 +186,8 @@ async function bindActiveCompetition(force = false): Promise<void> {
       platformId: active.id,
       name: label,
       dates: active.date || '',
+      // The platform venue prefills the tool's ice rink (event details)
+      venue: active.venue || '',
     });
     if (!resp.ok) {
       throw new Error((await resp.text()).trim() || `The tool API returned ${resp.status}.`);
@@ -214,13 +217,28 @@ async function apiRaw(path: string, body: Blob | ArrayBuffer): Promise<Response>
 }
 
 // ── retention ──
+/** `dd.MM.yyyy`, or the `-` sentinel this UI uses for "no usable date". */
 function fmtDate(value: string): string {
   if (!value || value === '-') return '-';
-  try {
-    const d = new Date(value);
-    if (isNaN(d.getTime())) return '-';
-    return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
-  } catch { return '-'; }
+  const pretty = formatDateFi(value);
+  // formatDateFi hands unparsable input straight back — that means "no date" here
+  return /^\d{2}\.\d{2}\.\d{4}$/.test(pretty) ? pretty : '-';
+}
+
+/**
+ * Finnish date + clock — `dd.MM.yyyy HH.mm`, local time (Finnish clock times
+ * use dots, not colons). Anything unparsable is shown as it came in.
+ */
+function fmtTimestamp(value?: string | null): string {
+  if (!value) return '';
+  const day = formatDateFi(value);
+  if (day === value) return value;              // not an ISO value — leave it alone
+  if (!/[T ]\d{1,2}:/.test(value)) return day;  // date only — no clock to print
+  const parsed = new Date(value);
+  if (isNaN(parsed.getTime())) return value;
+  const hh = String(parsed.getHours()).padStart(2, '0');
+  const mm = String(parsed.getMinutes()).padStart(2, '0');
+  return `${day} ${hh}.${mm}`;
 }
 
 /**
@@ -465,9 +483,7 @@ function rosterReportHtml(s: Structure): string {
   const r = s.rosterImport;
   if (!r) return '';
 
-  let when = r.at || '';
-  const parsed = r.at ? new Date(r.at) : null;
-  if (parsed && !isNaN(parsed.getTime())) when = parsed.toLocaleString();
+  const when = fmtTimestamp(r.at);
 
   const unmatched = r.unmatched || [];
   const withdrawn = r.withdrawn || [];
