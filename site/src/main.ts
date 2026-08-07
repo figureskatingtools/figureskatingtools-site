@@ -7,6 +7,8 @@ import {
   initCompetitionSelector,
   openCreateCompetitionDialog,
   listCompetitions,
+  deleteCompetition,
+  CompetitionApiError,
   refreshActiveCompetition,
   getActiveCompetition,
   setActiveCompetition,
@@ -119,6 +121,9 @@ const RECENT_COMPETITIONS = 5;
  */
 let knownCompetitions: PlatformCompetition[] | null = null;
 
+/** Last failed panel action, shown inline until the next one succeeds */
+let panelError: string | null = null;
+
 async function loadCompetitionPanel(): Promise<void> {
   // Drops a competition that has been deleted and picks up renames
   await refreshActiveCompetition();
@@ -151,16 +156,22 @@ function renderCompetitionPanel(competitions: PlatformCompetition[] | null): voi
       <h3 class="comp-recent-title">Recent competitions</h3>
       ${recent.length > 0
         ? `<ul class="comp-recent-list">${recent.map((c) => `
-            <li>
+            <li class="comp-recent-row">
               <button type="button" class="comp-recent-item" data-competition-id="${escapeHtml(c.id)}">
                 <span class="comp-recent-name">${escapeHtml(competitionLabel(c))}</span>
                 <span class="comp-recent-meta">${escapeHtml([c.code, c.date, c.venue].filter(Boolean).join(' · '))}</span>
+                ${createdLineHtml(c, 'comp-recent-created')}
               </button>
+              <button type="button" class="comp-delete" data-delete-competition-id="${escapeHtml(c.id)}">×</button>
             </li>`).join('')}</ul>`
         : '<p class="text-secondary comp-recent-empty">Nothing else yet.</p>'}
     </div>
+    ${panelError ? `<p class="comp-error" role="alert">${escapeHtml(panelError)}</p>` : ''}
     <div class="comp-actions">
       <button type="button" class="btn btn-secondary btn-sm" id="comp-create">New competition…</button>
+      ${active
+        ? `<button type="button" class="btn-link comp-delete-link" data-delete-competition-id="${escapeHtml(active.id)}">Delete this competition</button>`
+        : ''}
     </div>
   `;
 
@@ -168,17 +179,92 @@ function renderCompetitionPanel(competitions: PlatformCompetition[] | null): voi
     btn.addEventListener('click', () => {
       const id = btn.getAttribute('data-competition-id');
       const picked = competitions.find((c) => c.id === id) ?? null;
+      panelError = null;
       setActiveCompetition(picked); // the subscription re-renders the panel
+    });
+  });
+
+  // Deletion is a rare admin action: quiet control, confirm dialog, inline error
+  container.querySelectorAll<HTMLButtonElement>('[data-delete-competition-id]').forEach((btn) => {
+    const id = btn.getAttribute('data-delete-competition-id');
+    const target = (active && active.id === id ? active : null)
+      ?? competitions.find((c) => c.id === id)
+      ?? null;
+    if (!target) return;
+    const label = competitionLabel(target);
+    // Set as properties (not interpolated markup) — names may contain quotes
+    btn.title = `Delete ${label}`;
+    btn.setAttribute('aria-label', `Delete ${label}`);
+    btn.addEventListener('click', () => {
+      void handleDeleteCompetition(target, btn);
     });
   });
 
   document.getElementById('comp-create')?.addEventListener('click', () => {
     void openCreateCompetitionDialog().then((created) => {
       if (!created) return;
+      panelError = null;
       knownCompetitions = [created, ...(knownCompetitions ?? [])];
       setActiveCompetition(created);
     });
   });
+}
+
+/**
+ * Remove a competition from the platform registry.
+ *
+ * The registry deletes softly and frees the code; each tool keeps its own
+ * uploaded data until that tool's own auto-deletion window expires, which the
+ * confirmation spells out.
+ */
+async function handleDeleteCompetition(
+  competition: PlatformCompetition,
+  trigger: HTMLButtonElement
+): Promise<void> {
+  const label = competitionLabel(competition);
+  const confirmed = window.confirm(
+    `Delete "${label}" (${competition.code}) from the competition registry?\n\n`
+    + 'It disappears from every tool\'s competition selector and the code becomes '
+    + 'free to use again. Files you already uploaded in a tool are not touched — '
+    + 'each tool keeps them until its own automatic deletion removes them.'
+  );
+  if (!confirmed) return;
+
+  panelError = null;
+  trigger.disabled = true;
+
+  try {
+    await deleteCompetition(competition.id);
+  } catch (err: unknown) {
+    trigger.disabled = false;
+    panelError = err instanceof CompetitionApiError
+      ? `Could not delete "${label}": ${err.message}`
+      : `Could not delete "${label}". Please try again.`;
+    renderCompetitionPanel(knownCompetitions);
+    return;
+  }
+
+  knownCompetitions = (knownCompetitions ?? []).filter((c) => c.id !== competition.id);
+
+  const active = getActiveCompetition();
+  if (active && active.id === competition.id) {
+    setActiveCompetition(null); // the subscription re-renders the panel
+    return;
+  }
+  renderCompetitionPanel(knownCompetitions);
+}
+
+/**
+ * "Created <date> by <email>" line — the registry keeps every competition row
+ * forever (deleted ones just flip status), so this doubles as the provenance
+ * used later for statistical reporting.
+ */
+function createdLineHtml(c: PlatformCompetition, cls: string): string {
+  if (!c.createdBy && !c.createdUtc) return '';
+  const when = c.createdUtc ? new Date(c.createdUtc) : null;
+  const pretty = when && !isNaN(when.getTime()) ? when.toLocaleDateString() : '';
+  const text = ['Created', pretty, c.createdBy ? `by ${c.createdBy}` : ''].filter(Boolean).join(' ');
+  return `<span class="${cls}">${escapeHtml(text)}</span>`;
 }
 
 function activeCompetitionHtml(active: PlatformCompetition): string {
@@ -186,6 +272,7 @@ function activeCompetitionHtml(active: PlatformCompetition): string {
   return `
     <h2 class="comp-name">${escapeHtml(competitionLabel(active))}</h2>
     <p class="comp-code"><span class="comp-code-tag">${escapeHtml(active.code)}</span>${meta ? ` ${escapeHtml(meta)}` : ''}</p>
+    ${createdLineHtml(active, 'comp-created')}
     <div class="comp-open">
       <span class="comp-open-label">Open in</span>
       <div class="comp-open-links">

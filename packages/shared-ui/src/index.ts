@@ -9,6 +9,7 @@ export {
   clearActiveCompetition,
   competitionLabel,
   createCompetition,
+  deleteCompetition,
   extractCompetitionList,
   getActiveCompetition,
   isPlatformCompetition,

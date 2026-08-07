@@ -30,6 +30,8 @@ export interface PlatformCompetition {
   venue: string;
   /** Email of the creator, when the API reports it */
   createdBy?: string;
+  /** Creation timestamp (ISO UTC), when the API reports it */
+  createdUtc?: string;
 }
 
 /** Fields accepted when creating a competition */
@@ -73,7 +75,8 @@ export function isPlatformCompetition(value: unknown): value is PlatformCompetit
     typeof c.name === 'string' &&
     typeof c.date === 'string' &&
     typeof c.venue === 'string' &&
-    (c.createdBy === undefined || typeof c.createdBy === 'string')
+    (c.createdBy === undefined || typeof c.createdBy === 'string') &&
+    (c.createdUtc === undefined || typeof c.createdUtc === 'string')
   );
 }
 
@@ -100,6 +103,7 @@ export function toPlatformCompetition(raw: unknown): PlatformCompetition | null 
     venue: typeof r.venue === 'string' ? r.venue : '',
   };
   if (typeof r.createdBy === 'string') competition.createdBy = r.createdBy;
+  if (typeof r.createdUtc === 'string') competition.createdUtc = r.createdUtc;
   return competition;
 }
 
@@ -307,6 +311,46 @@ export async function createCompetition(
   const created = toPlatformCompetition(await resp.json());
   if (!created) throw new CompetitionApiError(resp.status, 'Competitions API returned an unexpected body');
   return created;
+}
+
+/**
+ * `DELETE /api/competitions/{id}`.
+ *
+ * The registry deletes **softly**: the row survives with `status: "deleted"`
+ * (so a tool that stored the GUID keeps resolving it) but drops out of the
+ * list and frees its code for reuse. Deleting twice is not an error.
+ *
+ * Resolves on success; throws `CompetitionApiError` otherwise (404 when the
+ * competition is already gone, 0 when the API is unreachable).
+ */
+export async function deleteCompetition(id: string): Promise<void> {
+  let resp: Response;
+  try {
+    resp = await fetch(`${COMPETITIONS_API}/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      headers: { Accept: 'application/json' },
+    });
+  } catch (_e) {
+    throw new CompetitionApiError(0, 'Competitions API unreachable');
+  }
+
+  if (!resp.ok) {
+    let detail = '';
+    try {
+      const payload = await resp.json();
+      // The registry answers `{error: <code>, message: <human text>}`
+      detail =
+        (typeof payload?.message === 'string' && payload.message) ||
+        (typeof payload?.error === 'string' && payload.error) ||
+        '';
+    } catch (_e) {
+      // No JSON body — fall back to the bare status
+    }
+    throw new CompetitionApiError(
+      resp.status,
+      detail || `Could not delete competition (${resp.status})`
+    );
+  }
 }
 
 /**

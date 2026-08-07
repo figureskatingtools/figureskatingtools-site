@@ -224,20 +224,26 @@ function fmtDate(value: string): string {
 }
 
 /**
- * Compact "Auto-deletes <date> · Extend" line in the competition header.
+ * Compact "Auto-deletes <date> [· Extend]" line in the competition header.
  *
  * Rendered only when the backend actually reports a deletion date on
  * `get_competition_details` (or hands a fresh one back from the extend route) —
- * with no date available the line stays empty.
+ * with no date available the line stays empty. The Extend button surfaces only
+ * during the last 7 days before deletion; each press pushes the date a week
+ * out (no cap), so it simply reappears when the new date draws near.
  */
+const EXTEND_VISIBLE_MS = 7 * 24 * 3600 * 1000;
+
 function renderRetention(date?: string | null) {
   const el = document.getElementById('retention');
   if (!el) return;
   const pretty = date ? fmtDate(date) : '';
   if (!pretty || pretty === '-') { el.innerHTML = ''; return; }
-  el.innerHTML = `<span class="retention-date">Auto-deletes ${escapeHtml(pretty)}</span>
+  const due = date ? new Date(date).getTime() : NaN;
+  const dueSoon = Number.isFinite(due) && due - Date.now() <= EXTEND_VISIBLE_MS;
+  el.innerHTML = `<span class="retention-date">Auto-deletes ${escapeHtml(pretty)}</span>${dueSoon ? `
     <span class="retention-sep">·</span>
-    <button class="btn btn-xs btn-ghost" id="btn-extend">Extend</button>`;
+    <button class="btn btn-xs btn-ghost" id="btn-extend">Extend</button>` : ''}`;
   document.getElementById('btn-extend')?.addEventListener('click', extendRetention);
 }
 

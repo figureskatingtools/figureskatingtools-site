@@ -6,12 +6,15 @@
  * and the tests run in vitest's default node environment.
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   ACTIVE_COMPETITION_KEY,
   clearActiveCompetition,
   competitionLabel,
+  COMPETITIONS_API,
+  CompetitionApiError,
+  deleteCompetition,
   extractCompetitionList,
   getActiveCompetition,
   isPlatformCompetition,
@@ -233,5 +236,81 @@ describe('competitionLabel', () => {
   it('prefers the name and falls back to the code', () => {
     expect(competitionLabel(COMP)).toBe('Winter Cup 2026');
     expect(competitionLabel({ ...COMP, name: '   ' })).toBe('winter-cup-2026');
+  });
+});
+
+describe('deleteCompetition', () => {
+  /** A minimal `Response` stand-in — only what the client actually reads */
+  function response(status: number, body?: unknown): Response {
+    return {
+      ok: status >= 200 && status < 300,
+      status,
+      json: async () => {
+        if (body === undefined) throw new Error('no body');
+        return body;
+      },
+    } as Response;
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('DELETEs the id-scoped route and resolves on 200', async () => {
+    const fetchMock = vi.fn(async () =>
+      response(200, { id: COMP.id, code: COMP.code, status: 'deleted' })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(deleteCompetition(COMP.id)).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${COMPETITIONS_API}/${COMP.id}`);
+    expect(init.method).toBe('DELETE');
+  });
+
+  it('percent-encodes the id into the path', async () => {
+    const fetchMock = vi.fn(async () => response(200, {}));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await deleteCompetition('a/b?c d');
+
+    expect(fetchMock.mock.calls[0][0]).toBe(`${COMPETITIONS_API}/a%2Fb%3Fc%20d`);
+  });
+
+  it('surfaces a non-2xx status with the registry message', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => response(404, { error: 'not_found', message: 'Competition not found.' }))
+    );
+
+    await expect(deleteCompetition(COMP.id)).rejects.toMatchObject({
+      name: 'CompetitionApiError',
+      status: 404,
+      message: 'Competition not found.',
+    });
+  });
+
+  it('falls back to the bare status when the error body is not JSON', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response(500)));
+
+    await expect(deleteCompetition(COMP.id)).rejects.toMatchObject({
+      status: 500,
+      message: 'Could not delete competition (500)',
+    });
+  });
+
+  it('reports a network failure as status 0', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch');
+      })
+    );
+
+    const error = await deleteCompetition(COMP.id).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(CompetitionApiError);
+    expect((error as CompetitionApiError).status).toBe(0);
   });
 });
