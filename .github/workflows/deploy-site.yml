@@ -134,6 +134,7 @@ jobs:
           TENANT_ID="${{ vars.AZURE_TENANT_ID }}"
           WEB_APP_HOSTNAME="${{ steps.deploy.outputs.webAppDefaultHostName }}"
           CUSTOM_DOMAIN="${{ steps.deploy.outputs.customDomain }}"
+          ENV_NAME="${{ needs.set-environment.outputs.env_name }}"
 
           if [ -z "${AUTH_APP_OBJECT_ID}" ]; then
             echo "ERROR: AUTH_APP_OBJECT_ID is not set. Ensure the AUTH_APP_OBJECT_ID secret is configured."
@@ -147,45 +148,67 @@ jobs:
 
           # Redirect URIs: Easy Auth callbacks happen on whichever hostname the
           # user browsed to, so both the default hostname and the custom domain
-          # (once bound) must be registered.
-          echo "Updating redirect URIs on app registration..."
+          # (once bound) must be registered. MERGE with the existing list — the
+          # app registration is shared by test and prod, and replacing the list
+          # from one environment's deploy locks the other environment out.
+          echo "Merging redirect URIs on app registration..."
+          EXISTING_URIS=$(az ad app show --id "$AUTH_APP_OBJECT_ID" --query "web.redirectUris" -o json)
           REDIRECT_URIS=$(jq -n \
+            --argjson existing "$EXISTING_URIS" \
             --arg web "https://${WEB_APP_HOSTNAME}/.auth/login/aad/callback" \
             --arg custom "${CUSTOM_DOMAIN:+https://${CUSTOM_DOMAIN}/.auth/login/aad/callback}" \
-            '{web: {redirectUris: ([$web] + (if $custom == "" then [] else [$custom] end))}}')
+            '{web: {redirectUris: (($existing + [$web] + (if $custom == "" then [] else [$custom] end)) | unique)}}')
           az rest --method PATCH \
             --uri "https://graph.microsoft.com/v1.0/applications/${AUTH_APP_OBJECT_ID}" \
             --headers 'Content-Type=application/json' \
             --body "$REDIRECT_URIS"
-          echo "Redirect URIs updated."
+          echo "Redirect URIs merged."
 
           # Federated identity credential: lets Easy Auth authenticate as the
-          # managed identity instead of holding a client secret.
+          # managed identity instead of holding a client secret. The credential
+          # name is PER ENVIRONMENT — test and prod share the app registration,
+          # and a single shared name meant each deploy re-pointed the FIC at its
+          # own managed identity, breaking the other environment's login.
+          FIC_NAME="easyauth-managed-identity-fic-${ENV_NAME}"
+
+          # One-time migration: drop the legacy shared-name credential when it
+          # carries THIS environment's subject (FIC names are immutable and a
+          # duplicate issuer+subject pair cannot be created alongside it).
+          LEGACY_ID=$(az ad app federated-credential list \
+            --id "$AUTH_APP_OBJECT_ID" \
+            --query "[?name=='easyauth-managed-identity-fic' && subject=='${MI_OBJECT_ID}'].id" \
+            -o tsv 2>/dev/null || echo "")
+          if [ -n "$LEGACY_ID" ]; then
+            echo "Migrating legacy shared-name FIC to ${FIC_NAME}..."
+            az ad app federated-credential delete \
+              --id "$AUTH_APP_OBJECT_ID" --federated-credential-id "$LEGACY_ID"
+          fi
+
           EXISTING_SUBJECT=$(az ad app federated-credential list \
             --id "$AUTH_APP_OBJECT_ID" \
-            --query "[?name=='easyauth-managed-identity-fic'].subject" \
+            --query "[?name=='${FIC_NAME}'].subject" \
             -o tsv 2>/dev/null || echo "")
 
           FIC_PARAMS="{
-            \"name\": \"easyauth-managed-identity-fic\",
+            \"name\": \"${FIC_NAME}\",
             \"issuer\": \"https://login.microsoftonline.com/${TENANT_ID}/v2.0\",
             \"subject\": \"${MI_OBJECT_ID}\",
             \"audiences\": [\"api://AzureADTokenExchange\"],
-            \"description\": \"Allow Easy Auth to use managed identity instead of client secret\"
+            \"description\": \"Easy Auth via managed identity (${ENV_NAME})\"
           }"
 
           if [ -z "$EXISTING_SUBJECT" ]; then
-            echo "Creating federated identity credential..."
+            echo "Creating federated identity credential ${FIC_NAME}..."
             az ad app federated-credential create \
               --id "$AUTH_APP_OBJECT_ID" \
               --parameters "$FIC_PARAMS"
             echo "Federated identity credential created."
           elif [ "$EXISTING_SUBJECT" != "$MI_OBJECT_ID" ]; then
-            # A rebuilt test environment gets a new managed identity; re-point the FIC.
+            # A rebuilt environment gets a new managed identity; re-point the FIC.
             echo "FIC subject mismatch (existing: $EXISTING_SUBJECT, expected: $MI_OBJECT_ID). Updating..."
             FIC_ID=$(az ad app federated-credential list \
               --id "$AUTH_APP_OBJECT_ID" \
-              --query "[?name=='easyauth-managed-identity-fic'].id" \
+              --query "[?name=='${FIC_NAME}'].id" \
               -o tsv)
             az rest --method PATCH \
               --uri "https://graph.microsoft.com/v1.0/applications/${AUTH_APP_OBJECT_ID}/federatedIdentityCredentials/${FIC_ID}" \
@@ -193,7 +216,7 @@ jobs:
               --body "{\"subject\": \"${MI_OBJECT_ID}\"}"
             echo "Federated identity credential updated."
           else
-            echo "Federated identity credential already exists with correct subject, skipping."
+            echo "Federated identity credential ${FIC_NAME} already exists with correct subject, skipping."
           fi
 
   deploy-platform-backend:
