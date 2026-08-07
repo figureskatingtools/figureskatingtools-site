@@ -1,5 +1,6 @@
 [
   { "repo": "figureskatingtools/figureskatingtools-site", "tool": "Site" },
   { "repo": "figureskatingtools/fs-judgepapers", "tool": "Judge Papers" },
-  { "repo": "figureskatingtools/fs-scoremodifier", "tool": "Score Modifier" }
+  { "repo": "figureskatingtools/fs-scoremodifier", "tool": "Score Modifier" },
+  { "repo": "figureskatingtools/fs-protocolgenerator", "tool": "Protocol Generator" }
 ]

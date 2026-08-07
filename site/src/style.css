@@ -377,6 +377,103 @@ a {
   margin-bottom: 1.25rem;
 }
 
+/* ── Competition panel — the active competition and where to take it ── */
+.comp-name {
+  margin: 0 0 0.35rem;
+  font-size: 1.6rem;
+}
+
+.comp-code {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0 0 1.4rem;
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+}
+
+.comp-code-tag {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gold);
+  border: 1px solid currentColor;
+  border-radius: 0.25rem;
+  padding: 0.12rem 0.45rem;
+}
+
+.comp-open-label,
+.comp-recent-title {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0 0 0.6rem;
+}
+
+.comp-open-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.comp-recent {
+  margin-top: 1.75rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--line);
+}
+
+.comp-recent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.comp-recent-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  margin: 0 -0.6rem;
+  border: none;
+  border-radius: 0.4rem;
+  background: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.comp-recent-item:hover {
+  background-color: var(--rink-tint);
+}
+
+.comp-recent-name {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.comp-recent-meta {
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+}
+
+.comp-recent-empty {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+.comp-actions {
+  margin-top: 1.25rem;
+}
+
 /* ── Changelog Panel — set like a results protocol ── */
 .changelog-panel .card {
   max-height: 80vh;
@@ -446,6 +543,10 @@ a {
 
 .changelog-badge--score-modifier {
   color: var(--gold-bright);
+}
+
+.changelog-badge--protocol-generator {
+  color: var(--rink);
 }
 
 .changelog-title {

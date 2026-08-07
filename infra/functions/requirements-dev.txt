@@ -1,0 +1,8 @@
+# Test dependencies: the runtime requirements (the tests import function_app,
+# which pulls in azure.functions and the storage SDKs) plus pytest.
+#
+#   cd infra/functions
+#   python -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
+#   .venv/bin/python -m pytest
+-r requirements.txt
+pytest~=8.3

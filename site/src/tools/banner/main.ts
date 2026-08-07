@@ -1,6 +1,6 @@
 import '../../style.css'
 import './banner.css'
-import { renderSiteNav, initSiteNav, injectSiteNavStyles } from '@figureskatingtools/shared-ui'
+import { renderSiteNav, initSiteNav, injectSiteNavStyles, initCompetitionSelector } from '@figureskatingtools/shared-ui'
 import { fetchUser, renderSignInView, setupUserMenu, type UserInfo } from '../../shell.js'
 import { initGenerator, renderGeneratorPage } from './generator.js'
 
@@ -38,6 +38,11 @@ function renderAuthenticatedView(userInfo: UserInfo) {
   }
 
   initSiteNav();
+
+  const competitionSlot = document.getElementById('fst-nav-competition');
+  if (competitionSlot) {
+    void initCompetitionSelector(competitionSlot);
+  }
 
   initGenerator();
 }

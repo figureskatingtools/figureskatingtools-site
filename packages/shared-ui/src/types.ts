@@ -14,13 +14,18 @@ export interface NavTool {
   id: string;
   /** Display label */
   label: string;
-  /** Subdomain prefix (e.g., 'judgepapers') */
-  subdomain: string;
+  /** Site-relative path, leading + trailing slash (e.g. '/judgepapers/') */
+  path: string;
   /** Whether this tool is available or coming soon */
   enabled: boolean;
 }
 
-/** A small static tool hosted inside the main site (under /tools/...) */
+/**
+ * A small static tool hosted inside the main site (under /tools/...).
+ *
+ * @deprecated Everything is path-based now — this is just a `NavTool`
+ * without the `enabled` flag. Kept so existing imports keep compiling.
+ */
 export interface NavSmallTool {
   /** Unique key used to identify the active tool (matched against SiteNavOptions.activeApp) */
   id: string;

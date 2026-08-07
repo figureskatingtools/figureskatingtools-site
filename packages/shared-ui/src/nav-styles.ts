@@ -249,6 +249,317 @@ const NAV_STYLES = `
   background-color: #d7e1ea;
   margin: 0 0.25rem;
 }
+
+/* ── Competition selector ──
+   Sits between the tool menu and the user menu. Empty (and invisible)
+   whenever the platform competitions API is unavailable. */
+.fst-nav-competition {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.fst-nav-competition:empty {
+  display: none;
+}
+
+/* The slot after it keeps its own spacing without doubling the auto margin */
+.fst-nav-competition + .fst-nav-right {
+  margin-left: 0.5rem;
+}
+
+.fst-comp {
+  position: relative;
+}
+
+.fst-comp-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  max-width: 15rem;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid #d7e1ea;
+  border-radius: 0.5rem;
+  background-color: #ffffff;
+  color: #41566c;
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s, color 0.15s, background-color 0.15s;
+}
+
+.fst-comp-btn:hover {
+  border-color: #1271b5;
+  color: #0d1f33;
+  background-color: #e9f1f8;
+}
+
+.fst-comp-btn--active {
+  color: #0d1f33;
+  font-weight: 600;
+}
+
+.fst-comp-btn-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fst-comp-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background-color: #c6d3df;
+}
+
+.fst-comp-btn--active .fst-comp-dot {
+  background: linear-gradient(135deg, #d4af4f, #b08d2f);
+}
+
+.fst-comp-menu {
+  display: none;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 0.5rem);
+  min-width: 17rem;
+  max-width: 22rem;
+  background-color: #ffffff;
+  border: 1px solid #d7e1ea;
+  border-radius: 0.5rem;
+  box-shadow: 0 12px 32px -8px rgb(13 31 51 / 0.18), 0 2px 8px -2px rgb(13 31 51 / 0.08);
+  z-index: 110;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.fst-comp-menu--open {
+  display: flex;
+}
+
+.fst-comp-menu-head {
+  padding: 0.55rem 0.9rem 0.4rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: #93a7ba;
+}
+
+.fst-comp-list {
+  max-height: 17rem;
+  overflow-y: auto;
+  border-top: 1px solid #eef3f7;
+}
+
+.fst-comp-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  width: 100%;
+  padding: 0.5rem 0.9rem;
+  border: none;
+  background: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.fst-comp-item:hover {
+  background-color: #e9f1f8;
+}
+
+.fst-comp-item-name {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: #18324d;
+}
+
+.fst-comp-item-meta {
+  font-size: 0.7rem;
+  color: #93a7ba;
+}
+
+.fst-comp-item--selected .fst-comp-item-name {
+  font-weight: 600;
+  color: #0d5a92;
+}
+
+.fst-comp-empty {
+  margin: 0;
+  padding: 0.75rem 0.9rem;
+  font-size: 0.8125rem;
+  color: #93a7ba;
+}
+
+.fst-comp-menu-foot {
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid #eef3f7;
+}
+
+.fst-comp-action {
+  padding: 0.55rem 0.9rem;
+  border: none;
+  background: none;
+  font-family: inherit;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: #0d5a92;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.fst-comp-action:hover {
+  background-color: #e9f1f8;
+}
+
+/* ── New-competition dialog ── */
+.fst-comp-dialog {
+  width: min(30rem, calc(100vw - 2rem));
+  padding: 0;
+  border: 1px solid #d7e1ea;
+  border-radius: 0.75rem;
+  background-color: #ffffff;
+  color: #0d1f33;
+  font-family: 'Instrument Sans', system-ui, Avenir, Helvetica, Arial, sans-serif;
+  box-shadow: 0 24px 60px -16px rgb(13 31 51 / 0.35);
+}
+
+.fst-comp-dialog::backdrop {
+  background-color: rgb(13 31 51 / 0.45);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+
+.fst-comp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  padding: 1.6rem 1.75rem 1.5rem;
+}
+
+.fst-comp-dialog-title {
+  margin: 0;
+  font-family: 'Fraunces', Georgia, 'Times New Roman', serif;
+  font-size: 1.35rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.fst-comp-dialog-lead {
+  margin: -0.5rem 0 0;
+  font-size: 0.85rem;
+  color: #64798e;
+  line-height: 1.5;
+}
+
+.fst-comp-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.fst-comp-field-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64798e;
+}
+
+.fst-comp-field input {
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #c6d3df;
+  border-radius: 0.4rem;
+  background-color: #ffffff;
+  font-family: inherit;
+  font-size: 0.9rem;
+  color: #0d1f33;
+}
+
+.fst-comp-field input:focus {
+  outline: none;
+  border-color: #1271b5;
+  box-shadow: 0 0 0 3px rgb(18 113 181 / 0.14);
+}
+
+.fst-comp-field-note {
+  font-size: 0.72rem;
+  color: #93a7ba;
+}
+
+.fst-comp-field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.9rem;
+}
+
+.fst-comp-dialog-error {
+  margin: 0;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid #f0cfcf;
+  border-radius: 0.4rem;
+  background-color: #fbeeee;
+  font-size: 0.8125rem;
+  color: #c03434;
+}
+
+.fst-comp-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-top: 0.2rem;
+}
+
+.fst-comp-btn-primary,
+.fst-comp-btn-secondary {
+  padding: 0.55rem 1.2rem;
+  border-radius: 0.5rem;
+  font-family: inherit;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.fst-comp-btn-primary {
+  background-color: #0d1f33;
+  color: #ffffff;
+}
+
+.fst-comp-btn-primary:hover {
+  background-color: #1a334f;
+}
+
+.fst-comp-btn-primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.fst-comp-btn-secondary {
+  background-color: #ffffff;
+  border-color: #c6d3df;
+  color: #0d1f33;
+}
+
+.fst-comp-btn-secondary:hover {
+  background-color: #e9f1f8;
+  border-color: #1271b5;
+}
+
+@media (max-width: 768px) {
+  .fst-comp-btn-label {
+    max-width: 7rem;
+  }
+  .fst-comp-field-row {
+    grid-template-columns: 1fr;
+  }
+}
 `;
 
 let stylesInjected = false;

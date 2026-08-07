@@ -1,5 +1,19 @@
 import './style.css'
-import { renderSiteNav, initSiteNav, injectSiteNavStyles, getEnvPrefix } from '@figureskatingtools/shared-ui'
+import {
+  renderSiteNav,
+  initSiteNav,
+  injectSiteNavStyles,
+  getEnvPrefix,
+  initCompetitionSelector,
+  openCreateCompetitionDialog,
+  listCompetitions,
+  refreshActiveCompetition,
+  getActiveCompetition,
+  setActiveCompetition,
+  subscribeActiveCompetition,
+  competitionLabel,
+  type PlatformCompetition,
+} from '@figureskatingtools/shared-ui'
 import { escapeHtml, fetchUser, renderSignInView, setupUserMenu, type UserInfo } from './shell.js'
 
 interface ChangelogEntry {
@@ -41,20 +55,9 @@ function renderAuthenticatedView(userInfo: UserInfo) {
     <main class="auth-main">
       <div class="auth-layout">
         <div class="welcome-panel reveal reveal-1">
-          <div class="card">
-            <span class="micro-label">Welcome</span>
-            <h2>Welcome to figureskatingtools.com</h2>
-            <p>
-              Please use the tools nicely and do not harm anyone.
-            </p>
-            <p>
-              All bugs and feature requests should be reported to
-              <a href="https://github.com/figureskatingtools" target="_blank" rel="noopener noreferrer">GitHub</a>.
-            </p>
-            <p>
-              In case of inquiries, contact
-              <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>.
-            </p>
+          <div class="card" id="competition-panel">
+            <span class="micro-label">Competition</span>
+            <p class="text-secondary">Loading competitions…</p>
           </div>
         </div>
         <div class="changelog-panel reveal reveal-2">
@@ -82,8 +85,145 @@ function renderAuthenticatedView(userInfo: UserInfo) {
 
   initSiteNav();
 
+  // Competition selector in the nav + the competition-centric home panel
+  const competitionSlot = document.getElementById('fst-nav-competition');
+  if (competitionSlot) {
+    void initCompetitionSelector(competitionSlot);
+  }
+  void loadCompetitionPanel();
+  subscribeActiveCompetition(() => renderCompetitionPanel(knownCompetitions));
+
   // Load changelog
   loadChangelog();
+}
+
+/* ════════════════════════════════════════════════════════════════
+   Competition panel
+   ════════════════════════════════════════════════════════════════ */
+
+/** Tools an active competition can be opened in, in nav order */
+const COMPETITION_TOOLS = [
+  { label: 'Judge Paper Creator', path: '/judgepapers/' },
+  { label: 'Score Modifier', path: '/scoremodifier/' },
+  { label: 'Protocol Generator', path: '/protocolgenerator/' },
+  { label: 'Banner Generator', path: '/tools/banner/' },
+];
+
+/** How many competitions the "Recent" list shows */
+const RECENT_COMPETITIONS = 5;
+
+/**
+ * The last competition list we managed to load.
+ * `null` means the platform API is unavailable — the panel then falls back to
+ * the plain welcome card so the site keeps working without the registry.
+ */
+let knownCompetitions: PlatformCompetition[] | null = null;
+
+async function loadCompetitionPanel(): Promise<void> {
+  // Drops a competition that has been deleted and picks up renames
+  await refreshActiveCompetition();
+  try {
+    knownCompetitions = await listCompetitions();
+  } catch (_e) {
+    knownCompetitions = null;
+  }
+  renderCompetitionPanel(knownCompetitions);
+}
+
+function renderCompetitionPanel(competitions: PlatformCompetition[] | null): void {
+  const container = document.getElementById('competition-panel');
+  if (!container) return;
+
+  if (competitions === null) {
+    container.innerHTML = welcomeCardHtml();
+    return;
+  }
+
+  const active = getActiveCompetition();
+  const recent = competitions
+    .filter((c) => !active || c.id !== active.id)
+    .slice(0, RECENT_COMPETITIONS);
+
+  container.innerHTML = `
+    <span class="micro-label">Competition</span>
+    ${active ? activeCompetitionHtml(active) : noCompetitionHtml()}
+    <div class="comp-recent">
+      <h3 class="comp-recent-title">Recent competitions</h3>
+      ${recent.length > 0
+        ? `<ul class="comp-recent-list">${recent.map((c) => `
+            <li>
+              <button type="button" class="comp-recent-item" data-competition-id="${escapeHtml(c.id)}">
+                <span class="comp-recent-name">${escapeHtml(competitionLabel(c))}</span>
+                <span class="comp-recent-meta">${escapeHtml([c.code, c.date, c.venue].filter(Boolean).join(' · '))}</span>
+              </button>
+            </li>`).join('')}</ul>`
+        : '<p class="text-secondary comp-recent-empty">Nothing else yet.</p>'}
+    </div>
+    <div class="comp-actions">
+      <button type="button" class="btn btn-secondary btn-sm" id="comp-create">New competition…</button>
+    </div>
+  `;
+
+  container.querySelectorAll<HTMLButtonElement>('[data-competition-id]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-competition-id');
+      const picked = competitions.find((c) => c.id === id) ?? null;
+      setActiveCompetition(picked); // the subscription re-renders the panel
+    });
+  });
+
+  document.getElementById('comp-create')?.addEventListener('click', () => {
+    void openCreateCompetitionDialog().then((created) => {
+      if (!created) return;
+      knownCompetitions = [created, ...(knownCompetitions ?? [])];
+      setActiveCompetition(created);
+    });
+  });
+}
+
+function activeCompetitionHtml(active: PlatformCompetition): string {
+  const meta = [active.date, active.venue].filter(Boolean).join(' · ');
+  return `
+    <h2 class="comp-name">${escapeHtml(competitionLabel(active))}</h2>
+    <p class="comp-code"><span class="comp-code-tag">${escapeHtml(active.code)}</span>${meta ? ` ${escapeHtml(meta)}` : ''}</p>
+    <div class="comp-open">
+      <span class="comp-open-label">Open in</span>
+      <div class="comp-open-links">
+        ${COMPETITION_TOOLS.map(
+          (t) => `<a class="btn btn-secondary btn-sm" href="${t.path}">${t.label}</a>`
+        ).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function noCompetitionHtml(): string {
+  return `
+    <h2>No competition selected</h2>
+    <p>
+      Pick a competition from the selector in the navigation bar — every tool
+      then prefills from it. You can always keep working without one.
+    </p>
+  `;
+}
+
+/** The pre-registry welcome card, still used when the platform API is absent */
+function welcomeCardHtml(): string {
+  return `
+    <span class="micro-label">Welcome</span>
+    <h2>Welcome to figureskatingtools.com</h2>
+    <p>
+      Please use the tools nicely and do not harm anyone.
+    </p>
+    <p>
+      All bugs and feature requests should be reported to
+      <a href="https://github.com/figureskatingtools" target="_blank" rel="noopener noreferrer">GitHub</a>.
+    </p>
+    <p>
+      In case of inquiries, contact
+      <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>.
+    </p>
+  `;
 }
 
 const CHANGELOG_DISPLAY_INITIAL = 4;  // entries shown before "Show more"

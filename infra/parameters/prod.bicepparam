@@ -2,10 +2,31 @@ using '../main.bicep'
 
 param resourceGroupName = 'rg-fs-site-prod'
 param location = 'swedencentral'
-param customDomain = 'figureskatingtools.com'
 
-// SWA apex domain-ownership token, published as the _dnsauth TXT record so the managed
-// certificate can validate + auto-renew. Publicly resolvable in DNS (not a secret).
-// If the apex binding is ever recreated from scratch, refresh this from:
-//   az staticwebapp hostname show -n <swa> -g rg-fs-site-prod --hostname figureskatingtools.com --query validationToken -o tsv
-param apexValidationToken = '_uxne0sed1kp8orshb691igr9m74gjeb'
+// Apex. App Service verifies ownership with the `asuid` TXT record and routes
+// via a plain A record holding the Web App's inbound VIP (Azure DNS ALIAS
+// records cannot target App Service). The SWA-era `apexValidationToken` /
+// `_dnsauth` TXT scheme is gone — delete that record at cutover.
+//
+// Set the GitHub environment variable SKIP_CUSTOM_DOMAIN=true to deploy on the
+// default *.azurewebsites.net hostname only (migration step 1: new stack live
+// alongside the untouched Static Web App). Clear it for the DNS cutover.
+param customDomain = readEnvironmentVariable('SKIP_CUSTOM_DOMAIN', '') == 'true'
+  ? ''
+  : 'figureskatingtools.com'
+
+// Supplied by the deploy workflow from GitHub environment secrets + vars. Read
+// from the environment rather than passed on the command line so the shared
+// secret never appears in a process argument list.
+param authClientId = readEnvironmentVariable('AUTH_CLIENT_ID', '')
+param tenantId = readEnvironmentVariable('AZURE_TENANT_ID', '')
+param proxySharedSecretPlatform = readEnvironmentVariable('PROXY_SHARED_SECRET_PLATFORM', '')
+
+// System-assigned principal ids of the tool Function Apps, for read access to
+// the shared competition-data container. Empty entries are ignored, so this
+// works before the tool repos have been reduced (workstream 6).
+param toolFunctionPrincipalIds = [
+  readEnvironmentVariable('TOOL_PRINCIPAL_ID_JUDGEPAPERS', '')
+  readEnvironmentVariable('TOOL_PRINCIPAL_ID_SCOREMODIFIER', '')
+  readEnvironmentVariable('TOOL_PRINCIPAL_ID_PROTOCOLGENERATOR', '')
+]

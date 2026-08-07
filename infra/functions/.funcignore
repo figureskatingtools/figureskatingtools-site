@@ -1,0 +1,13 @@
+.git*
+.vscode
+__azurite_db*__.json
+__blobstorage__
+__queuestorage__
+local.settings.json
+tests
+test_*.py
+requirements-dev.txt
+*.pyc
+__pycache__
+.venv
+.pytest_cache

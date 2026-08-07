@@ -11,7 +11,7 @@ export function escapeHtml(str: string): string {
   return div.innerHTML;
 }
 
-/** The signed-in user, as projected from SWA's `clientPrincipal` */
+/** The signed-in user, as reported by the router's `/userinfo` endpoint */
 export interface UserInfo {
   authenticated: true;
   userId: string;
@@ -21,21 +21,37 @@ export interface UserInfo {
 }
 
 /**
- * Check auth via SWA's built-in endpoint.
- * Returns null when unauthenticated (no principal) or when the call fails.
+ * Sign-in URL for App Service Easy Auth.
+ *
+ * `appPath` is where the user lands after the round-trip, so each app passes
+ * its own path (`/judgepapers/`, `/tools/banner/`, …) and login returns into it.
+ */
+export function loginUrl(appPath = '/'): string {
+  return `/.auth/login/aad?post_login_redirect_url=${encodeURIComponent(appPath)}`;
+}
+
+/** Sign-out URL for App Service Easy Auth */
+export function logoutUrl(redirectPath = '/'): string {
+  return `/.auth/logout?post_logout_redirect_uri=${encodeURIComponent(redirectPath)}`;
+}
+
+/**
+ * Check auth via the router's `/userinfo` endpoint, which flattens the Easy
+ * Auth `x-ms-client-principal` header into `{authenticated, userId, …}`.
+ * Returns null when unauthenticated or when the call fails.
  */
 export async function fetchUser(): Promise<UserInfo | null> {
   try {
-    const resp = await fetch('/.auth/me');
+    const resp = await fetch('/userinfo', { headers: { Accept: 'application/json' } });
+    if (!resp.ok) return null;
     const data = await resp.json();
-    if (data && data.clientPrincipal) {
-      const cp = data.clientPrincipal;
+    if (data && data.authenticated) {
       return {
         authenticated: true,
-        userId: cp.userId,
-        identityProvider: cp.identityProvider,
-        userDetails: cp.userDetails,
-        userRoles: cp.userRoles || [],
+        userId: data.userId ?? '',
+        identityProvider: data.identityProvider ?? 'aad',
+        userDetails: data.userDetails ?? 'unknown',
+        userRoles: Array.isArray(data.userRoles) ? data.userRoles : [],
       };
     }
   } catch (_e) {
@@ -46,11 +62,11 @@ export async function fetchUser(): Promise<UserInfo | null> {
 
 /** Render the unauthenticated landing/sign-in view into `appElement` */
 export function renderSignInView(appElement: HTMLElement, redirectPath = '/'): void {
-  const loginUrl = `/.auth/login/aad?post_login_redirect_uri=${encodeURIComponent(redirectPath)}`;
+  const href = loginUrl(redirectPath);
   appElement.innerHTML = `
     <div class="unauth-page">
       <div class="unauth-header">
-        <a href="${loginUrl}" class="btn btn-primary btn-sm unauth-signin-btn">Sign In</a>
+        <a href="${href}" class="btn btn-primary btn-sm unauth-signin-btn">Sign In</a>
       </div>
       <div class="unauth-content">
         <img src="/logo.png" alt="Figure Skating Tools" class="unauth-logo reveal reveal-1">
@@ -62,7 +78,7 @@ export function renderSignInView(appElement: HTMLElement, redirectPath = '/'): v
         <p class="unauth-contact reveal reveal-3">
           For access, contact <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>
         </p>
-        <a href="${loginUrl}" class="btn btn-primary reveal reveal-4">Sign In to Continue</a>
+        <a href="${href}" class="btn btn-primary reveal reveal-4">Sign In to Continue</a>
       </div>
     </div>
   `;
@@ -82,7 +98,7 @@ export function setupUserMenu(container: HTMLElement, user: UserInfo): void {
         <div style="padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-color); font-size: 0.75rem; color: var(--text-secondary);">
           Signed in as <br> <strong style="color: var(--text-primary);">${escapeHtml(user.userDetails)}</strong>
         </div>
-        <a href="/.auth/logout?post_logout_redirect_uri=/" class="dropdown-item">Sign Out</a>
+        <a href="${logoutUrl()}" class="dropdown-item">Sign Out</a>
       </div>
     </div>
   `;
