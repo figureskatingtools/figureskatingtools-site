@@ -4,103 +4,65 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-The landing page for **figureskatingtools.com** — an **auth-gated** launcher/home page that links out to separately-hosted tools (each on its own subdomain). This repo contains only the landing site plus a shared navigation package; the individual tools (e.g. `judgepapers`) live in their own repos and are deployed to subdomains.
+The **single host for figureskatingtools.com** — an auth-gated App Service that serves the home page **and all tool frontends path-based** on one domain (`/`, `/judgepapers/`, `/scoremodifier/`, `/protocolgenerator/`, `/tools/banner/`), proxies each tool's API to its separately-deployed Function App, and owns the **platform competition registry** (create/select a competition once, every tool operates on it). Tool *backends* stay in their own repos (`fs-judgepapers`, `fs-scoremodifier`, `fs-protocolgenerator`); their `frontend/` dirs are legacy and live here now.
 
 ## Workspace layout
 
 npm workspaces monorepo (root `package.json`, workspaces: `packages/*` and `site`):
 
-- **`packages/shared-ui`** — `@figureskatingtools/shared-ui`, the cross-tool site navigation bar. Built with `tsc` to `dist/` and **published to GitHub Packages**. Every tool in the ecosystem (this site and the external tool repos) consumes this package so the top nav stays consistent.
-- **`site`** — the landing page itself. Vanilla TypeScript + Vite, no framework. Entry is `site/src/main.ts`, which builds the page's HTML as template strings and injects it into `#app`.
-- **`infra`** — Bicep IaC for the Azure **Static Web App** that hosts the site, plus the shared public DNS zone for the whole domain.
+- **`packages/shared-ui`** — `@figureskatingtools/shared-ui` v3 (internal): path-based site nav (`DEFAULT_TOOLS` in `src/nav.ts`), plus the **competition state module** (`src/competition.ts`: `getActiveCompetition`/`setActiveCompetition`/`subscribeActiveCompetition`, localStorage key `fst:active-competition:v1`, API client for `/api/competitions`) and the nav **competition selector** (`src/competition-selector.ts`, renders into `#fst-nav-competition`; degrades to nothing if the API is unavailable). v3 is consumed via workspace symlink only; the external GitHub Packages publish (v2.x) exists solely for the tool repos' legacy frontends and dies with them.
+- **`site`** — one Vite project, **five HTML entries** (`index.html`, `judgepapers/`, `scoremodifier/`, `protocolgenerator/`, `tools/banner/`). Each app is its own document with its own unscoped `style.css` (`site/src/<app>/`) — CSS never crosses documents; don't import one app's CSS from another. Shared chrome is `site/src/shell.ts` (`fetchUser()` → `GET /userinfo` flat shape, `loginUrl(appPath)`/`logoutUrl()`, `renderSignInView`, `setupUserMenu`). Per-app API base constants: `const API_BASE = '/<tool>/api'` — never root-absolute `/api/...` inside tool apps (bare `/api` is the platform registry).
+- **`server`** — the zero-dependency Node router (`server.js`): static hosting of the Vite dist with per-prefix SPA fallback, `GET /userinfo`, `GET /health`, and streaming proxies `/<tool>/api/*` → `FUNCTION_APP_URL_<TOOL>` and `/api/*` → `FUNCTION_APP_URL_PLATFORM`, injecting `x-proxy-secret` (per-target `PROXY_SHARED_SECRET_*`) + `x-forwarded-user-email`. Per-prefix CSP (protocolgenerator gets pdf.js allowances). Bodies are piped, never buffered (25 MB PDF / 100 MiB ZIP uploads flow through). `redirect-server.js` is the cutover-era 301 helper for old subdomains. See `server/README.md` for the env contract.
+- **`infra`** — subscription-scoped Bicep: per-env site RG (`rg-fs-site-<env>`) with the Web App (B1, Easy Auth v2 via MI federated credential), platform storage (`stfsplat*`: `competition-data` + `app-package` containers, `competitions` table), platform Function App (`func-fs-platform-*`, FC1 Python 3.13), RBAC (incl. `shared-data-access.bicep` granting tool Function Apps Blob Data Reader on platform storage via `TOOL_PRINCIPAL_ID_*`), DNS in the shared persistent `rg-fs-dns` zone (apex = plain **A record to the Web App's `inboundIpAddress`** + `asuid` TXT; `test` = CNAME + `asuid.test` TXT), custom-domain binding + managed cert + SNI. **`infra/functions/`** is the platform competition API. **`infra/MIGRATION.md`** documents the one-time manual steps (GitHub env vars/secrets, Entra grants, cutover order, teardown).
 
 ## Common commands
 
-Run from the repo root unless noted. CI uses Node 22.
+Run from the repo root. CI uses Node 22.
 
 ```bash
-# First-time / after changing shared-ui: build it so `site` can import dist/
 npm install
-npm run build --workspace=@figureskatingtools/shared-ui
+npm run build --workspace=@figureskatingtools/shared-ui   # must precede site build (TS2307 otherwise)
+npm run build --workspace=site                             # tsc strict + vite, 5 entries
+npm run dev --workspace=site                               # Vite MPA dev server (see proxies in vite.config.ts)
 
-# Local dev server for the landing page (Vite)
-npm run dev --workspace=site         # or: cd site && npm run dev
-
-# Production build of the site (type-check + bundle to site/dist/)
-npm run build --workspace=site
-
-# Build the shared-ui package
-npm run build --workspace=@figureskatingtools/shared-ui
+# Tests
+npm test --workspace=@figureskatingtools/shared-ui         # vitest (competition state logic)
+node --test server/*.test.js                               # router suite (NOT `node --test server/` — Node 22.17 quirk)
+cd infra/functions && uv run --with-requirements requirements.txt \
+  --with-requirements requirements-dev.txt python -m pytest tests -q   # platform API suite
 ```
 
-There is **no test suite or linter** configured. Type-checking is the only static check: `site` build runs `tsc` (noEmit, strict, noUnused*) before `vite build`; `shared-ui` build runs `tsc` to emit `dist/`.
+Local full-stack: `node server/server.js` with `FUNCTION_APP_URL_*` pointing at local `func start` instances or the deployed test Function Apps, `DEV_FAKE_USER=dev@example.com` (non-production only) for `/userinfo`. Secrets unset = proxy-secret gate off (backends fail open only when their `PROXY_SHARED_SECRET` is empty).
 
-> **shared-ui must be built before `site`.** `site` depends on `@figureskatingtools/shared-ui: "*"`. Because it's a workspace, npm resolves that to the in-repo package via symlink **both locally and in CI** — so `dist/` must exist (`npm run build --workspace=@figureskatingtools/shared-ui`) or `site`'s `tsc` fails with `TS2307`. Publishing to GitHub Packages is for the *external* tool repos that aren't part of this workspace; `.npmrc` (`@figureskatingtools:registry=npm.pkg.github.com`) + `NODE_AUTH_TOKEN` exist for publishing and for those downstream consumers.
+## Auth
 
-## Auth-gated SPA
+**App Service Easy Auth v2 (AAD)** gates the whole origin platform-side (`requireAuthentication`, `RedirectToLoginPage`; `/health` excluded). No client secret: a user-assigned MI federated credential (`OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID`), FIC + redirect URIs maintained by the deploy workflow via Graph. Frontends read identity from `GET /userinfo` (router decodes `X-MS-CLIENT-PRINCIPAL`); login links use `post_login_redirect_url` (App Service syntax — not SWA's `_uri`). Locally there is no `/.auth/*`; use `DEV_FAKE_USER`.
 
-The site is gated behind **Azure Static Web Apps' built-in AAD (Entra) authentication** — there is no app-level auth code, it's all SWA platform plumbing:
+## Competition registry (platform API)
 
-- `site/public/staticwebapp.config.json` registers the `azureActiveDirectory` provider (`clientIdSettingName: AZURE_CLIENT_ID`, `clientSecretSettingName: AZURE_CLIENT_SECRET`, a hard-coded tenant `openIdIssuer`), sets `navigationFallback` → `/index.html` (SPA fallback), and emits the security headers (HSTS, `X-Content-Type-Options`, `X-Frame-Options: DENY`, `Referrer-Policy`). **This file is the source of security headers and SPA routing — not a Node server** (there is no `server.js`; SWA serves `site/dist/` from its global CDN).
-- `main.ts` calls `fetch('/.auth/me')` on load. No `clientPrincipal` → **unauthenticated view** (a sign-in page linking to `/.auth/login/aad`). Authenticated → renders the shared nav, a welcome card, a "What's New" changelog panel, and a user menu whose "Sign Out" hits `/.auth/logout`.
-- **Locally `npm run dev` always shows the unauthenticated view** — `/.auth/*` only exists on the deployed SWA, so the `/.auth/me` fetch returns no principal. That's expected; auth can only be exercised against the live Static Web App.
-- The auth app registration's secret is pushed to SWA app settings by the deploy workflow (from `AUTH_CLIENT_ID` / `AUTH_CLIENT_SECRET` secrets → `AZURE_CLIENT_ID` / `AZURE_CLIENT_SECRET` settings). **Redirect URIs and other Entra config are provisioned manually** — the deploy principal has no Microsoft Graph rights to PATCH the app registration. The per-environment callbacks (`https://<host>/.auth/login/aad/callback`) are documented in `deploy-site.yml` and are stable for the life of the SWA + custom domain.
+`infra/functions/function_app.py`. Table `competitions`, two row kinds: PK `COMPETITION`/RK GUID (the entity) and PK `CODE`/RK normalized-code → GUID (uniqueness + O(1) lookup; created first on insert, 409 `code_in_use` on conflict, freed on soft delete). Routes: `GET|POST /api/competitions`, `GET|PUT|PATCH|DELETE /api/competitions/{id}` (DELETE = soft, `status:"deleted"`), `GET /api/health`. Create accepts `date` or `startDate`. Python `normalize_code` must stay identical to TS `normalizeCompetitionCode` in shared-ui (NFD diacritic folding — there's a test). Future FSM ingest (datafeeds/PDFs over HTTP keyed by competition code) hooks in here: reserved `ingest_*` route names + `x-ingest-key` stub, blob layout `competition-data/<guid>/fsm/`.
 
-## Environment-aware URL scheme
-
-The tool/home URLs are derived from `window.location.hostname` in `packages/shared-ui/src/nav.ts` (`getEnvPrefix`, `buildToolUrl`, `buildHomeUrl`). The scheme:
-
-- `localhost` / `127.0.0.1` → tool links are `#`, home is `/` (tools aren't reachable locally).
-- hostname starting with `test.` → that prefix is preserved, so `test.figureskatingtools.com` links to `test.judgepapers.figureskatingtools.com`.
-- otherwise (prod) → no prefix, links to `judgepapers.figureskatingtools.com`.
-
-**Adding or toggling a tool is a single-list change:** edit `DEFAULT_TOOLS` in `packages/shared-ui/src/nav.ts` (id, label, subdomain, `enabled`). `enabled: false` renders "coming soon"; `true` renders a live link to the tool's subdomain. (`main.ts` no longer carries its own tool-card list — it only renders the shared nav.) After editing, **bump `packages/shared-ui/package.json` version** so the change publishes and downstream tool repos pick it up.
+The **active competition** is client-side state (localStorage, same origin) — tools use it to prefill/label/associate but keep their own legacy per-tool records; linking tool records to platform GUIDs is a future step.
 
 ## Changelog ("What's New" panel)
 
-The panel fetches commits **live from the public GitHub API in the browser** (`loadChangelog()` in `main.ts`), so updates from the tool repos appear without a site redeploy. The repo→label list is single-sourced in **`site/public/changelog-sources.json`** — adding a future tool to the feed is one entry there, nothing else. All source repos must stay **public** (unauthenticated API). Mechanics:
-
-- **Environment-aware branch**: prod hostname → `main`, `test.*` → `test`, localhost → `test` (`changelogBranch()`).
-- **All-or-nothing**: if any repo's fetch fails (offline, rate-limit 403 — which returns a JSON *object*, not an array — or a repo gone private), the client falls back to the build-time `/changelog.json` rather than silently dropping a tool.
-- **Display**: 4 newest entries with a "Show more" toggle (up to 20), merged across repos and sorted on the full ISO committer timestamp.
-- **Caching**: merged result is kept in `sessionStorage` for 5 min (`changelog-cache-v1`) to stay well inside GitHub's 60 req/hr/IP unauthenticated limit.
-
-`scripts/generate-changelog.sh [output] [branch] [sources-file]` still runs during deploy, but only to produce the **fallback** `site/public/changelog.json` (not committed; 20 entries). It reads the same `changelog-sources.json` via jq, and the deploy workflow passes the branch per environment — **`main` for prod, `test` for the test env** (a repo without the requested branch is skipped with a warning). Keep the client mapping in `fetchRepoCommits()` and the script's jq mapping in sync (`sha[0:7]`, `date = iso[0:10]`, title = first message line, description = rest).
-
-When adding a tool to the feed, also add a `.changelog-badge--<tool-slug>` rule in `site/src/style.css` (slug = label lowercased, spaces → `-`); without it the badge renders unstyled.
+Unchanged mechanics: browser fetches commits from the public GitHub API per `site/public/changelog-sources.json` (now incl. `fs-protocolgenerator`), branch-aware (`test.*` host → `test` branch), all-or-nothing with build-time `/changelog.json` fallback generated by `scripts/generate-changelog.sh` at deploy. Tool repos must stay public and keep `main`+`test` branches. New tool in the feed = one JSON entry + a `.changelog-badge--<tool-slug>` CSS rule.
 
 ## Commit messages
 
-Commit subjects and bodies are surfaced **verbatim** in the public "What's New" panel, so write them for end users, not just for `git log`. The changelog script maps each commit into two fields: the **title** is the first line of the message; the **description** is everything after it. Structure every commit as a one-line title, a blank line, then a bulleted body:
+Surfaced **verbatim** in the public "What's New" panel: one plain user-facing title line (sentence case, no `type(scope):`), blank line, then `-` bullets per notable change. Keep bullets tight (~150 chars collapse threshold); trailers render too, so keep bodies to the bullet summary.
 
-```
-What's new section updated
+## Deployment
 
-- What's new section updated to show 4 latest updates
-- Another update
-```
+`.github/workflows/deploy-site.yml` — push to `main` → prod; `test` only via `workflow_dispatch`. Four jobs: `set-environment` → `deploy-infra` (bicep + FIC/redirect-URI Graph step) → `deploy-platform-backend` (pytest, then zip deploy) → `deploy-frontend` (builds + router tests, stages `server/server.js` + `site/dist/*` → `public/`, sets `FUNCTION_APP_URL_*`/`PROXY_SHARED_SECRET_*` app settings, async zip deploy + Kudu poll, `/health` smoke check).
 
-- **Title** — a short, plain, user-facing sentence (sentence case, no trailing period). It is shown as the entry heading, so skip `type(scope):` prefixes and internal jargon (this differs from the older Conventional-Commits style seen earlier in `git log`).
-- **Body** — one `-` bullet per notable change. Keep each tight; the panel collapses descriptions longer than ~150 chars behind a "Read more" toggle.
-- The body is rendered in full, including trailers (e.g. `Co-Authored-By:`), so keep it to the bullet summary.
+Per-environment GitHub config: vars `FUNCTION_APP_URL_{JUDGEPAPERS,SCOREMODIFIER,PROTOCOLGENERATOR}`, `TOOL_PRINCIPAL_ID_{…}`, `SKIP_CUSTOM_DOMAIN` (set `true` to run on the default hostname, e.g. pre-cutover); secrets `PROXY_SHARED_SECRET_{JUDGEPAPERS,SCOREMODIFIER,PROTOCOLGENERATOR,PLATFORM}`, `AUTH_CLIENT_ID`, `AUTH_APP_OBJECT_ID`. Bicepparams read secrets via `readEnvironmentVariable()`. **Never run `deploy-infra` alone against a live env** — `webapp.bicep` replaces the whole app-settings collection and `deploy-frontend` re-applies the proxy settings in the same run.
 
-## Deployment (Azure Static Web Apps)
-
-Deploys run via GitHub Actions (`.github/workflows/deploy-site.yml`), triggered by changes to `site/**`, `infra/**`, or the workflow itself.
-
-- **Push to `main` → `prod` automatically.** **`test` is deployed only via manual `workflow_dispatch`** (pick `test` or `prod`). There is no `test`-branch trigger; "branch determines environment" only applies to `main`.
-- Two jobs: **deploy-infra** (`az deployment sub create` with `infra/parameters/<env>.bicepparam`, then sets the SWA auth app settings) → **deploy-frontend** (`npm ci`, build shared-ui, generate changelog, build site, fetch the SWA deployment token via `az staticwebapp secrets list`, then `Azure/static-web-apps-deploy@v1` with `app_location: site/dist`, `skip_app_build: true`).
-- Auth is OIDC for the deploy principal (`AZURE_CLIENT_ID` secret; `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` / `LOCATION` vars per GitHub Environment). The Entra **auth-app** secret is separate (`AUTH_CLIENT_ID` / `AUTH_CLIENT_SECRET` secrets).
-
-`publish-shared-ui.yml` runs on `main` when `packages/shared-ui/**` changes and publishes to GitHub Packages. **Bump the version in `packages/shared-ui/package.json`** or `npm publish` fails on a duplicate version (and downstream tools won't pick up changes via `*`).
-
-There are only two environments. `test` is provisioned on demand and **deleted manually** once testing is done (its site resource group, `rg-fs-site-test`, is torn down outside this repo). The shared DNS resource group (`rg-fs-dns`) is **not** torn down with it.
+`publish-shared-ui.yml` still publishes v2.x for the tool repos' legacy frontends; retire it (and mark shared-ui private) at teardown. Migration/cutover order, old-subdomain redirects and the teardown checklist live in `infra/MIGRATION.md`.
 
 ## Infra notes
 
-`infra/main.bicep` is subscription-scoped and creates two resource groups: the per-environment site RG (`rg-fs-site-<env>`) and the **shared, persistent** DNS RG (`rg-fs-dns`). It deploys the Static Web App (`modules/staticwebapp.bicep`, Standard SKU), the DNS records (`modules/dns.bicep`), and — only when `customDomain` is set — the custom-domain binding (`modules/customdomain.bicep`).
-
-- **Single DNS zone for the whole domain.** `figureskatingtools.com` lives in one zone in `rg-fs-dns`. Both `test` and `prod` deploy the same `dns.bicep`, each declaring **only its own** record set. Deployments run incrementally, so records other environments / hand-added records (the `judgepapers` CNAMEs, the MX record) are never touched. The "test environment" is a `test` record set in this zone, **not** a separate zone.
-- **`customDomain` is set for both environments**, but validation differs: apex (`prod`, `figureskatingtools.com`) must use **`dns-txt-token`** (an ALIAS A record to the SWA + a `_dnsauth` TXT token); a subdomain (`test.figureskatingtools.com`) uses **`cname-delegation`** (a single CNAME both routes and validates). The apex token is committed in `prod.bicepparam` (publicly resolvable, not a secret).
-- The custom-domain binding is split into its own module and `dependsOn` the DNS module, because SWA validation reads **public DNS** — the CNAME / TXT records must exist before the binding, or it blocks.
-- **Name-server delegation at the registrar (Joker) is a one-time manual step.** The deploy surfaces the zone's Azure name servers in the job summary. `infra/seed-dns-records.sh` idempotently seeds the non-site records (MX, `judgepapers` CNAMEs) into the Azure zone **before** the NS cutover; run it once, it never deletes anything.
+- Two environments; `test` provisioned on demand, torn down manually (`rg-fs-site-test`). The DNS RG (`rg-fs-dns`) is shared and persistent; deployments are incremental and only touch their own record sets (hand-seeded MX etc. survive — `infra/seed-dns-records.sh`).
+- Apex binding is a literal A record to the app's `inboundIpAddress` (alias records can't target App Service); each infra run self-heals it. Managed certs support the apex (HTTP-token validation works behind Easy Auth).
+- App Service has a hard ~230 s request timeout — fine for current PDF generation, but future long-running FSM batch work needs an async/polling pattern.
+- Tool Function Apps are reached **only** through the router (CORS cleared, `AllowAnonymous` + proxy-secret gate). The per-tool header contract is documented in each tool repo's `PROXY-CONTRACT.md`.

@@ -1,11 +1,21 @@
 name: Deploy Site to Azure
 
+# figureskatingtools.com is one App Service Web App: a Node router (server/) that
+# serves the single Vite dist and proxies /api/* to the platform Function App and
+# /<tool>/api/* to the per-tool Function Apps in their own repos.
+#
+# Push to main auto-deploys prod. test is deployed only via manual dispatch
+# (run the workflow from the branch whose code you want to deploy).
+
 on:
   push:
     branches: [main]
     paths:
       - 'site/**'
+      - 'server/**'
+      - 'packages/**'
       - 'infra/**'
+      - 'scripts/**'
       - '.github/workflows/deploy-site.yml'
   workflow_dispatch:
     inputs:
@@ -45,9 +55,14 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ needs.set-environment.outputs.env_name }}
     outputs:
-      swa_name: ${{ steps.deploy.outputs.swaName }}
-      swa_hostname: ${{ steps.deploy.outputs.swaDefaultHostname }}
+      web_app_name: ${{ steps.deploy.outputs.webAppName }}
+      web_app_hostname: ${{ steps.deploy.outputs.webAppDefaultHostName }}
       resource_group_name: ${{ steps.deploy.outputs.resourceGroupName }}
+      auth_mi_client_id: ${{ steps.deploy.outputs.authManagedIdentityClientId }}
+      auth_mi_object_id: ${{ steps.deploy.outputs.authManagedIdentityObjectId }}
+      platform_function_app_name: ${{ steps.deploy.outputs.platformFunctionAppName }}
+      platform_function_app_url: ${{ steps.deploy.outputs.platformFunctionAppUrl }}
+      custom_domain: ${{ steps.deploy.outputs.customDomain }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -61,21 +76,38 @@ jobs:
 
       - name: Deploy Bicep template
         id: deploy
+        env:
+          # infra/parameters/<env>.bicepparam pulls these in with
+          # readEnvironmentVariable(), so the shared secret never lands in a
+          # command line / process arg list.
+          AUTH_CLIENT_ID: ${{ secrets.AUTH_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          PROXY_SHARED_SECRET_PLATFORM: ${{ secrets.PROXY_SHARED_SECRET_PLATFORM }}
+          TOOL_PRINCIPAL_ID_JUDGEPAPERS: ${{ vars.TOOL_PRINCIPAL_ID_JUDGEPAPERS }}
+          TOOL_PRINCIPAL_ID_SCOREMODIFIER: ${{ vars.TOOL_PRINCIPAL_ID_SCOREMODIFIER }}
+          TOOL_PRINCIPAL_ID_PROTOCOLGENERATOR: ${{ vars.TOOL_PRINCIPAL_ID_PROTOCOLGENERATOR }}
+          # Set to 'true' to deploy on the default *.azurewebsites.net hostname
+          # only (migration step 1, before the DNS cutover).
+          SKIP_CUSTOM_DOMAIN: ${{ vars.SKIP_CUSTOM_DOMAIN }}
         run: |
+          set -euo pipefail
           ENV_NAME="${{ needs.set-environment.outputs.env_name }}"
           DEPLOYMENT_NAME="deploy-fs-site-$(date +%s)"
 
           OUTPUT=$(az deployment sub create \
             --location "${{ vars.LOCATION }}" \
             --template-file infra/main.bicep \
-            --parameters infra/parameters/${ENV_NAME}.bicepparam \
+            --parameters "infra/parameters/${ENV_NAME}.bicepparam" \
             --name "$DEPLOYMENT_NAME" \
             --query 'properties.outputs' \
             -o json)
 
-          echo "swaName=$(echo "$OUTPUT" | jq -r '.swaName.value')" >> "$GITHUB_OUTPUT"
-          echo "swaDefaultHostname=$(echo "$OUTPUT" | jq -r '.swaDefaultHostname.value')" >> "$GITHUB_OUTPUT"
-          echo "resourceGroupName=$(echo "$OUTPUT" | jq -r '.resourceGroupName.value')" >> "$GITHUB_OUTPUT"
+          for key in webAppName webAppDefaultHostName webAppInboundIpAddress \
+                     resourceGroupName authManagedIdentityClientId \
+                     authManagedIdentityObjectId platformFunctionAppName \
+                     platformFunctionAppUrl customDomain; do
+            echo "${key}=$(echo "$OUTPUT" | jq -r ".${key}.value")" >> "$GITHUB_OUTPUT"
+          done
 
           # Surface the zone's Azure name servers so they can be delegated at the
           # registrar (Joker). Delegation is a one-time manual step done outside CI.
@@ -85,26 +117,136 @@ jobs:
             echo '```'
             echo "$OUTPUT" | jq -r '.dnsNameServers.value[]'
             echo '```'
+            echo "Apex A record target (Web App inbound IP): \`$(echo "$OUTPUT" | jq -r '.webAppInboundIpAddress.value')\`"
+            echo "Tool Function App principals granted read on competition-data: $(echo "$OUTPUT" | jq -r '.toolPrincipalsGranted.value')"
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Configure SWA auth app settings
+      # Easy Auth uses a federated managed identity instead of a client secret,
+      # and the redirect URIs have to follow whatever hostnames this environment
+      # ended up with. Both need Microsoft Graph writes on the app registration:
+      # the deploy principal must be an OWNER of it (see infra/MIGRATION.md).
+      - name: Update auth app registration (redirect URIs + FIC)
         run: |
-          az staticwebapp appsettings set \
-            --name "${{ steps.deploy.outputs.swaName }}" \
-            --resource-group "${{ steps.deploy.outputs.resourceGroupName }}" \
-            --setting-names \
-              AZURE_CLIENT_ID="${{ secrets.AUTH_CLIENT_ID }}" \
-              AZURE_CLIENT_SECRET="${{ secrets.AUTH_CLIENT_SECRET }}"
+          set -euo pipefail
 
-      # NOTE: Auth-app redirect URIs are managed manually (the deploy principal has no
-      # Microsoft Graph rights to PATCH the app registration). Add the per-environment
-      # callbacks once via Entra/az; they're stable for the life of the SWA + custom domain:
-      #   prod: https://figureskatingtools.com/.auth/login/aad/callback
-      #   test: https://test.figureskatingtools.com/.auth/login/aad/callback
-      #         https://<swa-default-hostname>/.auth/login/aad/callback
+          AUTH_APP_OBJECT_ID="${{ secrets.AUTH_APP_OBJECT_ID }}"
+          MI_OBJECT_ID="${{ steps.deploy.outputs.authManagedIdentityObjectId }}"
+          TENANT_ID="${{ vars.AZURE_TENANT_ID }}"
+          WEB_APP_HOSTNAME="${{ steps.deploy.outputs.webAppDefaultHostName }}"
+          CUSTOM_DOMAIN="${{ steps.deploy.outputs.customDomain }}"
+
+          if [ -z "${AUTH_APP_OBJECT_ID}" ]; then
+            echo "ERROR: AUTH_APP_OBJECT_ID is not set. Ensure the AUTH_APP_OBJECT_ID secret is configured."
+            exit 1
+          fi
+
+          if [ -z "${MI_OBJECT_ID}" ]; then
+            echo "ERROR: Managed identity object ID is empty. Check the 'Deploy Bicep template' step output."
+            exit 1
+          fi
+
+          # Redirect URIs: Easy Auth callbacks happen on whichever hostname the
+          # user browsed to, so both the default hostname and the custom domain
+          # (once bound) must be registered.
+          echo "Updating redirect URIs on app registration..."
+          REDIRECT_URIS=$(jq -n \
+            --arg web "https://${WEB_APP_HOSTNAME}/.auth/login/aad/callback" \
+            --arg custom "${CUSTOM_DOMAIN:+https://${CUSTOM_DOMAIN}/.auth/login/aad/callback}" \
+            '{web: {redirectUris: ([$web] + (if $custom == "" then [] else [$custom] end))}}')
+          az rest --method PATCH \
+            --uri "https://graph.microsoft.com/v1.0/applications/${AUTH_APP_OBJECT_ID}" \
+            --headers 'Content-Type=application/json' \
+            --body "$REDIRECT_URIS"
+          echo "Redirect URIs updated."
+
+          # Federated identity credential: lets Easy Auth authenticate as the
+          # managed identity instead of holding a client secret.
+          EXISTING_SUBJECT=$(az ad app federated-credential list \
+            --id "$AUTH_APP_OBJECT_ID" \
+            --query "[?name=='easyauth-managed-identity-fic'].subject" \
+            -o tsv 2>/dev/null || echo "")
+
+          FIC_PARAMS="{
+            \"name\": \"easyauth-managed-identity-fic\",
+            \"issuer\": \"https://login.microsoftonline.com/${TENANT_ID}/v2.0\",
+            \"subject\": \"${MI_OBJECT_ID}\",
+            \"audiences\": [\"api://AzureADTokenExchange\"],
+            \"description\": \"Allow Easy Auth to use managed identity instead of client secret\"
+          }"
+
+          if [ -z "$EXISTING_SUBJECT" ]; then
+            echo "Creating federated identity credential..."
+            az ad app federated-credential create \
+              --id "$AUTH_APP_OBJECT_ID" \
+              --parameters "$FIC_PARAMS"
+            echo "Federated identity credential created."
+          elif [ "$EXISTING_SUBJECT" != "$MI_OBJECT_ID" ]; then
+            # A rebuilt test environment gets a new managed identity; re-point the FIC.
+            echo "FIC subject mismatch (existing: $EXISTING_SUBJECT, expected: $MI_OBJECT_ID). Updating..."
+            FIC_ID=$(az ad app federated-credential list \
+              --id "$AUTH_APP_OBJECT_ID" \
+              --query "[?name=='easyauth-managed-identity-fic'].id" \
+              -o tsv)
+            az rest --method PATCH \
+              --uri "https://graph.microsoft.com/v1.0/applications/${AUTH_APP_OBJECT_ID}/federatedIdentityCredentials/${FIC_ID}" \
+              --headers 'Content-Type=application/json' \
+              --body "{\"subject\": \"${MI_OBJECT_ID}\"}"
+            echo "Federated identity credential updated."
+          else
+            echo "Federated identity credential already exists with correct subject, skipping."
+          fi
+
+  deploy-platform-backend:
+    name: Deploy Platform Backend (Functions)
+    needs: [set-environment, deploy-infra]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.set-environment.outputs.env_name }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Run backend tests
+        run: |
+          cd infra/functions
+          pip install -r requirements-dev.txt
+          python -m pytest -q
+
+      - name: Build backend package
+        run: |
+          set -euo pipefail
+          BUILD_DIR=$(mktemp -d)
+          cp -r infra/functions/* "$BUILD_DIR/"
+
+          cd "$BUILD_DIR"
+          rm -rf .venv __pycache__ .git .vscode .pytest_cache tests local.settings.json
+          rm -f ./*.pyc requirements-dev.txt
+
+          mkdir -p .python_packages/lib/site-packages
+          pip install -r requirements.txt --target .python_packages/lib/site-packages
+
+          zip -r "$GITHUB_WORKSPACE/platform-backend.zip" .
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Azure Functions
+        run: |
+          az functionapp deployment source config-zip \
+            --src platform-backend.zip \
+            --name "${{ needs.deploy-infra.outputs.platform_function_app_name }}" \
+            --resource-group "${{ needs.deploy-infra.outputs.resource_group_name }}"
 
   deploy-frontend:
-    name: Deploy Frontend (Static Web App)
+    name: Deploy Frontend (Web App)
     needs: [set-environment, deploy-infra]
     runs-on: ubuntu-latest
     environment: ${{ needs.set-environment.outputs.env_name }}
@@ -123,6 +265,12 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Test the router
+        # Zero-dependency node:test suite for server/server.js — the proxy, the
+        # per-prefix SPA fallback and the CSP table all ship untranspiled, so
+        # this is the only gate they get.
+        run: node --test server/*.test.js
+
       - name: Build shared-ui
         # site depends on the local @figureskatingtools/shared-ui workspace, whose
         # main/types point at dist/. Build it first or site's tsc fails with TS2307.
@@ -139,9 +287,21 @@ jobs:
           ENV_NAME: ${{ needs.set-environment.outputs.env_name }}
 
       - name: Build site
+        # One multi-entry Vite build produces the whole tree: /, /judgepapers/,
+        # /scoremodifier/, /protocolgenerator/, /tools/banner/ + shared /assets/*.
+        run: npm run build --workspace=site
+
+      - name: Create deployment package
         run: |
-          cd site
-          npm run build
+          set -euo pipefail
+          STAGE_DIR=$(mktemp -d)
+          # The router lives at the zip root; the Vite dist becomes its public/.
+          cp server/server.js "$STAGE_DIR/"
+          mkdir -p "$STAGE_DIR/public"
+          cp -r site/dist/* "$STAGE_DIR/public/"
+
+          cd "$STAGE_DIR"
+          zip -r "$GITHUB_WORKSPACE/frontend.zip" .
 
       - name: Azure Login (OIDC)
         uses: azure/login@v3
@@ -150,21 +310,100 @@ jobs:
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Get SWA deployment token
-        id: get-token
+      - name: Configure Web App settings
+        # These change independently of infra (tool Function App URLs live in
+        # GitHub environment vars, secrets rotate), so they are set here rather
+        # than in Bicep. `appsettings set` merges, so the FIC sentinel set by
+        # webapp.bicep survives.
         run: |
-          TOKEN=$(az staticwebapp secrets list \
-            --name "${{ needs.deploy-infra.outputs.swa_name }}" \
-            --resource-group "${{ needs.deploy-infra.outputs.resource_group_name }}" \
-            --query "properties.apiKey" -o tsv)
-          echo "::add-mask::$TOKEN"
-          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          RESOURCE_GROUP="${{ needs.deploy-infra.outputs.resource_group_name }}"
+          WEBAPP_NAME="${{ needs.deploy-infra.outputs.web_app_name }}"
 
-      - name: Deploy to Azure Static Web App
-        uses: Azure/static-web-apps-deploy@v1
-        with:
-          azure_static_web_apps_api_token: ${{ steps.get-token.outputs.token }}
-          repo_token: ${{ secrets.GITHUB_TOKEN }}
-          action: upload
-          app_location: site/dist
-          skip_app_build: true
+          az webapp config appsettings set \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$WEBAPP_NAME" \
+            --settings \
+              FUNCTION_APP_URL_PLATFORM="${{ needs.deploy-infra.outputs.platform_function_app_url }}" \
+              FUNCTION_APP_URL_JUDGEPAPERS="${{ vars.FUNCTION_APP_URL_JUDGEPAPERS }}" \
+              FUNCTION_APP_URL_SCOREMODIFIER="${{ vars.FUNCTION_APP_URL_SCOREMODIFIER }}" \
+              FUNCTION_APP_URL_PROTOCOLGENERATOR="${{ vars.FUNCTION_APP_URL_PROTOCOLGENERATOR }}" \
+              PROXY_SHARED_SECRET_PLATFORM="${{ secrets.PROXY_SHARED_SECRET_PLATFORM }}" \
+              PROXY_SHARED_SECRET_JUDGEPAPERS="${{ secrets.PROXY_SHARED_SECRET_JUDGEPAPERS }}" \
+              PROXY_SHARED_SECRET_SCOREMODIFIER="${{ secrets.PROXY_SHARED_SECRET_SCOREMODIFIER }}" \
+              PROXY_SHARED_SECRET_PROTOCOLGENERATOR="${{ secrets.PROXY_SHARED_SECRET_PROTOCOLGENERATOR }}" \
+              SCM_DO_BUILD_DURING_DEPLOYMENT="false" \
+            --output none
+
+          az webapp config set \
+            --resource-group "$RESOURCE_GROUP" \
+            --name "$WEBAPP_NAME" \
+            --startup-file "node server.js" \
+            --linux-fx-version "NODE|22-lts" \
+            --output none
+
+      - name: Deploy to Azure Web App
+        run: |
+          set -uo pipefail
+          WEBAPP_NAME="${{ needs.deploy-infra.outputs.web_app_name }}"
+          SCM_URL="https://${WEBAPP_NAME}.scm.azurewebsites.net"
+          TOKEN=$(az account get-access-token --query accessToken -o tsv)
+
+          latest_field() {
+            curl -s -H "Authorization: Bearer $TOKEN" "$SCM_URL/api/deployments/latest" \
+              | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('$1',''))" 2>/dev/null || echo ""
+          }
+
+          # Remember the previous deployment so we don't mistake it for the new one
+          PRE_ID=$(latest_field id)
+
+          # Async deploy + poll: the synchronous wait regularly trips a gateway
+          # 504 after ~4 minutes even though the deployment succeeds server-side.
+          az webapp deploy \
+            --resource-group "${{ needs.deploy-infra.outputs.resource_group_name }}" \
+            --name "$WEBAPP_NAME" \
+            --src-path frontend.zip \
+            --type zip \
+            --clean true \
+            --async true
+
+          # Poll Kudu for the new deployment's result (status 4 = success, 3 = failed)
+          for i in $(seq 1 40); do
+            sleep 15
+            ID=$(latest_field id)
+            if [[ -z "$ID" || "$ID" == "$PRE_ID" ]]; then
+              echo "Waiting for new deployment to register..."
+              continue
+            fi
+            STATUS=$(latest_field status)
+            COMPLETE=$(latest_field complete)
+            if [[ "$STATUS" == "4" && "$COMPLETE" == "True" ]]; then
+              echo "Deployment $ID succeeded."
+              exit 0
+            elif [[ "$STATUS" == "3" ]]; then
+              echo "Deployment $ID failed:"
+              curl -s -H "Authorization: Bearer $TOKEN" "$SCM_URL/api/deployments/latest"
+              exit 1
+            fi
+            echo "Deployment $ID in progress (status=${STATUS:-unknown})..."
+          done
+
+          echo "Timed out waiting for deployment to complete."
+          exit 1
+
+      - name: Smoke check
+        run: |
+          set -uo pipefail
+          HOST="${{ needs.deploy-infra.outputs.web_app_hostname }}"
+          # /health is excluded from Easy Auth, so an authenticated-only site
+          # still answers 200 here. Anything else means the router didn't start.
+          for i in $(seq 1 10); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' "https://${HOST}/health" || echo 000)
+            if [[ "$CODE" == "200" ]]; then
+              echo "Router healthy at https://${HOST}/health"
+              exit 0
+            fi
+            echo "Health check returned ${CODE}, retrying..."
+            sleep 10
+          done
+          echo "::warning::Router health check never returned 200 at https://${HOST}/health"

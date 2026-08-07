@@ -7,6 +7,8 @@
  * plumbing around it (typed state, asset loading, DOM wiring) is new.
  */
 
+import { formatDateFi, getActiveCompetition } from '@figureskatingtools/shared-ui';
+
 /* ── Asset + tuning constants ── */
 const RALEWAY_URL = '/tools/banner/assets/raleway.woff2';
 const LOGO_URL = '/tools/banner/assets/skating-finland-logo.png';
@@ -57,6 +59,32 @@ function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
+/** Escape for interpolation into a double-quoted HTML attribute */
+function escAttr(s: string): string {
+  return esc(s).replace(/"/g, '&quot;');
+}
+
+/* ── Defaults, prefilled from the active competition when there is one ── */
+
+const FALLBACK_TITLE = 'WINTER CUP 2026';
+const FALLBACK_DATE_VENUE = '14.–15.2.2026  |  Ice Arena, Helsinki';
+
+/** Banner title default — the active competition's name, shouted */
+function defaultTitle(): string {
+  const active = getActiveCompetition();
+  const name = active?.name.trim();
+  return name ? name.toUpperCase() : FALLBACK_TITLE;
+}
+
+/** Date & venue default — `date  |  venue` from the active competition */
+function defaultDateVenue(): string {
+  const active = getActiveCompetition();
+  if (!active) return FALLBACK_DATE_VENUE;
+  // The banner is print-facing text, so the date goes on it Finnish (dd.MM.yyyy)
+  const parts = [formatDateFi(active.date), active.venue.trim()].filter(Boolean);
+  return parts.length > 0 ? parts.join('  |  ') : FALLBACK_DATE_VENUE;
+}
+
 /* ════════════════════════════════════════════════════════════════
    Page markup
    ════════════════════════════════════════════════════════════════ */
@@ -98,7 +126,7 @@ export function renderGeneratorPage(): string {
 
           <div class="field">
             <label class="field-label" for="title">Title</label>
-            <input type="text" id="title" class="field-input" value="WINTER CUP 2026">
+            <input type="text" id="title" class="field-input" value="${escAttr(defaultTitle())}">
             <div class="field-size">
               <span class="field-size-label">Size</span>
               <input type="range" id="titleSize" min="24" max="60" step="1" value="48">
@@ -108,7 +136,7 @@ export function renderGeneratorPage(): string {
 
           <div class="field">
             <label class="field-label" for="dateVenue">Date &amp; venue</label>
-            <input type="text" id="dateVenue" class="field-input" value="14.–15.2.2026  |  Ice Arena, Helsinki">
+            <input type="text" id="dateVenue" class="field-input" value="${escAttr(defaultDateVenue())}">
             <div class="field-size">
               <span class="field-size-label">Size</span>
               <input type="range" id="dateVenueSize" min="14" max="32" step="1" value="22">

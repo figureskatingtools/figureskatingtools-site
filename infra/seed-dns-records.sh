@@ -3,8 +3,9 @@
 #
 # The site deployments (deploy-site.yml) create only the records THEY own in the
 # figureskatingtools.com zone:
-#   - apex A (ALIAS -> prod SWA) + _dnsauth TXT      (prod)
-#   - test CNAME -> test SWA                          (test)
+#   - apex A (-> site Web App inbound IP) + asuid TXT   (prod)
+#   - test CNAME -> site Web App default hostname       (test)
+#     + asuid.test TXT
 #
 # Everything else that currently lives at the Joker registrar must also exist in the
 # Azure zone BEFORE you repoint the name servers, or it breaks on cutover. This script
@@ -37,12 +38,12 @@ az network dns record-set cname set-record -g "$RG" -z "$ZONE" -n "judgepapers" 
 az network dns record-set cname set-record -g "$RG" -z "$ZONE" -n "test.judgepapers" \
   --cname "app-fs-judgepapers-6sk7jbtiojqc4.azurewebsites.net" --ttl 300 -o none
 
-# --- NOT seeded (review before cutover) -----------------------------------------
-# asuid.figureskatingtools.com TXT = 22F89FE29DD489AB08E54794D5C97E081F331E6855AA59B59AE05E7356464005
-#   Looks like a leftover App Service apex-validation token from before the SWA
-#   migration (the site is now a Static Web App). Left out as stale. If the apex was
-#   ever still bound to an App Service you'd re-add it with:
-#     az network dns record-set txt add-record -g "$RG" -z "$ZONE" -n "asuid" \
-#       --value "22F89FE29DD489AB08E54794D5C97E081F331E6855AA59B59AE05E7356464005"
+# --- NOT seeded -----------------------------------------------------------------
+# asuid (apex) is managed by infra/modules/dns.bicep again now that the apex is an
+# App Service Web App rather than a Static Web App — the deploy publishes the Web
+# App's current customDomainVerificationId. Do NOT hand-seed a stale token here.
+#
+# The SWA-era `_dnsauth` TXT record is obsolete; delete it at the prod cutover
+# (see infra/MIGRATION.md).
 
 echo "Done. Verify with:  az network dns record-set list -g $RG -z $ZONE -o table"

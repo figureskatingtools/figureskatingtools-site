@@ -9,7 +9,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@figureskatingtools/shared-ui": "*"
+    "@figureskatingtools/shared-ui": "*",
+    "pdfjs-dist": "^4.7.76"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",

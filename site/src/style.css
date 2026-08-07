@@ -377,6 +377,198 @@ a {
   margin-bottom: 1.25rem;
 }
 
+/* ── Competition panel — the active competition and where to take it ── */
+.comp-name {
+  margin: 0 0 0.35rem;
+  font-size: 1.6rem;
+}
+
+.comp-code {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0 0 1.4rem;
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+}
+
+.comp-code-tag {
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--gold);
+  border: 1px solid currentColor;
+  border-radius: 0.25rem;
+  padding: 0.12rem 0.45rem;
+}
+
+.comp-open-label,
+.comp-recent-title {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  margin: 0 0 0.6rem;
+}
+
+.comp-open-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.comp-recent {
+  margin-top: 1.75rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--line);
+}
+
+.comp-recent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.comp-recent-row {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  margin: 0 -0.6rem;
+  padding-right: 0.35rem;
+  border-radius: 0.4rem;
+  transition: background-color 0.15s;
+}
+
+.comp-recent-row:hover {
+  background-color: var(--rink-tint);
+}
+
+.comp-recent-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  flex: 1;
+  min-width: 0;
+  padding: 0.5rem 0.6rem;
+  border: none;
+  border-radius: 0.4rem;
+  background: none;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.comp-recent-name {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.comp-recent-meta {
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+}
+
+/* "Created <date> by <email>" provenance lines */
+.comp-created {
+  display: block;
+  margin: 0.15rem 0 0;
+  font-size: 0.75rem;
+  color: var(--ink-faint);
+}
+
+.comp-recent-created {
+  font-size: 0.7rem;
+  color: var(--ink-faint);
+}
+
+.comp-recent-empty {
+  margin: 0;
+  font-size: 0.875rem;
+}
+
+/* Quiet delete affordance — invisible until the row is hovered or focused */
+.comp-delete {
+  flex-shrink: 0;
+  width: 1.35rem;
+  height: 1.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--ink-faint);
+  font-family: var(--font-body);
+  font-size: 1rem;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background-color 0.15s, color 0.15s;
+}
+
+.comp-recent-row:hover .comp-delete,
+.comp-delete:focus-visible {
+  opacity: 1;
+}
+
+.comp-delete:hover {
+  background-color: var(--error-tint);
+  color: var(--error);
+}
+
+.comp-delete:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+/* No hover to reveal it on touch devices */
+@media (hover: none) {
+  .comp-delete {
+    opacity: 1;
+  }
+}
+
+.comp-error {
+  margin: 1.25rem 0 0;
+  padding: 0.5rem 0.75rem;
+  border-left: 2px solid var(--error);
+  background-color: var(--error-tint);
+  border-radius: 0.25rem;
+  font-size: 0.8125rem;
+  color: var(--error);
+}
+
+.comp-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1.25rem;
+}
+
+/* Deleting the active competition — deliberately the lightest control here */
+.comp-delete-link {
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+
+.comp-delete-link:hover {
+  color: var(--error);
+}
+
+.comp-delete-link:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
 /* ── Changelog Panel — set like a results protocol ── */
 .changelog-panel .card {
   max-height: 80vh;
@@ -446,6 +638,10 @@ a {
 
 .changelog-badge--score-modifier {
   color: var(--gold-bright);
+}
+
+.changelog-badge--protocol-generator {
+  color: var(--rink);
 }
 
 .changelog-title {

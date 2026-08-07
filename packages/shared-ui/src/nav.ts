@@ -1,17 +1,28 @@
 import type { SiteNavOptions, NavTool, NavSmallTool } from './types.js';
 
-/** Default tools listed in the site navigation */
+/**
+ * Default tools listed in the site navigation.
+ *
+ * Everything lives on one origin now, so a tool is just a path — the links
+ * are identical on localhost, test and prod.
+ */
 const DEFAULT_TOOLS: NavTool[] = [
   {
     id: 'judgepapers',
     label: 'Judge Paper Creator',
-    subdomain: 'judgepapers',
+    path: '/judgepapers/',
     enabled: true,
   },
   {
     id: 'scoremodifier',
     label: 'Score Modifier',
-    subdomain: 'scoremodifier',
+    path: '/scoremodifier/',
+    enabled: true,
+  },
+  {
+    id: 'protocolgenerator',
+    label: 'Protocol Generator',
+    path: '/protocolgenerator/',
     enabled: true,
   },
 ];
@@ -21,13 +32,14 @@ const SMALL_TOOLS: NavSmallTool[] = [
   { id: 'banner', label: 'Competition Banner Generator', path: '/tools/banner/' },
 ];
 
-const SITE_DOMAIN = 'figureskatingtools.com';
-
 /**
  * Detect the environment prefix from the current hostname.
  * - test.figureskatingtools.com → 'test.'
  * - figureskatingtools.com → '' (prod)
  * - localhost → '' (local dev)
+ *
+ * Tool links no longer need this (they are plain paths), but the changelog
+ * branch selection on the home page still does.
  */
 export function getEnvPrefix(): string {
   if (typeof window === 'undefined') return '';
@@ -35,22 +47,6 @@ export function getEnvPrefix(): string {
   if (hostname === 'localhost' || hostname === '127.0.0.1') return '';
   const match = hostname.match(/^(test)\./);
   return match ? `${match[1]}.` : '';
-}
-
-/** Build a full URL for a given subdomain, respecting the environment prefix */
-function buildToolUrl(subdomain: string, envPrefix: string): string {
-  if (typeof window === 'undefined') return '#';
-  const hostname = window.location.hostname;
-  if (hostname === 'localhost' || hostname === '127.0.0.1') return '#';
-  return `https://${envPrefix}${subdomain}.${SITE_DOMAIN}`;
-}
-
-/** Build the home (main site) URL respecting the environment prefix */
-function buildHomeUrl(envPrefix: string): string {
-  if (typeof window === 'undefined') return '#';
-  const hostname = window.location.hostname;
-  if (hostname === 'localhost' || hostname === '127.0.0.1') return '/';
-  return `https://${envPrefix}${SITE_DOMAIN}`;
 }
 
 /**
@@ -65,9 +61,8 @@ export function renderSiteNav(options: SiteNavOptions | string): string {
   const opts: SiteNavOptions =
     typeof options === 'string' ? { activeApp: options } : options;
 
-  const envPrefix = getEnvPrefix();
   const tools = [...DEFAULT_TOOLS, ...(opts.extraTools ?? [])];
-  const homeUrl = buildHomeUrl(envPrefix);
+  const homeUrl = '/';
   const logoUrl = opts.logoUrl ?? '/logo.png';
 
   // Build tool navigation items
@@ -75,7 +70,11 @@ export function renderSiteNav(options: SiteNavOptions | string): string {
     .map((tool) => {
       const isActive = tool.id === opts.activeApp;
 
-      // Active app with sub-items → dropdown with in-app navigation
+      // Active app with sub-items → dropdown with in-app navigation.
+      // Optional and currently unused: judgepapers and protocolgenerator dropped
+      // their "Competitions" / "New Competition" items when they started binding
+      // to the site's active competition (the nav's competition selector is the
+      // only way to switch workspaces now).
       if (isActive && opts.appNavItems && opts.appNavItems.length > 0) {
         const subItemsHtml = opts.appNavItems
           .map((item) => {
@@ -104,8 +103,8 @@ export function renderSiteNav(options: SiteNavOptions | string): string {
         </div>`;
       }
 
-      // Enabled tool, not currently active → link to its subdomain
-      const url = isActive ? '#' : buildToolUrl(tool.subdomain, envPrefix);
+      // Enabled tool, not currently active → link to its path
+      const url = isActive ? '#' : tool.path;
       const activeClass = isActive ? ' fst-nav-item--active' : '';
       return `<div class="fst-nav-item${activeClass}">
         <a href="${url}" class="fst-nav-item-link">${tool.label}</a>
@@ -113,12 +112,10 @@ export function renderSiteNav(options: SiteNavOptions | string): string {
     })
     .join('');
 
-  // Small in-site tools → "Tools" dropdown with real links to the main site
-  const homeBase = homeUrl === '/' ? '' : homeUrl;
+  // Small in-site tools → "Tools" dropdown
   const smallToolsActive = SMALL_TOOLS.some((t) => t.id === opts.activeApp);
   const smallToolsItemsHtml = SMALL_TOOLS.map(
-    (tool) =>
-      `<a href="${homeBase}${tool.path}" class="fst-dropdown-item">${tool.label}</a>`
+    (tool) => `<a href="${tool.path}" class="fst-dropdown-item">${tool.label}</a>`
   ).join('');
   const smallToolsItem = `<div class="fst-nav-item fst-nav-has-dropdown${
     smallToolsActive ? ' fst-nav-item--active' : ''
@@ -142,6 +139,7 @@ export function renderSiteNav(options: SiteNavOptions | string): string {
         ${toolsHtml}
         ${smallToolsItem}
       </div>
+      <div class="fst-nav-competition" id="fst-nav-competition"></div>
       <div class="fst-nav-right" id="fst-nav-right"></div>
     </div>
   </nav>`;
