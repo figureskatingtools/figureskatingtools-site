@@ -62,9 +62,30 @@ export async function initCompetitionSelector(container: HTMLElement): Promise<v
     return;
   }
 
+  // Refresh the snapshot each time the menu opens, so competitions created
+  // outside this selector (home-page panel, another tab) show up without a
+  // reload. Degrades quietly to the stale list on failure; the re-render
+  // must not close the menu the user just opened.
+  let refreshing = false;
+  const refresh = async (): Promise<void> => {
+    if (refreshing) return;
+    refreshing = true;
+    try {
+      const fresh = await listCompetitions();
+      competitions.splice(0, competitions.length, ...fresh);
+      render();
+      container.querySelector('[data-fst-comp-toggle]')?.setAttribute('aria-expanded', 'true');
+      container.querySelector('[data-fst-comp-menu]')?.classList.add('fst-comp-menu--open');
+    } catch (_e) {
+      /* keep whatever we had */
+    } finally {
+      refreshing = false;
+    }
+  };
+
   const render = (): void => {
     container.innerHTML = buildSelectorHtml(competitions, getActiveCompetition());
-    wire(container, competitions, render);
+    wire(container, competitions, render, () => void refresh());
   };
 
   // Attached once — re-rendering the menu markup must not pile up listeners
@@ -124,7 +145,8 @@ function buildSelectorHtml(
 function wire(
   container: HTMLElement,
   competitions: PlatformCompetition[],
-  rerender: () => void
+  rerender: () => void,
+  onOpen?: () => void
 ): void {
   const toggle = container.querySelector<HTMLButtonElement>('[data-fst-comp-toggle]');
   const menu = container.querySelector<HTMLElement>('[data-fst-comp-menu]');
@@ -137,6 +159,7 @@ function wire(
     const open = toggle.getAttribute('aria-expanded') === 'true';
     toggle.setAttribute('aria-expanded', open ? 'false' : 'true');
     menu.classList.toggle('fst-comp-menu--open', !open);
+    if (!open) onOpen?.();
   });
 
   menu.addEventListener('click', (e) => e.stopPropagation());

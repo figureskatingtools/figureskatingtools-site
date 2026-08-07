@@ -185,9 +185,16 @@ function showError(msg: string) {
         `<div class="result-card result-card--error"><p class="status-error">${escapeHtml(msg)}</p></div>`;
 }
 
+/** Attribute-safe escape — `escapeHtml` leaves quotes alone, which is fine for
+ * text nodes but lets a `"` break out of an HTML attribute value. */
+function escapeAttr(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 function downloadLink(url: string, fileName: string, label: string, primary = true): string {
     const cls = primary ? 'btn btn-primary' : 'btn btn-secondary';
-    return `<a class="${cls}" href="${escapeHtml(url)}" download="${escapeHtml(fileName)}">${escapeHtml(label)}</a>`;
+    return `<a class="${cls}" href="${escapeAttr(url)}" download="${escapeAttr(fileName)}">${escapeHtml(label)}</a>`;
 }
 
 async function runPerSkater() {

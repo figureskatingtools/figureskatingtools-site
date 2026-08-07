@@ -3,6 +3,7 @@
 // the first time a PDF is hovered.
 
 import type { FileMeta } from './types';
+import { escapeHtml } from '../shell.js';
 
 let pop: HTMLDivElement | null = null;
 let hoverToken = 0;
@@ -85,10 +86,11 @@ export function attachPreview(el: HTMLElement, fileUrl: string, meta: FileMeta) 
       const thumb = await renderPdfThumb(fileUrl);
       if (token !== hoverToken) return; // moved on already
       box.innerHTML = thumb ? `<img src="${thumb}" alt="">${metaLine}`
-                            : `<div class="preview-meta">${meta.filename}</div>${metaLine}`;
+                            : `<div class="preview-meta">${escapeHtml(meta.filename)}</div>${metaLine}`;
       position(e as MouseEvent);
     } else {
-      box.innerHTML = `<div class="preview-meta">${meta.filename}</div>${metaLine}`;
+      // Filenames are user-controlled (uploads, ZIP entries) — never raw HTML.
+      box.innerHTML = `<div class="preview-meta">${escapeHtml(meta.filename)}</div>${metaLine}`;
       box.classList.remove('hidden');
       position(e as MouseEvent);
     }
