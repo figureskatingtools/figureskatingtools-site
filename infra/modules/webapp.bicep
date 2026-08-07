@@ -113,7 +113,10 @@ output customDomainVerificationId string = webApp.properties.customDomainVerific
 // `inboundIpAddress` is returned by the ARM GET (it is what
 // `az webapp show --query inboundIpAddress` reads) but is missing from the
 // generated Bicep type for Microsoft.Web/sites, hence the suppression.
+// During binding/scale operations ARM can transiently report a comma-separated
+// PAIR of IPs ('51.x,51.y'); writing that into the apex A record fails the DNS
+// deployment AND deletes the record — always take the first address.
 @description('Inbound VIP of the App Service. The apex A record points at this literal IP (Azure DNS alias records cannot target App Service).')
 #disable-next-line BCP053
-output inboundIpAddress string = webApp.properties.inboundIpAddress
+output inboundIpAddress string = split(webApp.properties.inboundIpAddress, ',')[0]
 output appServicePlanId string = appServicePlan.id
