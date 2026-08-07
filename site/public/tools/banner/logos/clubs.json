@@ -1,10 +1,282 @@
 [
 {
+"name": "Espoon Jäätaiturit",
+"abbreviation": "EsJt",
+"file": "esjt.png"
+},
+{
+"name": "Espoon Taitoluisteluklubi",
+"abbreviation": "ETK",
+"file": "etk.png"
+},
+{
+"name": "Etelä-Vantaan Taitoluistelijat",
+"abbreviation": "EVT",
+"file": "evt.jpg"
+},
+{
+"name": "Heinolan Taitoluistelijat",
+"abbreviation": "Heita",
+"file": "heita.png"
+},
+{
+"name": "Helsingfors Skridskoklubb",
+"abbreviation": "HSK",
+"file": "hsk.png"
+},
+{
+"name": "Helsingin Luistelijat",
+"abbreviation": "HL",
+"file": "hl.jpg"
+},
+{
+"name": "Helsingin Taitoluisteluakatemia",
+"abbreviation": "HTA",
+"file": "hta.png"
+},
+{
 "name": "Helsingin Taitoluisteluklubi",
+"abbreviation": "HTK",
 "file": "htk.svg"
 },
 {
+"name": "Hyvinkään Taitoluistelijat",
+"abbreviation": "HyTL",
+"file": "hytl.png"
+},
+{
+"name": "Hämeenlinnan Taitoluistelijat",
+"abbreviation": "HTL",
+"file": "htl.png"
+},
+{
+"name": "Iisalmen Taitoluistelijat",
+"abbreviation": "Iita",
+"file": "iita.png"
+},
+{
+"name": "Joensuun Kataja",
+"abbreviation": "JoKa",
+"file": "joka.JPG"
+},
+{
+"name": "Joensuun Kataja/Muodostelmaluistelu",
+"abbreviation": "JoKaML",
+"file": "jokaml.png"
+},
+{
+"name": "Jyväskylän Taitoluisteluseura",
+"abbreviation": "JyTLS",
+"file": "jytls.jpg"
+},
+{
+"name": "Järvenpään Taitoluistelijat",
+"abbreviation": "JTL",
+"file": "jlt.jpg"
+},
+{
+"name": "Kaarinan Taitoluistelijat",
+"abbreviation": "Kaari",
+"file": "kaari.png"
+},
+{
+"name": "Kauniaisten Taitoluisteluklubi",
+"abbreviation": "KaTa",
+"file": "kata.jpg"
+},
+{
+"name": "Keravan Luistinseura",
+"abbreviation": "KeLS",
+"file": "kels.jpg"
+},
+{
+"name": "Keski-Uudenmaan Muodostelmaluistelijat",
+"abbreviation": "KeMu",
+"file": "kemu.png"
+},
+{
+"name": "KeupaHT Taitoluistelijat",
+"abbreviation": "KeuPa HT",
+"file": "keupa.png"
+},
+{
+"name": "Kirkkonummen Taitoluisteluklubi",
+"abbreviation": "KTK",
+"file": "ktk.png"
+},
+{
+"name": "Kokkolan Taitoluistelijat",
+"abbreviation": "KK",
+"file": "kk.jpg"
+},
+{
+"name": "KooKoo Jäätaiturit",
+"abbreviation": "KKJT",
+"file": "kkjt.png"
+},
+{
+"name": "Kotkan Taitoluistelu",
+"abbreviation": "KoTa",
+"file": "kota.png"
+},
+{
+"name": "Kuopion Taitoluistelijat",
+"abbreviation": "KuTa",
+"file": "kuta.png"
+},
+{
+"name": "Lahden Taitoluistelijat",
+"abbreviation": "LTL",
+"file": "ltl.jpg"
+},
+{
+"name": "Lappeenrannan Luistelijat",
+"abbreviation": "LRL",
+"file": "lrl.png"
+},
+{
+"name": "Lohjan Taitoluistelijat",
+"abbreviation": "LT",
+"file": "lt.png"
+},
+{
+"name": "Meri-Lapin Taitoluistelijat",
+"abbreviation": "MerTa",
+"file": "merta.jpg"
+},
+{
+"name": "Myllypuron Taitoluisteluklubi",
+"abbreviation": "MTK",
+"file": "mtk.png"
+},
+{
+"name": "Mäntsälän Jäätaiturit",
+"abbreviation": "MJT",
+"file": "mjt.png"
+},
+{
+"name": "Nurmijärven Taitoluistelijat",
+"abbreviation": "NTL",
+"file": "ntl.png"
+},
+{
+"name": "Oulun Luistelukerho ry",
+"abbreviation": "OLK",
+"file": "olk.jpg"
+},
+{
+"name": "Outokummun Taitoluistelijat",
+"abbreviation": "OTL",
+"file": "otl.jpg"
+},
+{
+"name": "Porin Muodostelmaluistelijat",
+"abbreviation": "PML",
+"file": "pml.png"
+},
+{
+"name": "Porin Taitoluistelu",
+"abbreviation": "PoriTa",
+"file": "porita.svg"
+},
+{
+"name": "Rantasalmen Urheilijat",
+"abbreviation": "RU",
+"file": "ru.png"
+},
+{
+"name": "Rauman Taitoluistelijat",
+"abbreviation": "RauTL",
+"file": "rautl.png"
+},
+{
+"name": "Rovaniemen Taitoluistelijat",
+"abbreviation": "RoiTa",
+"file": "roita.jpg"
+},
+{
+"name": "Saimaan Muodostelmaluistelijat",
+"abbreviation": "SaiML",
+"file": "saiml.png"
+},
+{
+"name": "Salon Palloilijat",
+"abbreviation": "SalPa",
+"file": "salpa.png"
+},
+{
+"name": "Savonlinnan Taitoluistelijat",
+"abbreviation": "SaTu",
+"file": "satu.jpg"
+},
+{
+"name": "Seinäjoen Taitoluistelijat",
+"abbreviation": "SeiTL",
+"file": "seitl.jpg"
+},
+{
+"name": "Skating Club Turku",
+"abbreviation": "SCT",
+"file": "sct.jpg"
+},
+{
+"name": "Tappara",
+"abbreviation": "TapTL",
+"file": "taptl.png"
+},
+{
 "name": "Tikkurilan Taitoluisteluklubi",
+"abbreviation": "TTK",
 "file": "ttk.jpg"
+},
+{
+"name": "Turun Riennon Taitoluistelu",
+"abbreviation": "TRT",
+"file": "trt.jpg"
+},
+{
+"name": "Tuusulan Luistelijat",
+"abbreviation": "TL",
+"file": "tl.jpg"
+},
+{
+"name": "Uplakers Taitoluistelu",
+"abbreviation": "UpTL",
+"file": "uptl.png"
+},
+{
+"name": "Vaasan Luistinkerho",
+"abbreviation": "VLK",
+"file": "vlk.png"
+},
+{
+"name": "Vakka-Suomen Taitoluistelijat",
+"abbreviation": "VSTL",
+"file": "vstl.png"
+},
+{
+"name": "Varala-Tiimi",
+"abbreviation": "Varala",
+"file": "varala.png"
+},
+{
+"name": "Varkauden Tarmo",
+"abbreviation": "VarTa",
+"file": "varta.png"
+},
+{
+"name": "VG-62",
+"abbreviation": "VG-62",
+"file": "vg62.jpg"
+},
+{
+"name": "Vihdin Taitoluistelijat",
+"abbreviation": "VTL",
+"file": "vtl.png"
+},
+{
+"name": "Wasa Team Skaters",
+"abbreviation": "WATS",
+"file": "wats.jpg"
 }
 ]
