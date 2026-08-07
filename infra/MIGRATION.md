@@ -136,11 +136,12 @@ Symptom if you skip this: the bicep deployment fails with
    the workflow does this automatically once the Entra grant from §2a is in
    place.
 
-> The bicep `appsettings` resource owns only `OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID`
-> and REPLACES the whole collection, so `deploy-infra` transiently clears
-> `FUNCTION_APP_URL_*` / `PROXY_SHARED_SECRET_*`. `deploy-frontend` re-applies
-> them a minute later in the same run. **Never run `deploy-infra` alone against a
-> live environment** without re-running `deploy-frontend`.
+> The bicep `appsettings` resource REPLACES the whole collection, so it owns
+> every setting the router needs: the FIC sentinel, `FUNCTION_APP_URL_*`
+> (platform from the platform Function App module's output, the tools from the
+> GitHub environment vars passed into the template) and `PROXY_SHARED_SECRET_*`.
+> `deploy-infra` is therefore atomic — running it alone no longer leaves the
+> router without proxy targets while it waits for `deploy-frontend`.
 
 ## 4. Verify on the default hostname
 

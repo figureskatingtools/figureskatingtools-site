@@ -14,6 +14,39 @@ param authManagedIdentityClientId string = ''
 param authManagedIdentityResourceId string = ''
 param tenantId string = subscription().tenantId
 
+// --- Router proxy targets -------------------------------------------------------
+// The router resolves /api/* and /<tool>/api/* against these. They are part of the
+// template (not a post-deploy az CLI step) so a deployment never leaves the site
+// running with no proxy targets — see the appsettings note below.
+
+@description('Base URL of the platform Function App (competitions registry) — the /api/* proxy target.')
+param functionAppUrlPlatform string = ''
+
+@description('Base URL of the judgepapers Function App — the /judgepapers/api/* proxy target.')
+param functionAppUrlJudgepapers string = ''
+
+@description('Base URL of the scoremodifier Function App — the /scoremodifier/api/* proxy target.')
+param functionAppUrlScoremodifier string = ''
+
+@description('Base URL of the protocolgenerator Function App — the /protocolgenerator/api/* proxy target.')
+param functionAppUrlProtocolgenerator string = ''
+
+@description('X-Proxy-Secret the router sends to the platform Function App. Intentionally empty by default — the backend fails open when its own secret is unset.')
+@secure()
+param proxySharedSecretPlatform string = ''
+
+@description('X-Proxy-Secret the router sends to the judgepapers Function App.')
+@secure()
+param proxySharedSecretJudgepapers string = ''
+
+@description('X-Proxy-Secret the router sends to the scoremodifier Function App.')
+@secure()
+param proxySharedSecretScoremodifier string = ''
+
+@description('X-Proxy-Secret the router sends to the protocolgenerator Function App.')
+@secure()
+param proxySharedSecretProtocolgenerator string = ''
+
 @description('Paths served without an Easy Auth login redirect. /health must stay open so Azure/uptime probes get a 200 instead of a 302.')
 param authExcludedPaths array = [
   '/health'
@@ -93,18 +126,37 @@ resource authConfig 'Microsoft.Web/sites/config@2022-09-01' = if (!empty(authCli
 }
 
 // NOTE: `Microsoft.Web/sites/config@.../appsettings` REPLACES the whole app
-// settings collection. This deployment therefore owns only the FIC sentinel;
-// the runtime settings that change independently of infra
-// (FUNCTION_APP_URL_*, PROXY_SHARED_SECRET_*, SCM_DO_BUILD_DURING_DEPLOYMENT)
-// are (re)applied by the deploy-frontend job, which always runs after
-// deploy-infra in the same workflow. Never deploy infra alone against a live
-// environment without re-running deploy-frontend.
-resource authAppSettings 'Microsoft.Web/sites/config@2022-09-01' = if (!empty(authClientId)) {
+// settings collection, so EVERY setting the router needs must be listed here.
+// The proxy targets and their shared secrets used to be applied afterwards by
+// the deploy-frontend job's az CLI step; any run that failed in between left the
+// router with no proxy targets and every /api call 502'd. They are now part of
+// the same deployment as the Web App itself, which makes infra atomic.
+// Empty values are written deliberately (PROXY_SHARED_SECRET_PLATFORM is
+// normally empty — the backend fails open when its own secret is unset).
+resource siteAppSettings 'Microsoft.Web/sites/config@2022-09-01' = {
   parent: webApp
   name: 'appsettings'
-  properties: {
-    OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID: authManagedIdentityClientId
-  }
+  properties: union(
+    {
+      FUNCTION_APP_URL_PLATFORM: functionAppUrlPlatform
+      FUNCTION_APP_URL_JUDGEPAPERS: functionAppUrlJudgepapers
+      FUNCTION_APP_URL_SCOREMODIFIER: functionAppUrlScoremodifier
+      FUNCTION_APP_URL_PROTOCOLGENERATOR: functionAppUrlProtocolgenerator
+      PROXY_SHARED_SECRET_PLATFORM: proxySharedSecretPlatform
+      PROXY_SHARED_SECRET_JUDGEPAPERS: proxySharedSecretJudgepapers
+      PROXY_SHARED_SECRET_SCOREMODIFIER: proxySharedSecretScoremodifier
+      PROXY_SHARED_SECRET_PROTOCOLGENERATOR: proxySharedSecretProtocolgenerator
+      // The zip already contains the built dist; Oryx must not try to build it.
+      SCM_DO_BUILD_DURING_DEPLOYMENT: 'false'
+    },
+    // Sentinel read by the authsettingsV2 clientSecretSettingName above; only
+    // meaningful when Easy Auth is configured.
+    empty(authClientId)
+      ? {}
+      : {
+          OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID: authManagedIdentityClientId
+        }
+  )
 }
 
 output webAppName string = webApp.name

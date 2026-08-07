@@ -27,9 +27,35 @@ param authClientId string = ''
 @description('Entra tenant id. Defaults to the deployment subscription tenant.')
 param tenantId string = ''
 
-@description('Shared secret the router sends to the platform Function App as X-Proxy-Secret.')
+@description('Shared secret the router sends to the platform Function App as X-Proxy-Secret. Also written to the Web App so the router and the backend agree.')
 @secure()
 param proxySharedSecretPlatform string = ''
+
+// Router proxy targets. The tool Function Apps live in their own repos, so their
+// URLs come in as GitHub environment vars; the platform Function App's URL is
+// taken from its module output below (same deployment). Carried in the template
+// so the Web App is never deployed without them — see modules/webapp.bicep.
+
+@description('Base URL of the judgepapers Function App (fs-judgepapers repo). Empty = that tool proxies 503 until it is set.')
+param functionAppUrlJudgepapers string = ''
+
+@description('Base URL of the scoremodifier Function App (fs-scoremodifier repo).')
+param functionAppUrlScoremodifier string = ''
+
+@description('Base URL of the protocolgenerator Function App (fs-protocolgenerator repo).')
+param functionAppUrlProtocolgenerator string = ''
+
+@description('Shared secret the router sends to the judgepapers Function App.')
+@secure()
+param proxySharedSecretJudgepapers string = ''
+
+@description('Shared secret the router sends to the scoremodifier Function App.')
+@secure()
+param proxySharedSecretScoremodifier string = ''
+
+@description('Shared secret the router sends to the protocolgenerator Function App.')
+@secure()
+param proxySharedSecretProtocolgenerator string = ''
 
 @description('System-assigned principal ids of the tool Function Apps that need read access to competition-data. May be empty on a first deploy.')
 param toolFunctionPrincipalIds array = []
@@ -69,6 +95,18 @@ module webApp 'modules/webapp.bicep' = {
     authManagedIdentityClientId: authManagedIdentity.outputs.clientId
     authManagedIdentityResourceId: authManagedIdentity.outputs.resourceId
     tenantId: !empty(tenantId) ? tenantId : subscription().tenantId
+    // The platform Function App is created by this same deployment, so its URL
+    // comes straight from the module output (forward reference — Bicep orders
+    // the modules by this dependency). The tool Function Apps are deployed from
+    // their own repos and are passed in as parameters.
+    functionAppUrlPlatform: platformFunction.outputs.functionAppUrl
+    functionAppUrlJudgepapers: functionAppUrlJudgepapers
+    functionAppUrlScoremodifier: functionAppUrlScoremodifier
+    functionAppUrlProtocolgenerator: functionAppUrlProtocolgenerator
+    proxySharedSecretPlatform: proxySharedSecretPlatform
+    proxySharedSecretJudgepapers: proxySharedSecretJudgepapers
+    proxySharedSecretScoremodifier: proxySharedSecretScoremodifier
+    proxySharedSecretProtocolgenerator: proxySharedSecretProtocolgenerator
   }
 }
 

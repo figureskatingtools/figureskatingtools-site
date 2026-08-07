@@ -22,6 +22,17 @@ param authClientId = readEnvironmentVariable('AUTH_CLIENT_ID', '')
 param tenantId = readEnvironmentVariable('AZURE_TENANT_ID', '')
 param proxySharedSecretPlatform = readEnvironmentVariable('PROXY_SHARED_SECRET_PLATFORM', '')
 
+// Router proxy targets + their shared secrets. Part of the template so the Web
+// App is never deployed without them (FUNCTION_APP_URL_PLATFORM comes from the
+// platform Function App module inside the deployment, not from here). Empty
+// defaults keep a first deploy working before the tool repos publish their URLs.
+param functionAppUrlJudgepapers = readEnvironmentVariable('FUNCTION_APP_URL_JUDGEPAPERS', '')
+param functionAppUrlScoremodifier = readEnvironmentVariable('FUNCTION_APP_URL_SCOREMODIFIER', '')
+param functionAppUrlProtocolgenerator = readEnvironmentVariable('FUNCTION_APP_URL_PROTOCOLGENERATOR', '')
+param proxySharedSecretJudgepapers = readEnvironmentVariable('PROXY_SHARED_SECRET_JUDGEPAPERS', '')
+param proxySharedSecretScoremodifier = readEnvironmentVariable('PROXY_SHARED_SECRET_SCOREMODIFIER', '')
+param proxySharedSecretProtocolgenerator = readEnvironmentVariable('PROXY_SHARED_SECRET_PROTOCOLGENERATOR', '')
+
 // System-assigned principal ids of the tool Function Apps, for read access to
 // the shared competition-data container. Empty entries are ignored, so this
 // works before the tool repos have been reduced (workstream 6).
