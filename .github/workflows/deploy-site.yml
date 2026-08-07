@@ -105,6 +105,16 @@ jobs:
           ENV_NAME="${{ needs.set-environment.outputs.env_name }}"
           DEPLOYMENT_NAME="deploy-fs-site-$(date +%s)"
 
+          # Empty tool secrets are valid during bootstrap (backends fail open when
+          # their own secret is unset) but in a configured environment they mean
+          # every proxied call 401s — surface it instead of failing silently.
+          for tool in JUDGEPAPERS SCOREMODIFIER PROTOCOLGENERATOR; do
+            var="PROXY_SHARED_SECRET_${tool}"
+            if [ -z "${!var:-}" ]; then
+              echo "::warning::${var} is empty — proxied calls to that tool will 401 unless its backend's own secret is also unset."
+            fi
+          done
+
           OUTPUT=$(az deployment sub create \
             --location "${{ vars.LOCATION }}" \
             --template-file infra/main.bicep \

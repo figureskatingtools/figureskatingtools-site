@@ -36,7 +36,7 @@ param proxySharedSecretPlatform string = ''
 // taken from its module output below (same deployment). Carried in the template
 // so the Web App is never deployed without them — see modules/webapp.bicep.
 
-@description('Base URL of the judgepapers Function App (fs-judgepapers repo). Empty = that tool proxies 503 until it is set.')
+@description('Base URL of the judgepapers Function App (fs-judgepapers repo). Empty = that tool\'s API proxies 502 until it is set.')
 param functionAppUrlJudgepapers string = ''
 
 @description('Base URL of the scoremodifier Function App (fs-scoremodifier repo).')
