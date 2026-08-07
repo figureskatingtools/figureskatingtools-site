@@ -137,6 +137,9 @@ export interface CompetitionDetails {
   structure: Structure;
   unassigned: string[];
   generatedFiles: GeneratedFile[];
+  /** Auto-deletion date (ISO), when the backend reports one — drives the
+   * "Auto-deletes … · Extend" line. Absent on older backends. */
+  deletionDate?: string;
 }
 
 export interface GeneratedFile {

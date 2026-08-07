@@ -278,7 +278,6 @@ main {
 
 /* ── Forms ── */
 input[type="checkbox"] { accent-color: var(--ink); }
-.form-label { display: block; margin-bottom: 0.5rem; font-weight: 500; }
 
 .form-input {
   width: 100%;
@@ -299,25 +298,24 @@ input[type="checkbox"] { accent-color: var(--ink); }
   box-shadow: 0 0 0 3px rgb(18 113 181 / 0.15);
 }
 
-.form-actions { display: flex; justify-content: flex-end; gap: 1rem; }
-
 /* ── View headers ── */
 .view-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
 .view-header h2 { margin: 0; }
 .view-header-lead { display: flex; align-items: center; gap: 1rem; }
-/* The competition selected site-wide in the nav — a hint, never a filter. */
-.active-comp-badge {
-  display: inline-flex;
+
+/* Compact retention control in the competition header: "Auto-deletes … · Extend" */
+.retention {
+  display: flex;
   align-items: center;
-  padding: 0.2rem 0.6rem;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background-color: var(--paper-tint);
-  color: var(--ink-soft);
-  font-size: 0.72rem;
-  letter-spacing: 0.02em;
+  gap: 0.4rem;
+  color: var(--ink-muted);
+  font-size: 0.78rem;
   white-space: nowrap;
 }
+.retention:empty { display: none; }
+.retention-date { font-family: var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+.retention-sep { color: var(--ink-faint); }
+
 .text-muted { color: var(--ink-muted); }
 .text-error { color: var(--error-color); }
 
@@ -367,21 +365,15 @@ input[type="checkbox"] { accent-color: var(--ink); }
   to   { opacity: 1; transform: scale(1) translateY(0); }
 }
 
-/* ── Competitions list ── */
-.comp-row {
-  background: var(--paper);
-  padding: 1rem 1.25rem;
-  margin-bottom: 0.625rem;
-  border-radius: 0.5rem;
-  border: 1px solid var(--line);
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+/* ── "Pick a competition" card (shown while nothing is selected in the nav) ── */
+.bind-card { max-width: 680px; margin: 3rem auto; }
+.bind-lead {
+  color: var(--ink-soft);
+  line-height: 1.6;
+  margin: 0 0 1.25rem;
 }
-
-.comp-row:hover { border-color: var(--line-strong); box-shadow: var(--shadow-md); transform: translateY(-1px); }
-.comp-row-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem; }
-.comp-row-name { font-weight: 600; font-size: 1.05rem; letter-spacing: -0.005em; }
-.comp-row-actions { display: flex; gap: 0.5rem; }
-.comp-row-meta { font-family: var(--font-mono); font-size: 0.74rem; letter-spacing: 0.02em; color: var(--ink-muted); display: flex; gap: 1.5rem; font-variant-numeric: tabular-nums; }
+/* The button spinner is white — on a white card it needs ink colours. */
+.spinner--ink { border-color: var(--line-strong); border-top-color: var(--rink); }
 
 /* ── Upload area ── */
 .upload-area {

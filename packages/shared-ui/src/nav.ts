@@ -70,7 +70,11 @@ export function renderSiteNav(options: SiteNavOptions | string): string {
     .map((tool) => {
       const isActive = tool.id === opts.activeApp;
 
-      // Active app with sub-items → dropdown with in-app navigation
+      // Active app with sub-items → dropdown with in-app navigation.
+      // Optional and currently unused: judgepapers and protocolgenerator dropped
+      // their "Competitions" / "New Competition" items when they started binding
+      // to the site's active competition (the nav's competition selector is the
+      // only way to switch workspaces now).
       if (isActive && opts.appNavItems && opts.appNavItems.length > 0) {
         const subItemsHtml = opts.appNavItems
           .map((item) => {

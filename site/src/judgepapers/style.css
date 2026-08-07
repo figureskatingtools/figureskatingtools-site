@@ -355,23 +355,6 @@ button.primary:hover {
   cursor: not-allowed;
 }
 
-.btn-warning {
-  background-color: var(--gold-bright);
-  color: var(--ink);
-  border-color: var(--gold);
-}
-
-.btn-warning:hover {
-  background-color: var(--gold);
-  color: white;
-}
-
-.btn-warning:disabled {
-  background-color: var(--gold-tint);
-  color: var(--gold);
-  cursor: not-allowed;
-}
-
 /* ── Forms ── */
 input[type="checkbox"] {
   accent-color: var(--ink);
@@ -400,12 +383,6 @@ input[type="checkbox"] {
   outline: none;
   border-color: var(--rink);
   box-shadow: 0 0 0 3px rgb(18 113 181 / 0.15);
-}
-
-.form-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 1rem;
 }
 
 /* ── View header rows ── */
@@ -540,14 +517,6 @@ input[type="checkbox"] {
   gap: 0.75rem;
 }
 
-.modal-check {
-  display: flex;
-  align-items: flex-start;
-  gap: 0.5rem;
-  font-size: 0.875rem;
-  cursor: pointer;
-  color: var(--ink);
-}
 
 @keyframes modalIn {
   from {
@@ -560,48 +529,46 @@ input[type="checkbox"] {
   }
 }
 
-/* ── Competitions list — protocol rows ── */
-.comp-row {
-  background: var(--paper);
-  padding: 1rem 1.25rem;
-  margin-bottom: 0.625rem;
-  border-radius: 0.5rem;
-  border: 1px solid var(--line);
-  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+/* ── "Pick a competition" card (nothing selected in the nav selector) ── */
+.bind-card {
+  max-width: 800px;
+  margin: 3rem auto;
 }
 
-.comp-row:hover {
+.bind-lead {
+  color: var(--ink-soft);
+  line-height: 1.65;
+  margin: 0 0 1.5rem;
+}
+
+/* The button spinner is white — on a white card it needs ink colours. */
+.spinner--ink {
   border-color: var(--line-strong);
-  box-shadow: var(--shadow-md);
-  transform: translateY(-1px);
+  border-top-color: var(--rink);
 }
 
-.comp-row-head {
+/* Compact retention control in the competition header ── "Auto-deletes … · Extend" */
+.retention {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 0.4rem;
-}
-
-.comp-row-name {
-  font-weight: 600;
-  font-size: 1.05rem;
-  letter-spacing: -0.005em;
-}
-
-.comp-row-actions {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.comp-row-meta {
-  font-family: var(--font-mono);
-  font-size: 0.74rem;
-  letter-spacing: 0.02em;
+  gap: 0.4rem;
   color: var(--ink-muted);
-  display: flex;
-  gap: 1.5rem;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.retention:empty {
+  display: none;
+}
+
+.retention-date {
+  font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.retention-sep {
+  color: var(--ink-faint);
 }
 
 /* ── Competition detail — info panel ── */
@@ -1311,50 +1278,4 @@ input[type="checkbox"] {
   font-family: var(--font-mono);
   color: var(--gold);
   font-size: 0.95em;
-}
-
-/* ── Active competition (site-wide selection from the nav) ── */
-.active-comp-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  padding: 0.2rem 0.6rem;
-  border-radius: 999px;
-  background: var(--gold-tint);
-  border: 1px solid var(--gold-bright);
-  color: var(--gold);
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-/* Keep the row actions pinned right once the active tag joins the head row */
-.comp-row-head {
-  gap: 0.75rem;
-}
-
-.comp-row-actions {
-  margin-left: auto;
-}
-
-.comp-row--active {
-  border-color: var(--gold-bright);
-  background: var(--gold-tint);
-}
-
-.comp-row-active-tag {
-  font-family: var(--font-mono);
-  font-size: 0.65rem;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--gold);
-  white-space: nowrap;
-}
-
-.form-hint {
-  margin: 0.4rem 0 0;
-  font-size: 0.8rem;
-  color: var(--ink-muted);
 }

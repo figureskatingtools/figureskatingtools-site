@@ -7,8 +7,6 @@ import {
     getActiveCompetition,
     subscribeActiveCompetition,
     competitionLabel,
-    normalizeCompetitionCode,
-    type PlatformCompetition,
 } from '@figureskatingtools/shared-ui';
 import {
     escapeHtml,
@@ -136,18 +134,9 @@ appElement.innerHTML = `
         </div>
       </div>
 
-      <div id="view-competitions" class="hidden">
-        <div class="card reveal">
-            <div class="view-header">
-                <div class="view-header-lead">
-                    <h2>Competitions</h2>
-                    <span id="active-comp-badge" class="active-comp-badge hidden"></span>
-                </div>
-                <button id="btn-create-comp" class="btn btn-primary btn-sm">Create New</button>
-            </div>
-            <div id="competitions-list">
-                <p class="text-muted">Loading competitions...</p>
-            </div>
+      <div id="view-pick-competition" class="hidden">
+        <div class="card reveal bind-card">
+            <div id="bind-body"></div>
         </div>
       </div>
 
@@ -155,9 +144,9 @@ appElement.innerHTML = `
         <div class="card reveal">
              <div class="view-header">
                 <div class="view-header-lead">
-                    <button id="btn-back-list" class="btn btn-sm btn-ghost">← Back</button>
                     <h2 id="comp-detail-title">Competition Name</h2>
                 </div>
+                <div class="retention" id="retention"></div>
             </div>
 
             <div class="detail-grid">
@@ -214,105 +203,13 @@ appElement.innerHTML = `
             </div>
         </div>
       </div>
-
-      <div id="view-create-competition" class="hidden">
-        <div class="card reveal" style="max-width: 600px; margin: 0 auto;">
-             <span class="micro-label">New Competition</span>
-             <h2>Create New Competition</h2>
-             <p class="text-muted" style="margin-bottom: 1.5rem;">Enter a name for the new competition folder.</p>
-             <div style="margin-bottom: 1.5rem;">
-                <label class="form-label">Competition Name</label>
-                <input type="text" id="comp-name-input" class="form-input" placeholder="e.g. Winter-Cup-2026">
-                <p id="comp-name-hint" class="form-hint hidden"></p>
-             </div>
-             <div class="form-actions">
-                <button id="btn-cancel-create" class="btn btn-ghost">Cancel</button>
-                <button id="btn-confirm-create" class="btn btn-primary">Create</button>
-             </div>
-        </div>
-      </div>
-
-      <div id="view-welcome" class="card reveal" style="max-width: 800px; margin: 0 auto;">
-        <span class="micro-label">Judge Paper Creator</span>
-        <h2 style="margin-bottom: 1.5rem;">Welcome to Judge Paper Creator</h2>
-
-        <div style="margin-bottom: 2rem;">
-            <h3 style="font-size: 1.15rem; margin-bottom: 0.75rem;">How to use:</h3>
-            <ol class="howto-list">
-                <li>Click <strong>New Competition</strong> to create a workspace for your event.</li>
-                <li>Open the competition and <strong>upload the PDF exports</strong> from <em>Figure Skating Manager</em> ${renderHelpTrigger('help-files-welcome', 'Which files do I need?', filesHelpHtml())}<br><span class="howto-caution">Export <strong>PlannedProgramContent</strong>, not <strong>PlannedProgramContentChecklist</strong> &mdash; they look similar but the Checklist won't work.</span></li>
-                <li>The system will automatically validate the files and ensure all required documents are present.</li>
-                <li>Once validated, click <strong>Generate Papers</strong> to create the combined PDF booklets and ZIP archives.</li>
-                <li>Download the generated files using the links that appear. You can also copy the links to share them.</li>
-            </ol>
-            <button id="action-btn" class="btn btn-primary">Go to Competitions</button>
-        </div>
-
-        <div class="card-footnote">
-            <p>
-                <strong>Feedback & Support:</strong><br>
-                Please report any bugs or send feature requests to: <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>
-            </p>
-        </div>
-      </div>
     </div>
   </main>
 `;
 
-/* ════════════════════════════════════════════════════════════════
-   Active competition (the site-wide selection from the nav)
-
-   Judge Paper Creator keeps its own legacy competition folders; the platform
-   competition is an enhancement only — a badge, a prefill and an ordering
-   hint. Nothing here ever blocks the app when no competition is selected.
-   ════════════════════════════════════════════════════════════════ */
-
-let activeCompetition: PlatformCompetition | null = getActiveCompetition();
-
-/** True when a legacy competition folder name refers to the active competition */
-function matchesActiveCompetition(name: string): boolean {
-    if (!activeCompetition) return false;
-    const key = normalizeCompetitionCode(name);
-    if (!key) return false;
-    return key === normalizeCompetitionCode(activeCompetition.name)
-        || key === normalizeCompetitionCode(activeCompetition.code);
-}
-
-/** Show (or hide) the "Active: …" badge in the competitions view header */
-function renderActiveCompetitionBadge() {
-    const badge = document.getElementById('active-comp-badge');
-    if (!badge) return;
-    if (!activeCompetition) {
-        badge.textContent = '';
-        badge.classList.add('hidden');
-        return;
-    }
-    badge.textContent = `Active: ${competitionLabel(activeCompetition)}`;
-    badge.classList.remove('hidden');
-}
-
-/** Prefill the New Competition name input from the active competition */
-function prefillCompetitionName() {
-    const input = document.getElementById('comp-name-input') as HTMLInputElement | null;
-    const hint = document.getElementById('comp-name-hint');
-
-    if (input && activeCompetition && !input.value.trim()) {
-        input.value = competitionLabel(activeCompetition);
-    }
-
-    if (!hint) return;
-    if (activeCompetition) {
-        hint.textContent = `Prefilled from the active competition "${competitionLabel(activeCompetition)}".`;
-        hint.classList.remove('hidden');
-    } else {
-        hint.textContent = '';
-        hint.classList.add('hidden');
-    }
-}
-
 // Helper to switch views
 function showView(viewId: string) {
-    const views = ['view-welcome', 'view-competitions', 'view-create-competition', 'view-competition-details'];
+    const views = ['view-pick-competition', 'view-competition-details'];
     views.forEach(id => {
         const el = document.getElementById(id);
         if (el) {
@@ -320,9 +217,164 @@ function showView(viewId: string) {
             else el.classList.add('hidden');
         }
     });
+}
 
-    if (viewId === 'view-competitions') renderActiveCompetitionBadge();
-    if (viewId === 'view-create-competition') prefillCompetitionName();
+/* ════════════════════════════════════════════════════════════════
+   Active competition (the site-wide selection from the nav)
+
+   Judge Paper Creator has no competition list of its own any more: the
+   competition selected in the nav is resolved into this tool's own record
+   (`/resolve_competition` creates or adopts it on first use) and that record is
+   the whole app.
+   ════════════════════════════════════════════════════════════════ */
+
+/** Platform competition GUID this tool is currently bound to */
+let boundPlatformId: string | null = null;
+/** Guards against an out-of-order resolve when the selection changes mid-flight */
+let bindToken = 0;
+
+/** Render one card into the "pick a competition" view */
+function renderBindCard(html: string) {
+    showView('view-pick-competition');
+    const body = document.getElementById('bind-body');
+    if (body) body.innerHTML = html;
+}
+
+/** Nothing selected — point at the nav selector, no error, no noise */
+function showPickCompetition() {
+    renderBindCard(`
+        <span class="micro-label">Judge Paper Creator</span>
+        <h2 style="margin-bottom: 0.75rem;">No competition selected</h2>
+        <p class="bind-lead">Choose or create a competition from the selector in the top bar —
+          every tool works on the same selected competition.</p>
+        <h3 style="font-size: 1.05rem; margin-bottom: 0.5rem;">How to use:</h3>
+        <ol class="howto-list">
+            <li>Select the competition in the top bar; this tool opens its workspace automatically.</li>
+            <li><strong>Upload the PDF exports</strong> from <em>Figure Skating Manager</em> ${renderHelpTrigger('help-files-welcome', 'Which files do I need?', filesHelpHtml())}<br><span class="howto-caution">Export <strong>PlannedProgramContent</strong>, not <strong>PlannedProgramContentChecklist</strong> &mdash; they look similar but the Checklist won't work.</span></li>
+            <li>The system validates the files and ensures all required documents are present.</li>
+            <li>Once validated, click <strong>Generate Papers</strong> to create the combined PDF booklets and ZIP archives.</li>
+            <li>Download the generated files using the links that appear. You can also copy the links to share them.</li>
+        </ol>
+        <div class="card-footnote">
+            <p>
+                <strong>Feedback & Support:</strong><br>
+                Please report any bugs or send feature requests to: <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>
+            </p>
+        </div>`);
+}
+
+/** Resolve in flight */
+function showBindLoading(name: string) {
+    renderBindCard(`
+        <span class="micro-label">Judge Paper Creator</span>
+        <h2 style="margin-bottom: 0.75rem;">Opening ${escapeHtml(name)}…</h2>
+        <p class="bind-lead"><span class="spinner spinner--ink"></span>Linking the selected competition to this tool.</p>`);
+}
+
+/** Resolve failed — readable message plus a retry */
+function showBindError(message: string) {
+    renderBindCard(`
+        <span class="micro-label">Judge Paper Creator</span>
+        <h2 style="margin-bottom: 0.75rem;">Could not open the competition</h2>
+        <p class="bind-lead text-error">${escapeHtml(message)}</p>
+        <button id="btn-bind-retry" class="btn btn-primary btn-sm">Retry</button>`);
+    document.getElementById('btn-bind-retry')
+        ?.addEventListener('click', () => void bindActiveCompetition(true));
+}
+
+/**
+ * Opens a resolved competition in the detail view. Assigned by `init()` — the
+ * detail-view machinery is scoped inside it, the binding flow is not.
+ */
+let openBoundCompetition: ((id: string, name: string) => Promise<void>) | null = null;
+
+/**
+ * Bind this tool to the active platform competition.
+ *
+ * No selection → the quiet "pick a competition" card. Same GUID as the current
+ * binding → nothing to do (the subscription fires on every storage change).
+ * Otherwise resolve the platform GUID into this tool's competition folder and
+ * open it.
+ */
+async function bindActiveCompetition(force = false): Promise<void> {
+    const active = getActiveCompetition();
+    const token = ++bindToken;
+
+    if (!active) {
+        boundPlatformId = null;
+        showPickCompetition();
+        return;
+    }
+
+    if (!force && active.id === boundPlatformId) return;
+
+    const label = competitionLabel(active);
+    showBindLoading(label);
+
+    try {
+        const resp = await fetch(`${API_BASE}/resolve_competition`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ platformId: active.id, name: label }),
+        });
+        if (!resp.ok) {
+            throw new Error((await resp.text()).trim() || `The tool API returned ${resp.status}.`);
+        }
+        const data = await resp.json();
+        if (token !== bindToken) return;   // selection changed while we waited
+        if (!data?.id) throw new Error('The tool API returned no competition id.');
+        boundPlatformId = active.id;
+        if (openBoundCompetition) await openBoundCompetition(data.id, data.name || label);
+    } catch (e) {
+        if (token !== bindToken) return;
+        boundPlatformId = null;
+        showBindError(e instanceof Error ? e.message : 'Network error.');
+    }
+}
+
+/* ── retention ── */
+
+function fmtDate(value: string | null | undefined): string {
+    if (!value || value === '-') return '-';
+    try {
+        const d = new Date(value);
+        if (isNaN(d.getTime())) return '-';
+        const dd = String(d.getDate()).padStart(2, '0');
+        const mm = String(d.getMonth() + 1).padStart(2, '0');
+        return `${dd}.${mm}.${d.getFullYear()}`;
+    } catch (_e) { return '-'; }
+}
+
+/**
+ * Compact "Auto-deletes <date> · Extend" line in the competition header.
+ *
+ * Only rendered when the backend actually reports a deletion date on
+ * `get_competition_details` (or returns a fresh one from the extend route) —
+ * with no date available the line stays empty.
+ */
+function renderRetention(competitionId: string | null, date?: string | null) {
+    const el = document.getElementById('retention');
+    if (!el) return;
+    const pretty = date ? fmtDate(date) : '';
+    if (!competitionId || !pretty || pretty === '-') { el.innerHTML = ''; return; }
+    el.innerHTML = `<span class="retention-date">Auto-deletes ${escapeHtml(pretty)}</span>
+        <span class="retention-sep">·</span>
+        <button class="btn btn-xs btn-ghost" id="btn-extend">Extend</button>`;
+    document.getElementById('btn-extend')?.addEventListener('click', async () => {
+        const btn = document.getElementById('btn-extend') as HTMLButtonElement | null;
+        if (btn) { btn.disabled = true; btn.textContent = 'Extending…'; }
+        try {
+            const resp = await fetch(
+                `${API_BASE}/extend_competition_deletion?id=${encodeURIComponent(competitionId)}`,
+                { method: 'POST' });
+            if (!resp.ok) throw new Error(String(resp.status));
+            const data = await resp.json();
+            renderRetention(competitionId, data.deletionDate);
+        } catch (_e) {
+            if (btn) { btn.disabled = false; btn.textContent = 'Extend'; }
+            alert('Failed to extend the deletion date.');
+        }
+    });
 }
 
 async function init() {
@@ -340,17 +392,11 @@ async function init() {
     //    /userinfo; the shared shell owns that call for every app on the site.
     const user: UserInfo | null = await fetchUser();
 
-    // 2. Render the shared site nav. The in-app dropdown (Competitions /
-    // New Competition) is only shown once authenticated.
+    // 2. Render the shared site nav. There is no in-app dropdown any more —
+    // the nav's competition selector is what switches workspaces.
     navContainer.innerHTML = renderSiteNav({
         activeApp: 'judgepapers',
         logoUrl: '/logo.png',
-        ...(user ? {
-            appNavItems: [
-                { id: 'competitions', label: 'Competitions', enabled: true },
-                { id: 'new-competition', label: 'New Competition', enabled: true },
-            ]
-        } : {})
     });
     initSiteNav();
     const userSection = document.getElementById('fst-nav-right')!;
@@ -379,120 +425,10 @@ async function init() {
     // Load categories cache from API (table-driven config)
     await loadCategoriesCache();
 
-    const loadCompetitions = async () => {
-        showView('view-competitions');
-        const listContainer = document.getElementById('competitions-list')!;
-        listContainer.innerHTML = '<p class="text-muted">Loading competitions...</p>';
-
-        try {
-            const resp = await fetch(`${API_BASE}/list_competitions`);
-            if (!resp.ok) {
-                throw new Error(`Error ${resp.status}: ${resp.statusText}`);
-            }
-            const competitions: any[] = await resp.json();
-
-            if (competitions.length === 0) {
-                 listContainer.innerHTML = '<p class="text-muted">No competitions found. Create one to get started.</p>';
-                 return;
-            }
-
-            // A folder matching the active site-wide competition floats to the
-            // top; everything else keeps the backend's ordering.
-            const ordered = competitions
-                .map((comp, index) => ({ comp, index, isActive: matchesActiveCompetition(String(comp.name ?? '')) }))
-                .sort((a, b) => (Number(b.isActive) - Number(a.isActive)) || (a.index - b.index));
-
-            listContainer.innerHTML = ordered.map(({ comp, isActive }) => {
-                let dateStr = '-';
-                if (comp.createdDate !== '-') {
-                     try {
-                         const d = new Date(comp.createdDate);
-                         const dd = String(d.getDate()).padStart(2, '0');
-                         const mm = String(d.getMonth() + 1).padStart(2, '0');
-                         const yyyy = d.getFullYear();
-                         dateStr = `${dd}.${mm}.${yyyy}`;
-                     } catch(e) {}
-                }
-
-                let deletionStr = '-';
-                let daysLeft = Infinity;
-                if (comp.deletionDate && comp.deletionDate !== '-') {
-                     try {
-                         const d = new Date(comp.deletionDate);
-                         const dd = String(d.getDate()).padStart(2, '0');
-                         const mm = String(d.getMonth() + 1).padStart(2, '0');
-                         const yyyy = d.getFullYear();
-                         deletionStr = `${dd}.${mm}.${yyyy}`;
-                         daysLeft = Math.ceil((d.getTime() - Date.now()) / 86400000);
-                     } catch(e) {}
-                }
-                const showExtend = daysLeft < 5;
-
-                return `
-                <div class="comp-row${isActive ? ' comp-row--active' : ''}">
-                    <div class="comp-row-head">
-                        <span class="comp-row-name">${escapeHtml(comp.name)}</span>
-                        ${isActive ? '<span class="comp-row-active-tag">Active competition</span>' : ''}
-                        <div class="comp-row-actions">
-                            ${showExtend ? `<button class="btn btn-sm btn-warning extend-comp-btn" data-comp-id="${escapeHtml(comp.id)}">Extend +7d</button>` : ''}
-                            <button class="btn btn-sm btn-ghost open-comp-btn" data-comp-id="${escapeHtml(comp.id)}" data-comp-name="${escapeHtml(comp.name)}">Open</button>
-                            <button class="btn btn-sm btn-ghost btn-ghost--danger delete-comp-btn" data-comp-id="${escapeHtml(comp.id)}" data-comp-name="${escapeHtml(comp.name)}">Delete</button>
-                        </div>
-                    </div>
-                    <div class="comp-row-meta">
-                        <span>Creator: ${escapeHtml(comp.createdBy)}</span>
-                        <span>Created: ${escapeHtml(dateStr)}</span>
-                        <span>Deletes: ${escapeHtml(deletionStr)}</span>
-                    </div>
-                </div>
-            `}).join('');
-            
-            // Add listeners to new buttons
-            document.querySelectorAll('.open-comp-btn').forEach(btn => {
-                btn.addEventListener('click', (e) => {
-                    const el = e.currentTarget as HTMLElement;
-                    openCompetition(el.dataset.compId!, el.dataset.compName!);
-                });
-            });
-
-            document.querySelectorAll('.delete-comp-btn').forEach(btn => {
-                btn.addEventListener('click', (e) => {
-                    const el = e.currentTarget as HTMLElement;
-                    openDeleteCompetitionModal(el.dataset.compId!, el.dataset.compName!);
-                });
-            });
-
-            document.querySelectorAll('.extend-comp-btn').forEach(btn => {
-                btn.addEventListener('click', async (e) => {
-                    const el = e.currentTarget as HTMLButtonElement;
-                    el.disabled = true;
-                    try {
-                        const resp = await fetch(`${API_BASE}/extend_competition_deletion?id=${encodeURIComponent(el.dataset.compId!)}`, { method: 'POST' });
-                        if (!resp.ok) throw new Error(`Error ${resp.status}`);
-                        loadCompetitions();
-                    } catch (_e) {
-                        el.disabled = false;
-                        alert('Failed to extend deletion date.');
-                    }
-                });
-            });
-
-        } catch (_e) {
-            listContainer.innerHTML = `<p class="text-error">Failed to load competitions.</p>`;
-        }
-    };
-
-    // Keep the badge, the prefill and the list ordering in step with the nav
-    // selector — including changes made in another tab.
-    subscribeActiveCompetition((competition) => {
-        activeCompetition = competition;
-        renderActiveCompetitionBadge();
-        prefillCompetitionName();
-        const competitionsView = document.getElementById('view-competitions');
-        if (competitionsView && !competitionsView.classList.contains('hidden')) {
-            void loadCompetitions();
-        }
-    });
+    // Keep the tool bound to the nav's competition selector — including changes
+    // made in another tab. The subscription never fires on subscribe itself, so
+    // init() does the first bind explicitly.
+    subscribeActiveCompetition(() => void bindActiveCompetition());
 
     // List Details Logic
     let currentCompetitionData: any = null;
@@ -809,7 +745,10 @@ async function init() {
             
             const data = await resp.json();
             currentCompetitionData = data;
-            
+
+            // Retention line — only when the backend reports a deletion date
+            renderRetention(id, data.deletionDate);
+
             // Update Info Box with extracted data
             if (data.fullName && data.fullName !== '-') {
                  document.getElementById('info-comp-name')!.textContent = data.fullName;
@@ -1120,7 +1059,8 @@ async function init() {
         const titleEl = document.getElementById('comp-detail-title')!;
 
         titleEl.textContent = name;
-        
+        renderRetention(id, null);   // cleared until the details payload arrives
+
         // Update Info Box
         document.getElementById('info-comp-name')!.textContent = name;
         // Placeholder values for now
@@ -1163,7 +1103,9 @@ async function init() {
         loadCompetitionDetails(id);
     }
 
-    document.getElementById('btn-back-list')?.addEventListener('click', loadCompetitions);
+    // Hand the detail view to the module-level binding flow (the first bind runs
+    // at the end of init(), once every listener below is attached).
+    openBoundCompetition = openCompetition;
 
     // Modal Logic
     const modalOverlay = document.getElementById('modal-overlay')!;
@@ -1173,38 +1115,11 @@ async function init() {
     const modalCancel = document.getElementById('modal-cancel')!;
     const modalConfirm = document.getElementById('modal-confirm')!;
 
-    type DeleteAction =
-        | { type: 'COMPETITION', id: string, name: string }
-        | { type: 'FILE', filename: string, competition: string };
+    // Only files are deletable from the app now — competitions come and go with
+    // the platform registry and auto-delete on their retention date.
+    type DeleteAction = { type: 'FILE', filename: string, competition: string };
 
     let pendingAction: DeleteAction | null = null;
-
-    function openDeleteCompetitionModal(compId: string, compName: string) {
-        pendingAction = { type: 'COMPETITION', id: compId, name: compName };
-        modalTitle.textContent = `Delete Competition?`;
-        modalMessage.innerHTML = `Are you sure you want to delete <strong>${escapeHtml(compName)}</strong>?<br>This action cannot be undone and will permanently remove all associated files.`;
-        
-        // Add Checkbox
-        modalExtra.innerHTML = `
-            <label class="modal-check">
-                <input type="checkbox" id="confirm-delete-checkbox" style="margin-top: 0.25rem;">
-                <span>I understand that this action is permanent.</span>
-            </label>
-        `;
-
-        modalConfirm.textContent = 'Delete';
-        modalConfirm.classList.remove('btn-primary');
-        modalConfirm.classList.add('btn-danger');
-        (modalConfirm as HTMLButtonElement).disabled = true;
-
-        // Checkbox listener
-        const checkbox = document.getElementById('confirm-delete-checkbox') as HTMLInputElement;
-        checkbox.addEventListener('change', (e) => {
-             (modalConfirm as HTMLButtonElement).disabled = !(e.target as HTMLInputElement).checked;
-        });
-
-        modalOverlay.classList.remove('hidden');
-    }
 
     function openDeleteFileModal(filename: string, competition: string) {
         pendingAction = { type: 'FILE', filename, competition };
@@ -1256,24 +1171,14 @@ async function init() {
         btn.disabled = true;
 
         try {
-            if (pendingAction.type === 'COMPETITION') {
-                const resp = await fetch(`${API_BASE}/delete_competition?id=${encodeURIComponent(pendingAction.id)}`);
-                if (resp.ok) {
-                     modalOverlay.classList.add('hidden');
-                     loadCompetitions(); 
-                } else {
-                    alert('Failed to delete competition');
-                }
-            } else if (pendingAction.type === 'FILE') {
-                const resp = await fetch(`${API_BASE}/delete_file?competition=${encodeURIComponent(pendingAction.competition)}&filename=${encodeURIComponent(pendingAction.filename)}`, {
-                    method: 'DELETE'
-                });
-                if (resp.ok) {
-                    modalOverlay.classList.add('hidden');
-                    if (currentCompetitionData) loadCompetitionDetails(currentCompetitionData.id);
-                } else {
-                    alert('Failed to delete file.');
-                }
+            const resp = await fetch(`${API_BASE}/delete_file?competition=${encodeURIComponent(pendingAction.competition)}&filename=${encodeURIComponent(pendingAction.filename)}`, {
+                method: 'DELETE'
+            });
+            if (resp.ok) {
+                modalOverlay.classList.add('hidden');
+                if (currentCompetitionData) loadCompetitionDetails(currentCompetitionData.id);
+            } else {
+                alert('Failed to delete file.');
             }
         } catch (_error) {
             alert('Error deleting item');
@@ -1283,57 +1188,8 @@ async function init() {
         }
     });
 
-
-    // Shared-nav dropdown items (rendered by renderSiteNav with data-nav-action)
-    document.querySelectorAll<HTMLElement>('[data-nav-action]').forEach(el => {
-        el.addEventListener('click', (e) => {
-            e.preventDefault();
-            // Close the nav dropdown (its own click handler stops propagation)
-            document.querySelectorAll('.fst-dropdown-menu').forEach(m => m.classList.remove('fst-dropdown-menu--open'));
-            document.querySelectorAll('.fst-nav-item-btn[data-dropdown]').forEach(t => t.setAttribute('aria-expanded', 'false'));
-
-            const action = (e.currentTarget as HTMLElement).dataset.navAction;
-            if (action === 'competitions') loadCompetitions();
-            else if (action === 'new-competition') showView('view-create-competition');
-        });
-    });
-
-
-    document.getElementById('action-btn')?.addEventListener('click', loadCompetitions);
-    document.getElementById('btn-create-comp')?.addEventListener('click', () => showView('view-create-competition'));
-    
-    document.getElementById('btn-cancel-create')?.addEventListener('click', loadCompetitions);
-    document.getElementById('btn-confirm-create')?.addEventListener('click', async () => {
-        const input = document.getElementById('comp-name-input') as HTMLInputElement;
-        const name = input.value.trim();
-        
-        if (!name) {
-            alert('Please enter a competition name');
-            return;
-        }
-
-        const btn = document.getElementById('btn-confirm-create') as HTMLButtonElement;
-        const originalText = btn.textContent;
-        btn.textContent = 'Creating...';
-        btn.disabled = true;
-
-        try {
-            const resp = await fetch(`${API_BASE}/create_competition?name=${encodeURIComponent(name)}`);
-            if (resp.ok) {
-                input.value = ''; // Reset
-                loadCompetitions();
-            } else {
-                const text = await resp.text();
-                alert('Failed to create competition: ' + text);
-            }
-        } catch (_e) {
-            alert('Error creating competition');
-        } finally {
-            btn.textContent = originalText;
-            btn.disabled = false;
-        }
-    });
-
+    // Everything is wired — open whatever competition the nav has selected.
+    await bindActiveCompetition();
 
   } catch (_err) {
       loadingView.classList.add('hidden');

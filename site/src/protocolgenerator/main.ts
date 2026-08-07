@@ -34,6 +34,10 @@ function attr(obj: unknown): string {
 
 // ── module state ──
 let currentId: string | null = null;
+/** Platform competition GUID this tool is currently bound to (see `bindActiveCompetition`). */
+let boundPlatformId: string | null = null;
+/** Guards against an out-of-order resolve when the selection changes mid-flight. */
+let bindToken = 0;
 let details: CompetitionDetails | null = null;
 const openCats = new Set<string>();
 /** Collapsed-by-default state of the "Team rosters" per-category groups. */
@@ -67,32 +71,9 @@ const APP_HTML = `
         </div>
       </div>
 
-      <div id="view-competitions" class="hidden">
-        <div class="card reveal">
-          <div class="view-header">
-            <div class="view-header-lead">
-              <h2>Competitions</h2>
-              <span id="active-comp-badge" class="active-comp-badge hidden"></span>
-            </div>
-            <button id="btn-create-comp" class="btn btn-primary btn-sm">Create New</button>
-          </div>
-          <div id="competitions-list"><p class="text-muted">Loading…</p></div>
-        </div>
-      </div>
-
-      <div id="view-create-competition" class="hidden">
-        <div class="card reveal" style="max-width: 600px; margin: 0 auto;">
-          <span class="micro-label">New Competition</span>
-          <h2>Create New Competition</h2>
-          <div style="margin: 1.25rem 0 1.5rem;">
-            <label class="form-label">Competition name</label>
-            <input type="text" id="comp-name-input" class="form-input" placeholder="e.g. Winter Cup 2026">
-            <p class="text-muted" style="margin-top: 0.5rem;">Dates are filled in automatically from the schedule you upload.</p>
-          </div>
-          <div class="form-actions">
-            <button id="btn-cancel-create" class="btn btn-ghost">Cancel</button>
-            <button id="btn-confirm-create" class="btn btn-primary">Create</button>
-          </div>
+      <div id="view-pick-competition" class="hidden">
+        <div class="card reveal bind-card">
+          <div id="bind-body"></div>
         </div>
       </div>
 
@@ -100,7 +81,6 @@ const APP_HTML = `
         <div class="card reveal">
           <div class="view-header">
             <div class="view-header-lead">
-              <button id="btn-back-list" class="btn btn-sm btn-ghost">← Back</button>
               <h2 id="detail-title">Competition</h2>
               <span class="help-icon" tabindex="0" role="button" aria-label="How to use the Protocol Generator">?<span class="help-pop">
                 <strong>How to use the Protocol Generator</strong>
@@ -114,55 +94,115 @@ const APP_HTML = `
                 </ul>
               </span></span>
             </div>
+            <div class="retention" id="retention"></div>
           </div>
           <div id="detail-body"></div>
         </div>
-      </div>
-
-      <div id="view-welcome" class="card reveal" style="max-width: 800px; margin: 0 auto;">
-        <span class="micro-label">Protocol Generator</span>
-        <h2 style="margin-bottom: 1.25rem;">Welcome</h2>
-        <ol class="howto-list">
-          <li>Create a competition and upload its <strong>schedule PDF</strong>.</li>
-          <li>Fill in the event details and drop result PDFs and photos into the slots.</li>
-          <li>Drag files between slots to fix placements; hover to preview.</li>
-          <li>Press <strong>Generate Protocol</strong> to build the bound PDF.</li>
-        </ol>
-        <button id="action-btn" class="btn btn-primary">Go to Competitions</button>
       </div>
     </div>
   </main>
 `;
 
 function showView(viewId: string) {
-  ['view-welcome', 'view-competitions', 'view-create-competition', 'view-detail'].forEach(id => {
+  ['view-pick-competition', 'view-detail'].forEach(id => {
     document.getElementById(id)?.classList.toggle('hidden', id !== viewId);
   });
-  if (viewId === 'view-create-competition') prefillCompetitionName();
 }
 
-// ── active competition (site-wide selection) ──
-// The competition picked in the nav is a prefill/association enhancement — the
-// tool keeps working exactly the same with nothing selected.
+/* ── the site-wide active competition drives this app ──
+   There is no per-tool competition list any more: the competition selected in
+   the nav is resolved to this tool's own record (`/resolve_competition`, which
+   creates or adopts it on first use) and that record *is* the app. */
 
-/** Seed the "Create New Competition" name from the active competition. */
-function prefillCompetitionName() {
-  const input = document.getElementById('comp-name-input') as HTMLInputElement | null;
-  const active = getActiveCompetition();
-  if (input && active && !input.value.trim()) input.value = competitionLabel(active);
+/** Render one card into the "pick a competition" view. */
+function renderBindCard(html: string) {
+  showView('view-pick-competition');
+  const body = document.getElementById('bind-body');
+  if (body) body.innerHTML = html;
 }
 
-/** "Active: <name>" badge above the competitions list. */
-function renderActiveCompetitionBadge() {
-  const badge = document.getElementById('active-comp-badge');
-  if (!badge) return;
+/** Nothing selected — point at the nav selector, no error, no noise. */
+function showPickCompetition() {
+  renderBindCard(`
+    <span class="micro-label">Protocol Generator</span>
+    <h2 style="margin-bottom: 0.75rem;">No competition selected</h2>
+    <p class="bind-lead">Choose or create a competition from the selector in the top bar —
+      every tool works on the same selected competition.</p>
+    <ol class="howto-list">
+      <li>Upload the competition's <strong>schedule</strong> (DT_SCHEDULE XML or PDF).</li>
+      <li>Fill in the event details and drop result PDFs and photos into the slots.</li>
+      <li>Drag files between slots to fix placements; hover to preview.</li>
+      <li>Press <strong>Generate Protocol</strong> to build the bound PDF.</li>
+    </ol>`);
+}
+
+/** Resolve in flight. */
+function showBindLoading(name: string) {
+  renderBindCard(`
+    <span class="micro-label">Protocol Generator</span>
+    <h2 style="margin-bottom: 0.75rem;">Opening ${escapeHtml(name)}…</h2>
+    <p class="bind-lead"><span class="spinner spinner--ink"></span>Linking the selected competition to this tool.</p>`);
+}
+
+/** Resolve failed — readable message plus a retry. */
+function showBindError(message: string) {
+  renderBindCard(`
+    <span class="micro-label">Protocol Generator</span>
+    <h2 style="margin-bottom: 0.75rem;">Could not open the competition</h2>
+    <p class="bind-lead text-error">${escapeHtml(message)}</p>
+    <button id="btn-bind-retry" class="btn btn-primary btn-sm">Retry</button>`);
+  document.getElementById('btn-bind-retry')
+    ?.addEventListener('click', () => void bindActiveCompetition(true));
+}
+
+/**
+ * Bind this tool to the active platform competition.
+ *
+ * No selection → the quiet "pick a competition" card. Same GUID as the current
+ * binding → nothing to do (the subscription fires on every storage change).
+ * Otherwise resolve the platform GUID into this tool's competition record and
+ * open it.
+ */
+async function bindActiveCompetition(force = false): Promise<void> {
   const active = getActiveCompetition();
-  badge.classList.toggle('hidden', !active);
-  badge.textContent = active ? `Active: ${competitionLabel(active)}` : '';
+  const token = ++bindToken;
+
+  if (!active) {
+    boundPlatformId = null;
+    currentId = null;
+    details = null;
+    showPickCompetition();
+    return;
+  }
+
+  if (!force && active.id === boundPlatformId) return;
+
+  const label = competitionLabel(active);
+  showBindLoading(label);
+
+  try {
+    const resp = await apiJson('/resolve_competition', {
+      platformId: active.id,
+      name: label,
+      dates: active.date || '',
+    });
+    if (!resp.ok) {
+      throw new Error((await resp.text()).trim() || `The tool API returned ${resp.status}.`);
+    }
+    const data = await resp.json() as { id?: string; name?: string };
+    if (token !== bindToken) return;   // selection changed while we waited
+    if (!data?.id) throw new Error('The tool API returned no competition id.');
+    boundPlatformId = active.id;
+    await openCompetition(data.id, data.name || label);
+  } catch (e) {
+    if (token !== bindToken) return;
+    boundPlatformId = null;
+    showBindError(e instanceof Error ? e.message : 'Network error.');
+  }
 }
 
 // ── API helpers ──
-// Paths are relative to this tool's API prefix, e.g. apiGet('/list_competitions').
+// Paths are relative to this tool's API prefix, e.g. apiGet('/get_competition_details').
 async function apiGet(path: string): Promise<Response> {
   return fetch(apiUrl(path));
 }
@@ -173,49 +213,50 @@ async function apiRaw(path: string, body: Blob | ArrayBuffer): Promise<Response>
   return fetch(apiUrl(path), { method: 'POST', body });
 }
 
-// ── competitions list ──
+// ── retention ──
 function fmtDate(value: string): string {
   if (!value || value === '-') return '-';
   try {
     const d = new Date(value);
+    if (isNaN(d.getTime())) return '-';
     return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
   } catch { return '-'; }
 }
 
-async function loadCompetitions() {
-  showView('view-competitions');
-  renderActiveCompetitionBadge();
-  const list = document.getElementById('competitions-list')!;
-  list.innerHTML = '<p class="text-muted">Loading…</p>';
+/**
+ * Compact "Auto-deletes <date> · Extend" line in the competition header.
+ *
+ * Rendered only when the backend actually reports a deletion date on
+ * `get_competition_details` (or hands a fresh one back from the extend route) —
+ * with no date available the line stays empty.
+ */
+function renderRetention(date?: string | null) {
+  const el = document.getElementById('retention');
+  if (!el) return;
+  const pretty = date ? fmtDate(date) : '';
+  if (!pretty || pretty === '-') { el.innerHTML = ''; return; }
+  el.innerHTML = `<span class="retention-date">Auto-deletes ${escapeHtml(pretty)}</span>
+    <span class="retention-sep">·</span>
+    <button class="btn btn-xs btn-ghost" id="btn-extend">Extend</button>`;
+  document.getElementById('btn-extend')?.addEventListener('click', extendRetention);
+}
+
+/** Push the auto-deletion date out; the response carries the new date. */
+async function extendRetention() {
+  if (!currentId) return;
+  const btn = document.getElementById('btn-extend') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Extending…'; }
   try {
-    const resp = await apiGet('/list_competitions');
+    const resp = await fetch(
+      apiUrl(`/extend_competition_deletion?id=${encodeURIComponent(currentId)}`), { method: 'POST' });
     if (!resp.ok) throw new Error(String(resp.status));
-    const comps: any[] = await resp.json();
-    if (comps.length === 0) {
-      list.innerHTML = '<p class="text-muted">No competitions yet. Create one to get started.</p>';
-      return;
-    }
-    list.innerHTML = comps.map(c => `
-      <div class="comp-row">
-        <div class="comp-row-head">
-          <span class="comp-row-name">${escapeHtml(c.name ?? '')}</span>
-          <div class="comp-row-actions">
-            <button class="btn btn-sm btn-ghost" data-open="${escapeHtml(c.id ?? '')}" data-name="${escapeHtml(c.name ?? '')}">Open</button>
-            <button class="btn btn-sm btn-ghost btn-ghost--danger" data-del="${escapeHtml(c.id ?? '')}" data-name="${escapeHtml(c.name ?? '')}">Delete</button>
-          </div>
-        </div>
-        <div class="comp-row-meta">
-          <span>Creator: ${escapeHtml(c.createdBy ?? '')}</span>
-          <span>Created: ${escapeHtml(fmtDate(c.createdDate))}</span>
-          <span>Deletes: ${escapeHtml(fmtDate(c.deletionDate))}</span>
-        </div>
-      </div>`).join('');
-    list.querySelectorAll<HTMLElement>('[data-open]').forEach(b =>
-      b.addEventListener('click', () => openCompetition(b.dataset.open!, b.dataset.name!)));
-    list.querySelectorAll<HTMLElement>('[data-del]').forEach(b =>
-      b.addEventListener('click', () => confirmDeleteCompetition(b.dataset.del!, b.dataset.name!)));
+    const data = await resp.json() as { deletionDate?: string };
+    if (details && data.deletionDate) details.deletionDate = data.deletionDate;
+    renderRetention(data.deletionDate);
+    flash('Auto-deletion postponed.');
   } catch {
-    list.innerHTML = '<p class="text-error">Failed to load competitions.</p>';
+    if (btn) { btn.disabled = false; btn.textContent = 'Extend'; }
+    alert('Could not extend the deletion date.');
   }
 }
 
@@ -224,6 +265,7 @@ async function openCompetition(id: string, name: string) {
   currentId = id;
   showView('view-detail');
   document.getElementById('detail-title')!.textContent = name;
+  document.getElementById('retention')!.innerHTML = '';
   document.getElementById('detail-body')!.innerHTML = '<p class="text-muted">Loading…</p>';
   await loadDetails();
 }
@@ -521,6 +563,7 @@ function renderDetails() {
   if (!details) return;
   const s: Structure = details.structure;
   document.getElementById('detail-title')!.textContent = s.name;
+  renderRetention(details.deletionDate);
 
   const ev = s.event;
   const field = (key: keyof typeof ev, label: string, wide = false) =>
@@ -1030,7 +1073,7 @@ async function generate() {
   }
 }
 
-// ── delete competition modal ──
+// ── confirmation modal ──
 // Graphical confirmation modal (reuses the #modal-overlay component) — a single
 // place for destructive confirmations so they're consistent and not JS popups.
 function openConfirmModal(opts: {
@@ -1056,36 +1099,6 @@ function openConfirmModal(opts: {
   };
 }
 
-function confirmDeleteCompetition(id: string, name: string) {
-  openConfirmModal({
-    title: 'Delete competition?',
-    message: `Delete <strong>${escapeHtml(name)}</strong>? This permanently removes its files.`,
-    onConfirm: async () => {
-      await apiGet(`/delete_competition?id=${encodeURIComponent(id)}`);
-      loadCompetitions();
-    },
-  });
-}
-
-// ── create competition ──
-async function createCompetition() {
-  const name = (document.getElementById('comp-name-input') as HTMLInputElement).value.trim();
-  if (!name) { alert('Please enter a name.'); return; }
-  const btn = document.getElementById('btn-confirm-create') as HTMLButtonElement;
-  btn.disabled = true; btn.textContent = 'Creating…';
-  try {
-    const resp = await apiGet(`/create_competition?name=${encodeURIComponent(name)}`);
-    if (resp.ok) {
-      const data = await resp.json();
-      (document.getElementById('comp-name-input') as HTMLInputElement).value = '';
-      openCompetition(data.id, data.name);
-    } else {
-      alert('Create failed: ' + (await resp.text()));
-    }
-  } catch { alert('Network error creating competition.'); }
-  finally { btn.disabled = false; btn.textContent = 'Create'; }
-}
-
 // ── init / auth ──
 async function init() {
   const loadingView = document.getElementById('loading-view')!;
@@ -1104,10 +1117,6 @@ async function init() {
     navContainer.innerHTML = renderSiteNav({
       activeApp: 'protocolgenerator',
       logoUrl: '/logo.png',
-      appNavItems: [
-        { id: 'competitions', label: 'Competitions', enabled: true },
-        { id: 'new-competition', label: 'New Competition', enabled: true },
-      ],
     });
     initSiteNav();
 
@@ -1118,27 +1127,14 @@ async function init() {
     // not reachable, so the tool still works standalone.
     const competitionSlot = document.getElementById('fst-nav-competition');
     if (competitionSlot) void initCompetitionSelector(competitionSlot);
-    subscribeActiveCompetition(() => renderActiveCompetitionBadge());
+    // The selector never fires on subscribe, so bind once here and then on every
+    // change (this tab and, through the storage event, other tabs).
+    subscribeActiveCompetition(() => void bindActiveCompetition());
 
     loadingView.classList.add('hidden');
     mainContent.classList.remove('hidden');
 
-    document.querySelectorAll<HTMLElement>('[data-nav-action]').forEach(el =>
-      el.addEventListener('click', e => {
-        e.preventDefault();
-        document.querySelectorAll('.fst-dropdown-menu').forEach(m => m.classList.remove('fst-dropdown-menu--open'));
-        const action = (e.currentTarget as HTMLElement).dataset.navAction;
-        if (action === 'competitions') loadCompetitions();
-        else if (action === 'new-competition') showView('view-create-competition');
-      }));
-
-    document.getElementById('btn-back-list')?.addEventListener('click', loadCompetitions);
-    document.getElementById('action-btn')?.addEventListener('click', loadCompetitions);
-    document.getElementById('btn-create-comp')?.addEventListener('click', () => showView('view-create-competition'));
-    document.getElementById('btn-cancel-create')?.addEventListener('click', loadCompetitions);
-    document.getElementById('btn-confirm-create')?.addEventListener('click', createCompetition);
-
-    loadCompetitions();
+    await bindActiveCompetition();
   } catch {
     loadingView.classList.add('hidden');
     document.getElementById('error-view')!.classList.remove('hidden');
