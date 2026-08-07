@@ -269,7 +269,7 @@ jobs:
         # Zero-dependency node:test suite for server/server.js — the proxy, the
         # per-prefix SPA fallback and the CSP table all ship untranspiled, so
         # this is the only gate they get.
-        run: node --test server/
+        run: node --test server/*.test.js
 
       - name: Build shared-ui
         # site depends on the local @figureskatingtools/shared-ui workspace, whose
