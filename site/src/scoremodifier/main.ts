@@ -145,14 +145,6 @@ appElement.innerHTML = `
         </div>
 
         <div id="result-area" style="margin-top: 1.5rem;"></div>
-
-        <div class="card-footnote" style="margin-top: 2rem;">
-          <p>
-            <strong>Feedback &amp; Support:</strong><br>
-            Please report bugs or send feature requests to:
-            <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>
-          </p>
-        </div>
       </div>
     </div>
   </main>
