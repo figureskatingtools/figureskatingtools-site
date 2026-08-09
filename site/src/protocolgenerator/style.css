@@ -544,13 +544,39 @@ input[type="checkbox"] { accent-color: var(--ink); }
 
 /* ── Shared competition file pool (files uploaded in another tool) ── */
 .pool-import { margin-top: 0.85rem; padding-top: 0.85rem; border-top: 1px solid var(--line); }
-.pool-import-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.35rem; }
+.pool-import-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  margin-bottom: 0.35rem;
+  cursor: pointer;
+  list-style: none; /* hide the default disclosure marker; the chevron below replaces it */
+  user-select: none;
+}
+.pool-import-head::-webkit-details-marker { display: none; }
+.pool-import-head::before {
+  content: '▸';
+  font-size: 0.7rem;
+  color: var(--ink-faint);
+  transition: transform 0.15s;
+}
+.pool-import[open] > .pool-import-head::before { transform: rotate(90deg); }
 .pool-import-title {
   font-family: var(--font-mono);
   font-size: 0.64rem;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink-faint);
+}
+.pool-import-count {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+}
+.pool-import-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.6rem;
 }
 .pool-import .section-sub { margin-bottom: 0.5rem; }
 .pool-file-list { display: flex; flex-wrap: wrap; gap: 0.4rem; }

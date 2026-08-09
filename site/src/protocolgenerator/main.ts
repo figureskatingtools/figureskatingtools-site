@@ -1201,15 +1201,20 @@ function pendingPoolFiles(): PoolFile[] {
 function poolImportHtml(): string {
   const pending = pendingPoolFiles();
   if (!pending.length) return '';
-  return `<div class="pool-import">
-      <div class="pool-import-head">
+  // Collapsed by default; a re-render (details refresh) keeps it open.
+  const wasOpen = document.querySelector('details.pool-import')?.hasAttribute('open') ?? false;
+  return `<details class="pool-import"${wasOpen ? ' open' : ''}>
+      <summary class="pool-import-head">
         <span class="pool-import-title">Competition files</span>
-        <button class="btn btn-xs btn-primary" id="btn-pool-import">Import ${pending.length} file${pending.length === 1 ? '' : 's'}</button>
-      </div>
+        <span class="pool-import-count">${pending.length} available</span>
+      </summary>
       <p class="section-sub">Uploaded for this competition in another tool. Recognized files go straight into their slots.</p>
       <div class="pool-file-list">${pending.map(f =>
         `<span class="pool-file" title="${escapeHtml(f.sourceTool || f.source)}">${escapeHtml(f.name)}</span>`).join('')}</div>
-    </div>`;
+      <div class="pool-import-actions">
+        <button class="btn btn-xs btn-primary" id="btn-pool-import">Import ${pending.length} file${pending.length === 1 ? '' : 's'}</button>
+      </div>
+    </details>`;
 }
 
 /** Import every pool file this competition is missing, auto-placing what we can. */
