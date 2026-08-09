@@ -60,7 +60,7 @@ Surfaced **verbatim** in the public "What's New" panel: one plain user-facing ti
 
 Per-environment GitHub config: vars `FUNCTION_APP_URL_{JUDGEPAPERS,SCOREMODIFIER,PROTOCOLGENERATOR}`, `TOOL_PRINCIPAL_ID_{…}`, `SKIP_CUSTOM_DOMAIN` (set `true` to run on the default hostname, e.g. pre-cutover); secrets `PROXY_SHARED_SECRET_{JUDGEPAPERS,SCOREMODIFIER,PROTOCOLGENERATOR,PLATFORM}`, `AUTH_CLIENT_ID`, `AUTH_APP_OBJECT_ID`. Bicepparams read secrets via `readEnvironmentVariable()`. `deploy-infra` is **atomic**: `webapp.bicep` still replaces the whole app-settings collection, but it now writes the full set itself (`FUNCTION_APP_URL_*` — platform from the platform Function App module's output, the tools from the GitHub env config passed into the template — plus `PROXY_SHARED_SECRET_*` and `SCM_DO_BUILD_DURING_DEPLOYMENT`), so running it alone leaves the router fully configured.
 
-`publish-shared-ui.yml` still publishes v2.x for the tool repos' legacy frontends; retire it (and mark shared-ui private) at teardown. Migration/cutover order, old-subdomain redirects and the teardown checklist live in `infra/MIGRATION.md`.
+`publish-shared-ui.yml` is **manual-dispatch only** (the push trigger 409'd on every main push touching shared-ui, since v3 stays at one version and is consumed via workspace symlink, not the registry); it exists solely to publish v2.x for the tool repos' legacy frontends — retire it (and mark shared-ui private) at teardown. Migration/cutover order, old-subdomain redirects and the teardown checklist live in `infra/MIGRATION.md`.
 
 ## Infra notes
 

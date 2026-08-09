@@ -1,13 +1,11 @@
 name: Publish shared-ui
 
+# Manual-only: the site consumes shared-ui via the workspace symlink, never
+# from GitHub Packages — the registry publish exists solely for the tool
+# repos' legacy v2.x frontends and is retired with them. Dispatch from the
+# ref whose packages/shared-ui/package.json version you want to publish
+# (publishing an already-published version fails with 409).
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'packages/shared-ui/**'
-  # Manual trigger so a version bump on a non-default branch (e.g. test) can be
-  # published without first promoting to main. Publishes whatever version is in
-  # packages/shared-ui/package.json on the dispatched ref.
   workflow_dispatch:
 
 permissions:
