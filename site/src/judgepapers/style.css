@@ -942,6 +942,13 @@ input[type="checkbox"] {
   gap: 0.5rem;
 }
 
+/* Verify-before-generate reminder above the Generate button. */
+.generate-note {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+}
+
 .right-panel {
   width: 400px;
   flex-shrink: 0;

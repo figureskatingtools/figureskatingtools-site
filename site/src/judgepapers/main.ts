@@ -200,6 +200,8 @@ appElement.innerHTML = `
                       <div id="options-area" class="options-area">
                           <!-- Options injected here -->
                       </div>
+                      <p class="generate-note">Files are grouped into categories by their file
+                         names — check the listing above before generating.</p>
                       <button id="btn-generate" class="btn btn-primary btn-generate" disabled>
                          Generate Papers
                       </button>
@@ -300,7 +302,9 @@ function showPickCompetition() {
         <ol class="howto-list">
             <li>Select the competition in the top bar; this tool opens its workspace automatically.</li>
             <li><strong>Upload the PDF exports</strong> from <em>Figure Skating Manager</em> ${renderHelpTrigger('help-files-welcome', 'Which files do I need?', filesHelpHtml())}<br><span class="howto-caution">Export <strong>PlannedProgramContent</strong>, not <strong>PlannedProgramContentChecklist</strong> &mdash; they look similar but the Checklist won't work.</span></li>
-            <li>The system validates the files and ensures all required documents are present.</li>
+            <li>PDFs uploaded for the same competition in another tool appear under <strong>Competition files</strong> — import them here without re-uploading.</li>
+            <li>The system validates the files, groups them into categories by their file names, and ensures all required documents are present.</li>
+            <li><strong>Check that every file sits under the right category</strong> — grouping goes by file name, so verify the listing before generating.</li>
             <li>Once validated, click <strong>Generate Papers</strong> to create the combined PDF booklets and ZIP archives.</li>
             <li>Download the generated files using the links that appear. You can also copy the links to share them.</li>
         </ol>

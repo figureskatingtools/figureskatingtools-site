@@ -108,8 +108,11 @@ const APP_HTML = `
                   <li>Upload the competition's <strong>schedule</strong> (PDF or DT_SCHEDULE XML) — it builds the categories and segments automatically.</li>
                   <li>Fill in the <strong>event details</strong> (organiser, venue, dates); they feed the cover and information pages.</li>
                   <li>Drop each category's result PDFs and photos onto their <strong>slots</strong>; drag between slots to fix placements, and hover a file to preview it.</li>
+                  <li>Files exported from <strong>Figure Skating Manager</strong> are recognized by their file name and placed into the right category and segment automatically — placed files carry an <strong>auto</strong> tag. <strong>Auto-place files</strong> retries recognition for anything still in Uploads.</li>
+                  <li><strong>Competition files</strong> are shared between the tools: PDFs uploaded for the same competition in Judge Paper Creator can be imported from the Uploads section without re-uploading.</li>
                   <li>Required files (marked <span class="req">•</span>) drive each category's <em>"n/n uploaded"</em> readiness badge.</li>
                   <li>For synchronized skating, import the <strong>DT_PARTIC</strong> team rosters to add team pages.</li>
+                  <li>Before generating, <strong>check every auto-tagged file</strong> — automatic placement goes by file name, so confirm each one sits in the right slot. Dragging a file by hand clears its tag.</li>
                   <li>Press <strong>Generate Protocol</strong> to build the bound PDF; download or delete generated protocols from the list below.</li>
                 </ul>
               </span></span>
@@ -150,8 +153,9 @@ function showPickCompetition() {
       every tool works on the same selected competition.</p>
     <ol class="howto-list">
       <li>Upload the competition's <strong>schedule</strong> (DT_SCHEDULE XML or PDF).</li>
-      <li>Fill in the event details and drop result PDFs and photos into the slots.</li>
-      <li>Drag files between slots to fix placements; hover to preview.</li>
+      <li>Fill in the event details and drop in the result PDFs and photos — Figure Skating Manager
+        exports are recognized by name and placed automatically with an <strong>auto</strong> tag.</li>
+      <li>Check the auto-tagged files and drag any file between slots to fix placements; hover to preview.</li>
       <li>Press <strong>Generate Protocol</strong> to build the bound PDF.</li>
     </ol>`);
 }
@@ -629,6 +633,10 @@ function renderDetails() {
     ? details.unassigned.map(chipHtml).join('')
     : '<span class="tray-empty">No unassigned files. Uploads land here, then drag them into slots.</span>';
 
+  // The tag only survives on files whose automatic slot assignment succeeded,
+  // so this is exactly the set the user should verify before generating.
+  const autoTagged = Object.values(s.files || {}).filter(m => m.autoAssigned).length;
+
   const scheduleSection = s.scheduleParsed
     ? `<p class="section-sub">${(s.categories || []).length} categories parsed from the schedule.
          <button class="btn btn-xs btn-ghost" id="btn-reparse">Replace schedule…</button></p>`
@@ -700,7 +708,10 @@ function renderDetails() {
           <input type="file" id="tray-input" multiple accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.xml" style="display:none;">
         </div>
       </div>
-      <p class="section-sub">Drop PDFs and photos here or into any slot; drag chips between slots to move them.</p>
+      <p class="section-sub">Drop PDFs and photos here or into any slot — Figure Skating Manager exports
+        are recognized by their file name and placed automatically with an <strong>auto</strong> tag.
+        <strong>Auto-place files</strong> retries recognition for everything still here;
+        drag chips between slots to move them.</p>
       <div class="tray" data-target='${attr({ kind: 'tray' })}'>
         <div class="tray-chips">${trayChips}</div>
       </div>
@@ -767,6 +778,9 @@ function renderDetails() {
       ${rosterReportHtml(s)}
     </div>` : ''}
 
+    ${autoTagged ? `<p class="auto-check-note">${autoTagged} file${autoTagged === 1 ? ' was' : 's were'}
+      placed automatically (<span class="chip-auto">auto</span>) — check they sit in the right slots
+      before generating. Dragging a file by hand confirms it and clears the tag.</p>` : ''}
     <div class="action-bar">
       <div class="gen-list">${genHtml}</div>
       <button class="btn btn-primary btn-generate" id="btn-generate">Generate Protocol</button>

@@ -602,7 +602,8 @@ input[type="checkbox"] { accent-color: var(--ink); }
 .file-chip .chip-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 16rem; }
 /* Placed by filename recognition, not by hand — a soft gold "confirm me" mark
    that the backend clears the moment the chip is dragged anywhere. */
-.file-chip .chip-auto {
+.file-chip .chip-auto,
+.auto-check-note .chip-auto {
   font-size: 0.55rem;
   font-weight: 700;
   letter-spacing: 0.08em;
@@ -614,6 +615,18 @@ input[type="checkbox"] { accent-color: var(--ink); }
   color: var(--gold);
   cursor: help;
 }
+
+/* Pre-generate reminder shown while any auto-placed file is still unconfirmed. */
+.auto-check-note {
+  margin: 1rem 0 0;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+  background: var(--gold-tint);
+  border: 1px solid var(--gold-bright);
+  border-radius: 0.4rem;
+}
+.auto-check-note .chip-auto { cursor: default; }
 .file-chip .chip-x { border: none; background: none; color: var(--ink-faint); cursor: pointer; font-size: 1rem; line-height: 1; padding: 0; }
 .file-chip .chip-x:hover { color: var(--error-color); }
 
