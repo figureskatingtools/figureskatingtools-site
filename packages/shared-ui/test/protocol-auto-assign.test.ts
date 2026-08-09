@@ -11,6 +11,7 @@ import { sortCategoriesForMatching, type CategoryInfo } from '../src/category-re
 import {
   SUFFIX_SLOTS,
   applyOutcomeLocally,
+  matchNameTokens,
   normalizeMatchName,
   planAutoAssignment,
   slotOccupant,
@@ -106,6 +107,55 @@ describe('helpers', () => {
     expect(SUFFIX_SLOTS['SegmentResults.pdf']).toEqual({ kind: 'segment', role: 'results' });
     expect(SUFFIX_SLOTS['Results.pdf']!.kind).toBe('totalResults');
   });
+
+  it('routes the protocol head page to the category title slot', () => {
+    expect(SUFFIX_SLOTS['ProtocolHeadPage.pdf']).toEqual({
+      kind: 'categoryTitle',
+      requiresCategoryLevel: true,
+    });
+  });
+});
+
+/* ── token pairing ─────────────────────────────────────────────────────── */
+
+describe('matchNameTokens', () => {
+  it('pairs a schedule PDF spelling with the registry spelling', () => {
+    expect(matchNameTokens('SM-Noviisit, Tytöt', 'SM-NOVIISI Tytöt')).toBe(true);
+    expect(matchNameTokens('SM-Juniorit, Miehet', 'SM-JUNIORI Miehet')).toBe(true);
+    expect(matchNameTokens('SM-Juniorit, Naiset', 'SM-JUNIORI Naiset')).toBe(true);
+    expect(matchNameTokens('SM-Seniorit, Naiset', 'SM-SENIORI Naiset')).toBe(true);
+    expect(matchNameTokens('SM-Seniorit, Miehet', 'SM-SENIORI Miehet')).toBe(true);
+  });
+
+  it('requires the same number of tokens', () => {
+    expect(matchNameTokens('Juniorit, Miehet', 'SM-JUNIORI Miehet')).toBe(false);
+    expect(matchNameTokens('Noviisit, Tytöt', 'SM-Noviisit, Tytöt')).toBe(false);
+    expect(matchNameTokens('Junior, Men', 'SM-JUNIORI Miehet')).toBe(false);
+  });
+
+  it('never pairs different words', () => {
+    expect(matchNameTokens('SM-Noviisit, Pojat', 'SM-NOVIISI Tytöt')).toBe(false);
+    expect(matchNameTokens('Junior Ice Dance', 'SM-JUNIORI Jäätanssi')).toBe(false);
+    expect(matchNameTokens('A-Silmut, Pojat', 'A-Silmut, Tytöt')).toBe(false);
+  });
+
+  it('demands exact equality for tokens shorter than four characters', () => {
+    expect(matchNameTokens('SM Naiset', 'SMK Naiset')).toBe(false);
+    expect(matchNameTokens('Aikuiset, Mupi L1 #1', 'Aikuiset, Mupi L1 #2')).toBe(false);
+    expect(matchNameTokens('Aikuiset, Mupi L1 #2', 'Aikuiset, Mupi L1 #2')).toBe(true);
+    // …and lets a four-character stem through
+    expect(matchNameTokens('Juniori Naiset', 'Juni Naiset')).toBe(true);
+  });
+
+  it('pairs bijectively — two tokens may not share one partner', () => {
+    expect(matchNameTokens('Junior Juniori', 'Juniori Naiset')).toBe(false);
+    expect(matchNameTokens('Junior Juniori', 'Juniorit Juniori')).toBe(true);
+  });
+
+  it('rejects an empty name outright', () => {
+    expect(matchNameTokens('', '')).toBe(false);
+    expect(matchNameTokens('Naiset', undefined)).toBe(false);
+  });
 });
 
 /* ── the two user-confirmed fixtures ───────────────────────────────────── */
@@ -119,7 +169,14 @@ describe('confirmed FSM filenames', () => {
     );
     expect(outcome).toEqual({
       action: 'assign',
-      target: { kind: 'segment', categoryId: 'c3', segmentId: 's4', role: 'results' },
+      target: {
+        kind: 'segment',
+        categoryId: 'c3',
+        segmentId: 's4',
+        role: 'results',
+        categoryCode: 'FSKWSINGLES',
+        matchedBy: 'code',
+      },
     });
   });
 
@@ -131,7 +188,12 @@ describe('confirmed FSM filenames', () => {
     );
     expect(outcome).toEqual({
       action: 'assign',
-      target: { kind: 'totalResults', categoryId: 'c2' },
+      target: {
+        kind: 'totalResults',
+        categoryId: 'c2',
+        categoryCode: 'FSKMSINGLES',
+        matchedBy: 'code',
+      },
     });
   });
 });
@@ -148,7 +210,14 @@ describe('suffix → slot', () => {
       )
     ).toEqual({
       action: 'assign',
-      target: { kind: 'segment', categoryId: 'c1', segmentId: 's1', role: 'panel' },
+      target: {
+        kind: 'segment',
+        categoryId: 'c1',
+        segmentId: 's1',
+        role: 'panel',
+        categoryCode: 'FSKWSINGLES-ASILMW',
+        matchedBy: 'code',
+      },
     });
   });
 
@@ -161,7 +230,14 @@ describe('suffix → slot', () => {
       )
     ).toEqual({
       action: 'assign',
-      target: { kind: 'segment', categoryId: 'c1', segmentId: 's2', role: 'judgesDetails' },
+      target: {
+        kind: 'segment',
+        categoryId: 'c1',
+        segmentId: 's2',
+        role: 'judgesDetails',
+        categoryCode: 'FSKWSINGLES-ASILMW',
+        matchedBy: 'code',
+      },
     });
   });
 
@@ -542,7 +618,12 @@ describe('title pages', () => {
       planAutoAssignment('FSKWSINGLES-ASILMW----.pdf', CATEGORIES, makeStructure())
     ).toEqual({
       action: 'assign',
-      target: { kind: 'categoryTitle', categoryId: 'c1' },
+      target: {
+        kind: 'categoryTitle',
+        categoryId: 'c1',
+        categoryCode: 'FSKWSINGLES-ASILMW',
+        matchedBy: 'code',
+      },
     });
   });
 
@@ -556,7 +637,12 @@ describe('title pages', () => {
     };
     expect(planAutoAssignment('FSKXSYNCHRONMLAIKU--02.pdf', CATEGORIES, structure)).toEqual({
       action: 'assign',
-      target: { kind: 'categoryTitle', categoryId: 'b' },
+      target: {
+        kind: 'categoryTitle',
+        categoryId: 'b',
+        categoryCode: 'FSKXSYNCHRONMLAIKU',
+        matchedBy: 'code',
+      },
     });
   });
 
@@ -686,5 +772,270 @@ describe('applyOutcomeLocally', () => {
     const file = 'FSKWSINGLES-ASILMW----QUAL0001--_SegmentResults.pdf';
     applyOutcomeLocally(structure, planAutoAssignment(file, CATEGORIES, structure), file);
     expect(planAutoAssignment(file, CATEGORIES, structure)).toMatchObject({ action: 'assign' });
+  });
+});
+
+/* ── field data: the kktest competition ────────────────────────────────────
+ *
+ * A real competition whose structure was parsed from a PDF schedule, so every
+ * category carries `code: ''` and matching has to go through the names. The
+ * table rows and filenames below are verbatim from that competition.
+ * ────────────────────────────────────────────────────────────────────────── */
+
+const KK_CATEGORIES: CategoryInfo[] = sortCategoriesForMatching([
+  { abbreviation: 'FSKMSINGLES', displayName: 'Senior, Men', displayNameFi: 'SM-Seniorit, Miehet', judgingMethod: 'ISU', competitionType: 'Figure skating' },
+  { abbreviation: 'FSKMSINGLES-ADVNOV', displayName: 'Advanced Novice, Men', displayNameFi: 'SM-Noviisit, Pojat', judgingMethod: 'ISU', competitionType: 'Figure skating' },
+  { abbreviation: 'FSKMSINGLES-JUNIOR', displayName: 'Junior, Men', displayNameFi: 'SM-Juniorit, Miehet', judgingMethod: 'ISU', competitionType: 'Figure skating' },
+  { abbreviation: 'FSKWSINGLES', displayName: 'Senior, Women', displayNameFi: 'SM-Seniorit, Naiset', judgingMethod: 'ISU', competitionType: 'Figure skating' },
+  { abbreviation: 'FSKWSINGLES-ADVNOV', displayName: 'Advanced Novice, Women', displayNameFi: 'SM-Noviisit, Tytöt', judgingMethod: 'ISU', competitionType: 'Figure skating' },
+  { abbreviation: 'FSKWSINGLES-JUNIOR', displayName: 'Junior, Women', displayNameFi: 'SM-Juniorit, Naiset', judgingMethod: 'ISU', competitionType: 'Figure skating' },
+  { abbreviation: 'FSKXICEDANCEJUNIOR', displayName: 'Junior Ice Dance', displayNameFi: 'Junior Ice Dance', judgingMethod: 'ISU', competitionType: 'Figure skating' },
+  // …and the neighbouring rows of the same table, which must not be dragged in
+  { abbreviation: 'FSKWSINGLES-ASILMW', displayName: 'A-Silmut, Girls', displayNameFi: 'A-Silmut, Tytöt', judgingMethod: 'ISU', competitionType: 'Figure skating' },
+  { abbreviation: 'FSKMSINGLES-KJUNIM', displayName: 'Juniors, Men', displayNameFi: 'Juniorit, Miehet', judgingMethod: 'ISU', competitionType: 'Figure skating' },
+  { abbreviation: 'FSKWSINGLES-KNOVIW', displayName: 'Novices, Girls', displayNameFi: 'Noviisit, Tytöt', judgingMethod: 'ISU', competitionType: 'Figure skating' },
+  { abbreviation: 'FSKXSYNCHRONMLTULO', displayName: 'Tulokkaat', displayNameFi: 'Tulokkaat', judgingMethod: 'MUPI', competitionType: 'Synchronized skating' },
+]);
+
+/** Every category code-less, exactly as the schedule parser leaves them */
+function pdfCategory(id: string, name: string, first: string, second: string): CategoryLike {
+  return {
+    id,
+    name,
+    code: '',
+    titlePdf: null,
+    totalResultsPdf: null,
+    segments: [segment(`${id}a`, first, 1), segment(`${id}b`, second, 2)],
+  };
+}
+
+function kkStructure(): StructureLike {
+  return {
+    files: {},
+    categories: [
+      pdfCategory('kk1', 'SM-NOVIISI Tytöt', 'Short Program', 'Free Skating'),
+      pdfCategory('kk2', 'SM-JUNIORI Naiset', 'Short Program', 'Free Skating'),
+      pdfCategory('kk3', 'SM-JUNIORI Miehet', 'Short Program', 'Free Skating'),
+      pdfCategory('kk4', 'SM-SENIORI Miehet', 'Short Program', 'Free Skating'),
+      pdfCategory('kk5', 'SM-SENIORI Naiset', 'Short Program', 'Free Skating'),
+      pdfCategory('kk6', 'SM-JUNIORI Jäätanssi', 'Rhythm Dance', 'Free Dance'),
+    ],
+  };
+}
+
+describe('kktest — a schedule-parsed structure with no category codes', () => {
+  it('places the senior men panel sheet on the free skating segment (FNL-000100)', () => {
+    expect(
+      planAutoAssignment(
+        'FSKMSINGLES-----------FNL-000100--_ISUPanelofJudgesandTechnicalPanel.pdf',
+        KK_CATEGORIES,
+        kkStructure()
+      )
+    ).toEqual({
+      action: 'assign',
+      target: {
+        kind: 'segment',
+        categoryId: 'kk4',
+        segmentId: 'kk4b',
+        role: 'panel',
+        categoryCode: 'FSKMSINGLES',
+        matchedBy: 'name',
+      },
+    });
+  });
+
+  it('places the junior men QUAL segment results on the short program', () => {
+    expect(
+      planAutoAssignment(
+        'FSKMSINGLES-JUNIOR----QUAL000100--_SegmentResults.pdf',
+        KK_CATEGORIES,
+        kkStructure()
+      )
+    ).toEqual({
+      action: 'assign',
+      target: {
+        kind: 'segment',
+        categoryId: 'kk3',
+        segmentId: 'kk3a',
+        role: 'results',
+        categoryCode: 'FSKMSINGLES-JUNIOR',
+        matchedBy: 'name',
+      },
+    });
+  });
+
+  it('places the junior men protocol head page in the category title slot', () => {
+    expect(
+      planAutoAssignment(
+        'FSKMSINGLES-JUNIOR----------------_ProtocolHeadPage.pdf',
+        KK_CATEGORIES,
+        kkStructure()
+      )
+    ).toEqual({
+      action: 'assign',
+      target: {
+        kind: 'categoryTitle',
+        categoryId: 'kk3',
+        categoryCode: 'FSKMSINGLES-JUNIOR',
+        matchedBy: 'name',
+      },
+    });
+  });
+
+  it('places the senior men Results sheet in the total results slot', () => {
+    expect(
+      planAutoAssignment(
+        'FSKMSINGLES-----------------------_Results.pdf',
+        KK_CATEGORIES,
+        kkStructure()
+      )
+    ).toEqual({
+      action: 'assign',
+      target: {
+        kind: 'totalResults',
+        categoryId: 'kk4',
+        categoryCode: 'FSKMSINGLES',
+        matchedBy: 'name',
+      },
+    });
+  });
+
+  it.each([
+    ['FSKWSINGLES-ADVNOV----QUAL000100--_SegmentResults.pdf', 'kk1', 'kk1a'],
+    ['FSKWSINGLES-ADVNOV----FNL-000100--_SegmentResults.pdf', 'kk1', 'kk1b'],
+    ['FSKWSINGLES-JUNIOR----QUAL000100--_SegmentResults.pdf', 'kk2', 'kk2a'],
+    ['FSKWSINGLES-JUNIOR----FNL-000100--_SegmentResults.pdf', 'kk2', 'kk2b'],
+    ['FSKMSINGLES-JUNIOR----FNL-000100--_SegmentResults.pdf', 'kk3', 'kk3b'],
+    ['FSKMSINGLES-----------QUAL000100--_SegmentResults.pdf', 'kk4', 'kk4a'],
+    ['FSKWSINGLES-----------QUAL000100--_SegmentResults.pdf', 'kk5', 'kk5a'],
+    ['FSKWSINGLES-----------FNL-000100--_SegmentResults.pdf', 'kk5', 'kk5b'],
+  ])('routes %s to %s / %s', (filename, categoryId, segmentId) => {
+    expect(planAutoAssignment(filename, KK_CATEGORIES, kkStructure())).toMatchObject({
+      action: 'assign',
+      target: { categoryId, segmentId, matchedBy: 'name' },
+    });
+  });
+
+  it.each([
+    'FSKXICEDANCEJUNIOR----FNL-000100--_SegmentResults.pdf',
+    'FSKXICEDANCEJUNIOR----RD-000100--_SegmentResults.pdf',
+    'FSKXICEDANCEJUNIOR----------------_ProtocolHeadPage.pdf',
+    'FSKXICEDANCEJUNIOR----------------_Results.pdf',
+  ])('leaves the ice dance export %s in the tray rather than guessing', (filename) => {
+    // `Junior Ice Dance` shares only its junior~juniori token with
+    // `SM-JUNIORI Jäätanssi`, so nothing pairs and nothing is mis-assigned.
+    expect(planAutoAssignment(filename, KK_CATEGORIES, kkStructure())).toEqual({
+      action: 'tray',
+      reason: 'unrecognized',
+    });
+  });
+
+  it('has no home for the men advanced novice files this competition never ran', () => {
+    expect(
+      planAutoAssignment(
+        'FSKMSINGLES-ADVNOV----QUAL000100--_SegmentResults.pdf',
+        KK_CATEGORIES,
+        kkStructure()
+      )
+    ).toEqual({ action: 'tray', reason: 'unrecognized' });
+  });
+
+  it('plans the whole drop in one pass without two files sharing a slot', () => {
+    const structure = kkStructure();
+    const drop = [
+      'FSKMSINGLES-----------FNL-000100--_ISUPanelofJudgesandTechnicalPanel.pdf',
+      'FSKMSINGLES-----------QUAL000100--_SegmentResults.pdf',
+      'FSKMSINGLES-----------FNL-000100--_SegmentResults.pdf',
+      'FSKMSINGLES-----------------------_Results.pdf',
+      'FSKMSINGLES-----------------------_ProtocolHeadPage.pdf',
+    ];
+    for (const filename of drop) {
+      const outcome = planAutoAssignment(filename, KK_CATEGORIES, structure);
+      expect(outcome).toMatchObject({ action: 'assign', target: { categoryId: 'kk4' } });
+      expect(applyOutcomeLocally(structure, outcome, filename)).toBeTruthy();
+    }
+    const senior = structure.categories![3]!;
+    expect(senior.titlePdf).toBeTruthy();
+    expect(senior.totalResultsPdf).toBeTruthy();
+    expect(senior.segments![0]!.resultsPdf).toBeTruthy();
+    expect(senior.segments![1]!.resultsPdf).toBeTruthy();
+    expect(senior.segments![1]!.panelPdf).toBeTruthy();
+  });
+});
+
+/* ── near misses that must stay near misses ────────────────────────────── */
+
+describe('name matching never widens into a guess', () => {
+  it('keeps SM-JUNIORI Miehet away from the plain Juniorit, Miehet row', () => {
+    const structure: StructureLike = {
+      files: {},
+      categories: [pdfCategory('only', 'SM-JUNIORI Miehet', 'Short Program', 'Free Skating')],
+    };
+    expect(
+      planAutoAssignment(
+        'FSKMSINGLES-KJUNIM----QUAL000100--_SegmentResults.pdf',
+        KK_CATEGORIES,
+        structure
+      )
+    ).toEqual({ action: 'tray', reason: 'unrecognized' });
+  });
+
+  it('keeps Noviisit, Tytöt and SM-Noviisit, Tytöt as two different categories', () => {
+    const structure: StructureLike = {
+      files: {},
+      categories: [
+        pdfCategory('kansallinen', 'Noviisit, Tytöt', 'Short Program', 'Free Skating'),
+        pdfCategory('sm', 'SM-NOVIISI Tytöt', 'Short Program', 'Free Skating'),
+      ],
+    };
+    expect(
+      planAutoAssignment(
+        'FSKWSINGLES-KNOVIW----QUAL000100--_SegmentResults.pdf',
+        KK_CATEGORIES,
+        structure
+      )
+    ).toMatchObject({ action: 'assign', target: { categoryId: 'kansallinen' } });
+    expect(
+      planAutoAssignment(
+        'FSKWSINGLES-ADVNOV----QUAL000100--_SegmentResults.pdf',
+        KK_CATEGORIES,
+        structure
+      )
+    ).toMatchObject({ action: 'assign', target: { categoryId: 'sm' } });
+  });
+
+  it('trays a category two different table rows describe equally well', () => {
+    const table: CategoryInfo[] = sortCategoriesForMatching([
+      { abbreviation: 'FSKWSINGLES-JUNIOR', displayName: 'Junior, Women', displayNameFi: 'Juniorit, Naiset', judgingMethod: 'ISU', competitionType: 'Figure skating' },
+      { abbreviation: 'FSKWSINGLES-KJUNIW', displayName: 'Juniors, Women', displayNameFi: 'Juniori, Naiset', judgingMethod: 'ISU', competitionType: 'Figure skating' },
+    ]);
+    const structure: StructureLike = {
+      files: {},
+      categories: [pdfCategory('n1', 'Juniorit, Naiset', 'Short Program', 'Free Skating')],
+    };
+    expect(
+      planAutoAssignment(
+        'FSKWSINGLES-JUNIOR----QUAL000100--_SegmentResults.pdf',
+        table,
+        structure
+      )
+    ).toEqual({ action: 'tray', reason: 'ambiguous-category' });
+  });
+
+  it('still trays a structure where two categories fit the same file', () => {
+    const structure: StructureLike = {
+      files: {},
+      categories: [
+        pdfCategory('a', 'SM-JUNIORI Naiset', 'Short Program', 'Free Skating'),
+        pdfCategory('b', 'SM-Juniorit, Naiset', 'Short Program', 'Free Skating'),
+      ],
+    };
+    expect(
+      planAutoAssignment(
+        'FSKWSINGLES-JUNIOR----QUAL000100--_SegmentResults.pdf',
+        KK_CATEGORIES,
+        structure
+      )
+    ).toEqual({ action: 'tray', reason: 'ambiguous-category' });
   });
 });

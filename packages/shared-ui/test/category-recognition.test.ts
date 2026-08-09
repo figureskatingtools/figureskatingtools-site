@@ -103,6 +103,38 @@ describe('parseFilenameGeneric', () => {
     expect(parsed!.segment).toBe('QUAL000100');
   });
 
+  it('keeps a dash inside the segment token (real FSM export shape)', () => {
+    const parsed = parseFilenameGeneric(
+      'FSKMSINGLES-----------FNL-000100--_ISUPanelofJudgesandTechnicalPanel.pdf',
+      CATEGORIES
+    );
+    expect(parsed!.categoryCode).toBe('FSKMSINGLES');
+    // only the padding dashes go — the token's own dash survives, so two
+    // pattern dances never collapse into one bucket
+    expect(parsed!.rawSegment).toBe('FNL-000100');
+    expect(parsed!.suffix).toBe('ISUPanelofJudgesandTechnicalPanel.pdf');
+    expect(parsed!.splitNumber).toBeNull();
+  });
+
+  it('reports an all-dash segment portion of a head page as Unknown', () => {
+    const parsed = parseFilenameGeneric(
+      'FSKMSINGLES-JUNIOR----------------_ProtocolHeadPage.pdf',
+      [
+        ...CATEGORIES,
+        {
+          abbreviation: 'FSKMSINGLES-JUNIOR',
+          displayName: 'Junior, Men',
+          displayNameFi: 'SM-Juniorit, Miehet',
+          judgingMethod: 'ISU',
+          competitionType: 'Figure skating',
+        },
+      ].sort((a, b) => b.abbreviation.length - a.abbreviation.length)
+    );
+    expect(parsed!.categoryCode).toBe('FSKMSINGLES-JUNIOR');
+    expect(parsed!.rawSegment).toBe('Unknown');
+    expect(parsed!.suffix).toBe('ProtocolHeadPage.pdf');
+  });
+
   it('reports a dash-only segment portion as Unknown', () => {
     const parsed = parseFilenameGeneric(
       'FSKMSINGLES-----------------------_Results.pdf',

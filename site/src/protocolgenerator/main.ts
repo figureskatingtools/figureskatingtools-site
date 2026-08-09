@@ -11,10 +11,13 @@ import {
   listCompetitionFiles,
   uploadCompetitionFile,
   sortCategoriesForMatching,
+  matchCategory,
   planAutoAssignment,
   applyOutcomeLocally,
+  stripTrailingDashes,
   type CategoryInfo,
   type AutoAssignOutcome,
+  type AutoAssignTarget,
   type StructureLike,
   type TrayReason,
   type PoolFile,
@@ -610,6 +613,7 @@ function categoryHtml(cat: Category): string {
 
 function renderDetails() {
   if (!details) return;
+  ensureAutoPlaceReady();
   const s: Structure = details.structure;
   document.getElementById('detail-title')!.textContent = s.name;
   renderRetention(details.deletionDate);
@@ -690,8 +694,11 @@ function renderDetails() {
 
     <div class="section">
       <div class="section-head"><h3>Uploads</h3>
-        <button class="btn btn-xs btn-primary" id="tray-browse">Upload files…</button>
-        <input type="file" id="tray-input" multiple accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.xml" style="display:none;">
+        <div class="section-head-actions">
+          ${autoPlaceButtonHtml()}
+          <button class="btn btn-xs btn-primary" id="tray-browse">Upload files…</button>
+          <input type="file" id="tray-input" multiple accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.xml" style="display:none;">
+        </div>
       </div>
       <p class="section-sub">Drop PDFs and photos here or into any slot; drag chips between slots to move them.</p>
       <div class="tray" data-target='${attr({ kind: 'tray' })}'>
@@ -920,6 +927,9 @@ function wireDetail() {
   trayBrowse?.addEventListener('click', () => trayInput?.click());
   trayInput?.addEventListener('change', () => { if (trayInput.files?.length) uploadFiles(trayInput.files); trayInput.value = ''; });
 
+  // Place recognized tray files into their slots in one go.
+  document.getElementById('btn-auto-place')?.addEventListener('click', () => void autoPlaceTrayFiles());
+
   // Import files another tool (or FSM) put in this competition's shared pool.
   document.getElementById('btn-pool-import')?.addEventListener('click', () => void importPoolFiles());
 
@@ -969,8 +979,28 @@ async function assignFile(fileId: string, target: SlotTarget) {
   try {
     const resp = await apiJson('/assign_file', { id: currentId, fileId, target });
     if (!resp.ok) { alert('Could not move file: ' + (await resp.text())); return; }
+    await learnFromManualAssign(fileId, target);
     await loadDetails();
   } catch { alert('Network error moving file.'); }
+}
+
+/** Category-scoped slots: dropping into one names the file's category. */
+const LEARNABLE_KINDS: ReadonlySet<SlotTarget['kind']> = new Set(['categoryTitle', 'totalResults', 'segment']);
+
+/**
+ * One manual drag teaches the category. The user just told us this file belongs
+ * to this category, so its filename's abbreviation is the category's code —
+ * stamp it and every sibling file matches by code from then on. Silent when
+ * recognition is unavailable or the filename says nothing.
+ */
+async function learnFromManualAssign(fileId: string, target: SlotTarget): Promise<void> {
+  if (!LEARNABLE_KINDS.has(target.kind) || !categoryNeedsCode(target.categoryId)) return;
+  const filename = fileMeta(fileId)?.filename;
+  if (!filename) return;
+  const categories = await loadJpCategories();
+  if (!categories) return;
+  const matched = matchCategory(filename, categories);
+  if (matched?.abbreviation) await stampCategoryCode(target.categoryId!, matched.abbreviation);
 }
 
 /* ── filename recognition → automatic slot placement ──
@@ -1002,6 +1032,28 @@ function loadJpCategories(): Promise<CategoryInfo[] | null> {
     })();
   }
   return jpCategories;
+}
+
+/** Whether recognition is known to work — the "Auto-place files" button must
+ * not offer what it cannot do. Resolving it is async, so the first usable
+ * answer re-renders the view (once: the flag only ever goes true). */
+let autoPlaceReady = false;
+
+function ensureAutoPlaceReady(): void {
+  if (autoPlaceReady) return;
+  void loadJpCategories().then(cats => {
+    if (!cats || autoPlaceReady) return;
+    autoPlaceReady = true;
+    renderDetails();
+  });
+}
+
+/** Offered only when there is something to place, somewhere to place it, and a
+ * category table to place it with. */
+function autoPlaceButtonHtml(): string {
+  if (!details || !details.unassigned.length) return '';
+  if (!(details.structure.categories || []).length || !autoPlaceReady) return '';
+  return '<button class="btn btn-xs btn-ghost" id="btn-auto-place">Auto-place files</button>';
 }
 
 /** How the summary toast names each reason a file stayed in the tray. */
@@ -1040,6 +1092,51 @@ function applyAutoParams(params: URLSearchParams, outcome: AutoAssignOutcome | u
   if (t.segmentId) params.set('segmentId', t.segmentId);
   if (t.role) params.set('role', t.role);
   params.set('autoAssigned', '1');
+}
+
+/* ── learned category codes ──
+   A schedule PDF gives its categories no ISU code, so the very first file of
+   each has to be recognized by *name*. Stamping the abbreviation that match
+   proved onto the code-less category turns every sibling file into a cheap,
+   unambiguous code match — a category learns its code once, from whichever
+   file (or manual drag) got there first. Failing to stamp costs nothing: the
+   next batch simply matches by name again. */
+
+/** Does this category still have no ISU code? (`----` padding counts as none,
+ * exactly as the planner's own code matching reads it.) */
+function categoryNeedsCode(categoryId: string | undefined): boolean {
+  if (!categoryId || !details) return false;
+  const cat = details.structure.categories?.find(c => c.id === categoryId);
+  return !!cat && !stripTrailingDashes(cat.code);
+}
+
+/** Write a learned code; never fatal, so callers don't guard it. */
+async function stampCategoryCode(categoryId: string, code: string): Promise<void> {
+  if (!currentId) return;
+  try {
+    await apiJson('/edit_structure', { id: currentId, op: 'set_category', categoryId, code });
+  } catch { /* ignore — recognition keeps working by name */ }
+}
+
+/** Stamp the codes a planned batch learned: one call per category, at most. */
+async function stampLearnedCodes(outcomes: (AutoAssignOutcome | undefined)[]): Promise<void> {
+  const learned = new Map<string, string>();
+  outcomes.forEach(o => {
+    if (!o || o.action !== 'assign') return;
+    const { categoryId, categoryCode, matchedBy } = o.target;
+    if (matchedBy !== 'name' || !categoryCode || learned.has(categoryId)) return;
+    if (categoryNeedsCode(categoryId)) learned.set(categoryId, categoryCode);
+  });
+  for (const [categoryId, code] of learned) await stampCategoryCode(categoryId, code);
+}
+
+/** The wire shape `assign_file` expects — `categoryCode`/`matchedBy` are the
+ * planner's own provenance and have no place in the request body. */
+function slotTargetOf(t: AutoAssignTarget): SlotTarget {
+  const target: SlotTarget = { kind: t.kind, categoryId: t.categoryId };
+  if (t.segmentId) target.segmentId = t.segmentId;
+  if (t.role) target.role = t.role;
+  return target;
 }
 
 /** "3 placed automatically · 2 left in Uploads (1 unrecognized, 1 slot occupied)" */
@@ -1124,10 +1221,56 @@ async function importPoolFiles(): Promise<void> {
     } catch { failed++; }
   }
 
+  if (outcomes) await stampLearnedCodes(outcomes);
   await loadDetails();
   const parts = [`Imported ${pending.length - failed} of ${pending.length} competition file(s)`];
   const summary = outcomes ? summarizeBatch(outcomes) : null;
   if (summary) parts.push(summary);
+  flash(parts.join(' · ') + '.');
+}
+
+/**
+ * Place every tray file the recognizer is sure about.
+ *
+ * Planning is the upload path's (a clone of the structure, outcomes applied one
+ * by one, so two files never chase the same slot); placing is the manual drag's
+ * `assign_file`, flagged `autoAssigned` so the chips keep their "auto" pill and
+ * a later drag still counts as the user's confirmation.
+ */
+async function autoPlaceTrayFiles(): Promise<void> {
+  if (!currentId || !details) return;
+  const fileIds = details.unassigned.slice();
+  if (!fileIds.length) return;
+
+  const btn = document.getElementById('btn-auto-place') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Placing…'; }
+
+  const outcomes = await planBatch(fileIds.map(fid => fileMeta(fid)?.filename || ''));
+  if (!outcomes) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Auto-place files'; }
+    flash('Filename recognition is unavailable right now.');
+    return;
+  }
+
+  let failed = 0;
+  for (let i = 0; i < fileIds.length; i++) {
+    const outcome = outcomes[i]!;
+    if (outcome.action !== 'assign') continue;
+    try {
+      const resp = await apiJson('/assign_file', {
+        id: currentId,
+        fileId: fileIds[i],
+        target: slotTargetOf(outcome.target),
+        autoAssigned: true,
+      });
+      if (!resp.ok) failed++;
+    } catch { failed++; }
+  }
+
+  await stampLearnedCodes(outcomes);
+  await loadDetails();
+  const parts = [summarizeBatch(outcomes) ?? 'Nothing recognized — every file stayed in Uploads'];
+  if (failed) parts.push(`${failed} could not be moved`);
   flash(parts.join(' · ') + '.');
 }
 
@@ -1190,6 +1333,7 @@ async function uploadFiles(files: FileList, target?: SlotTarget) {
     }
     await uploadOneFile(file, params);
   }
+  if (outcomes) await stampLearnedCodes(outcomes);
   await loadDetails();
 
   const summary = outcomes ? summarizeBatch(outcomes) : null;

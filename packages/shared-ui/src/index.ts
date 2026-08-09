@@ -47,6 +47,7 @@ export type { CategoryInfo, ParsedFilename } from './category-recognition.js';
 export {
   SUFFIX_SLOTS,
   applyOutcomeLocally,
+  matchNameTokens,
   normalizeMatchName,
   planAutoAssignment,
   slotOccupant,

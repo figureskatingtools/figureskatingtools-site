@@ -69,6 +69,13 @@ export interface AutoAssignTarget {
   categoryId: string;
   segmentId?: string;
   role?: SegmentRole;
+  /**
+   * The ISU abbreviation the filename was recognized as. Set on every assign
+   * outcome so the caller can stamp a learned `code` onto a code-less category.
+   */
+  categoryCode?: string;
+  /** How the category was found: by its stored `code`, or by its name */
+  matchedBy?: 'code' | 'name';
 }
 
 /** Why a file was left in the upload tray */
@@ -114,6 +121,9 @@ export interface SuffixSlot {
 export const SUFFIX_SLOTS: Record<string, SuffixSlot> = {
   'SegmentResults.pdf': { kind: 'segment', role: 'results' },
   'Results.pdf': { kind: 'totalResults', requiresCategoryLevel: true },
+  // FSM's category cover sheet. Real exports always carry the `_ProtocolHeadPage`
+  // suffix, so the no-underscore title branch below never fires for them.
+  'ProtocolHeadPage.pdf': { kind: 'categoryTitle', requiresCategoryLevel: true },
   'ISUPanelofJudgesandTechnicalPanel.pdf': { kind: 'segment', role: 'panel' },
   'JudgesDetailsperSkater.pdf': { kind: 'segment', role: 'judgesDetails' },
   'JudgesSheetAll.pdf': { kind: 'skip' },
@@ -173,6 +183,71 @@ export function normalizeMatchName(raw: string | null | undefined): string {
     .trim();
 }
 
+/** Shortest token length that may match by prefix; below it, only equality */
+const PREFIX_MIN_LENGTH = 4;
+
+/** The comparison tokens of a display name, e.g. `SM-JUNIORI Naiset` → `[sm, juniori, naiset]` */
+function matchTokens(raw: string | null | undefined): string[] {
+  const normalized = normalizeMatchName(raw);
+  return normalized ? normalized.split(' ') : [];
+}
+
+/**
+ * Two tokens pair when they are equal, or when one is a prefix of the other
+ * and the shorter one is at least `PREFIX_MIN_LENGTH` characters.
+ *
+ * This is what bridges the schedule PDF's singular Finnish forms to the
+ * category table's plural ones (`noviisi`~`noviisit`, `juniori`~`juniorit`,
+ * `seniori`~`seniorit`, `junior`~`juniori`) while keeping short tokens like
+ * `sm`, `l1` or a split's `1`/`2` strictly exact.
+ */
+function tokensPair(a: string, b: string): boolean {
+  if (a === b) return true;
+  const short = a.length <= b.length ? a : b;
+  const long = a.length <= b.length ? b : a;
+  if (short.length < PREFIX_MIN_LENGTH) return false;
+  return long.startsWith(short);
+}
+
+/**
+ * Do two display names describe the same category?
+ *
+ * Both sides are normalized (casefold, diacritics folded, punctuation → space)
+ * and split into tokens; they match when the token multisets pair
+ * **bijectively** — same token count, and every token of one side can be
+ * assigned to a *distinct* token of the other under `tokensPair`.
+ *
+ * The equal-count requirement is what keeps near misses apart: `SM-Juniorit,
+ * Miehet` (3 tokens) can never collapse onto `Juniorit, Miehet` (2 tokens),
+ * so a competition running both stays unambiguous.
+ */
+export function matchNameTokens(
+  a: string | null | undefined,
+  b: string | null | undefined
+): boolean {
+  const left = matchTokens(a);
+  const right = matchTokens(b);
+  if (!left.length || left.length !== right.length) return false;
+
+  // Kuhn's algorithm — the token counts here are single digits.
+  const assignedTo = new Array<number>(right.length).fill(-1);
+  const augment = (i: number, seen: boolean[]): boolean => {
+    for (let j = 0; j < right.length; j += 1) {
+      if (seen[j] || !tokensPair(left[i]!, right[j]!)) continue;
+      seen[j] = true;
+      if (assignedTo[j] === -1 || augment(assignedTo[j]!, seen)) {
+        assignedTo[j] = i;
+        return true;
+      }
+    }
+    return false;
+  };
+  for (let i = 0; i < left.length; i += 1) {
+    if (!augment(i, new Array<boolean>(right.length).fill(false))) return false;
+  }
+  return true;
+}
+
 /**
  * `parseFilenameGeneric` reports a dash-only or missing segment portion as the
  * literal `Unknown` (Python parity) — that is the "category-level file" signal.
@@ -228,33 +303,68 @@ function codeHits(categories: CategoryLike[], parsed: ParsedFilename): CategoryL
 }
 
 /**
- * Categories that carry no code (parsed from a schedule PDF) whose name is an
- * exact normalized match of the recognized display name, English or Finnish.
- * No substring matching — a near miss must fall to the tray, not to the wrong
- * category.
+ * Categories that carry no code (parsed from a schedule PDF) whose name pairs
+ * token-for-token with the recognized display name, English or Finnish.
+ *
+ * Schedule PDFs spell categories freehand (`SM-NOVIISI Tytöt`) while the table
+ * carries the registry spelling (`SM-Noviisit, Tytöt`), so plain equality found
+ * nothing in the field. `matchNameTokens` bridges the inflection without ever
+ * widening to substrings — a near miss still falls to the tray.
  */
 function nameHits(categories: CategoryLike[], parsed: ParsedFilename): CategoryLike[] {
-  const wanted = new Set(
-    [parsed.category, parsed.categoryFi].map(normalizeMatchName).filter(Boolean)
-  );
-  if (!wanted.size) return [];
+  const wanted = [parsed.category, parsed.categoryFi].filter(Boolean);
+  if (!wanted.length) return [];
   return categories.filter(
-    (cat) => !stripTrailingDashes(cat.code) && wanted.has(normalizeMatchName(cat.name))
+    (cat) =>
+      !stripTrailingDashes(cat.code) &&
+      wanted.some((name) => matchNameTokens(name, cat.name))
+  );
+}
+
+/**
+ * Does a *different* table row describe `category` just as well? Uniqueness has
+ * to hold in both directions: one structure category for the file's row, and
+ * one row for that structure category. Otherwise a competition running both
+ * `SM-Juniorit, Miehet` and `Juniorit, Miehet` could quietly take the wrong one.
+ */
+function nameClaimedByAnotherRow(
+  category: CategoryLike,
+  parsed: ParsedFilename,
+  table: CategoryInfo[]
+): boolean {
+  return table.some(
+    (row) =>
+      row.abbreviation &&
+      row.abbreviation !== parsed.categoryCode &&
+      (matchNameTokens(row.displayName, category.name) ||
+        matchNameTokens(row.displayNameFi || row.displayName, category.name))
   );
 }
 
 type Resolution<T> = { ok: T } | { fail: TrayReason };
 
+/** A resolved category plus how we got there */
+interface CategoryMatch {
+  category: CategoryLike;
+  matchedBy: 'code' | 'name';
+}
+
 function resolveCategory(
   structure: StructureLike,
-  parsed: ParsedFilename
-): Resolution<CategoryLike> {
+  parsed: ParsedFilename,
+  table: CategoryInfo[]
+): Resolution<CategoryMatch> {
   const categories = structure.categories ?? [];
-  const hits = codeHits(categories, parsed);
-  const found = hits.length ? hits : nameHits(categories, parsed);
-  if (found.length === 1) return { ok: found[0]! };
-  if (found.length === 0) return { fail: 'unrecognized' };
-  return { fail: 'ambiguous-category' };
+  const byCode = codeHits(categories, parsed);
+  if (byCode.length === 1) return { ok: { category: byCode[0]!, matchedBy: 'code' } };
+  if (byCode.length > 1) return { fail: 'ambiguous-category' };
+
+  const byName = nameHits(categories, parsed);
+  if (byName.length === 0) return { fail: 'unrecognized' };
+  if (byName.length > 1) return { fail: 'ambiguous-category' };
+  const hit = byName[0]!;
+  if (nameClaimedByAnotherRow(hit, parsed, table)) return { fail: 'ambiguous-category' };
+  return { ok: { category: hit, matchedBy: 'name' } };
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -392,10 +502,15 @@ function planTitlePage(
     splitNumber: splitNumber ? Number(splitNumber[1]) : null,
   };
 
-  const category = resolveCategory(structure, parsed);
+  const category = resolveCategory(structure, parsed, categories);
   if ('fail' in category) return { action: 'tray', reason: category.fail };
 
-  const target: AutoAssignTarget = { kind: 'categoryTitle', categoryId: category.ok.id };
+  const target: AutoAssignTarget = {
+    kind: 'categoryTitle',
+    categoryId: category.ok.category.id,
+    categoryCode: parsed.categoryCode,
+    matchedBy: category.ok.matchedBy,
+  };
   if (!slotAccepts(structure, target, filename)) {
     return { action: 'tray', reason: 'slot-occupied' };
   }
@@ -427,7 +542,7 @@ export function planAutoAssignment(
   const slot = SUFFIX_SLOTS[parsed.suffix];
   if (slot?.kind === 'skip') return { action: 'tray', reason: 'not-for-protocol' };
 
-  const category = resolveCategory(structure, parsed);
+  const category = resolveCategory(structure, parsed, categories);
   if ('fail' in category) return { action: 'tray', reason: category.fail };
 
   if (!slot) return { action: 'tray', reason: 'unknown-suffix' };
@@ -435,18 +550,24 @@ export function planAutoAssignment(
     return { action: 'tray', reason: 'unknown-suffix' };
   }
 
+  const provenance = {
+    categoryCode: parsed.categoryCode,
+    matchedBy: category.ok.matchedBy,
+  } as const;
+
   let target: AutoAssignTarget;
   if (slot.kind === 'segment') {
-    const segment = resolveSegment(category.ok, parsed);
+    const segment = resolveSegment(category.ok.category, parsed);
     if ('fail' in segment) return { action: 'tray', reason: segment.fail };
     target = {
       kind: 'segment',
-      categoryId: category.ok.id,
+      categoryId: category.ok.category.id,
       segmentId: segment.ok.id,
       role: slot.role,
+      ...provenance,
     };
   } else {
-    target = { kind: slot.kind, categoryId: category.ok.id };
+    target = { kind: slot.kind, categoryId: category.ok.category.id, ...provenance };
   }
 
   if (!slotAccepts(structure, target, name)) {
