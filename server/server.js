@@ -7,6 +7,7 @@
 //   /protocolgenerator/      → Protocol Generator app  (SPA, own index.html)
 //   /health                  → liveness probe (excluded from Easy Auth)
 //   /userinfo                → flat user object decoded from Easy Auth headers
+//   /changelog-live          → merged GitHub commits for "What's New" (cached)
 //   /api/*                   → platform Function App
 //   /<tool>/api/*            → that tool's Function App, with /<tool> stripped
 //
@@ -88,6 +89,10 @@ function loadConfig(env = process.env) {
         // Local dev only: pretend a user is signed in when Easy Auth headers are
         // absent. Hard-disabled in production so it can never leak into a real env.
         devFakeUser: isProduction ? '' : (env.DEV_FAKE_USER || '').trim(),
+        // Changelog knobs. Not env-driven — they exist as config so tests can
+        // point the fetch at a stub GitHub and shrink the cache window.
+        githubApiOrigin: GITHUB_API_ORIGIN,
+        changelogTtlMs: CHANGELOG_TTL_MS,
         targets,
     };
 }
@@ -357,6 +362,194 @@ function proxy(req, res, config, tool, targetPath) {
     req.pipe(proxyReq);
 }
 
+// ── Changelog ────────────────────────────────────────────────────────────────
+// The "What's New" panel used to call api.github.com from every browser, so the
+// unauthenticated 60 req/hr-per-IP budget (4 repos per page load) ran out fast
+// and the panel fell back to the build-time snapshot. The router now fetches the
+// commits once per branch and keeps them in memory, so the whole site costs
+// GitHub four requests per ten minutes.
+
+const GITHUB_API_ORIGIN = 'https://api.github.com';
+const CHANGELOG_TTL_MS = 10 * 60 * 1000;
+const CHANGELOG_BRANCHES = ['main', 'test'];
+const CHANGELOG_SOURCES_FILE = 'changelog-sources.json';
+const CHANGELOG_PER_PAGE = 20; // commits requested per repo
+const CHANGELOG_MAX_ENTRIES = 20; // entries returned after merging
+const CHANGELOG_TIMEOUT_MS = 10000;
+// GitHub rejects API calls without one.
+const CHANGELOG_USER_AGENT = 'figureskatingtools-site-router';
+// Guards the interpolation into the upstream URL; the source list is ours, but
+// a typo must not turn into a path escape.
+const REPO_PATTERN = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+
+// GET returning parsed JSON. Uses the same http/https modules as the proxy so
+// the file keeps a single outbound-request style.
+function fetchJson(url, headers = {}) {
+    return new Promise((resolve, reject) => {
+        let target;
+        try {
+            target = new URL(url);
+        } catch (_e) {
+            reject(new Error(`Invalid upstream URL: ${url}`));
+            return;
+        }
+
+        const secure = target.protocol === 'https:';
+        const transport = secure ? https : http;
+
+        const req = transport.request(
+            {
+                protocol: target.protocol,
+                hostname: target.hostname,
+                port: target.port || (secure ? 443 : 80),
+                path: target.pathname + (target.search || ''),
+                method: 'GET',
+                headers,
+            },
+            (upstream) => {
+                const chunks = [];
+                upstream.on('data', (c) => chunks.push(c));
+                upstream.on('error', reject);
+                upstream.on('end', () => {
+                    if (upstream.statusCode < 200 || upstream.statusCode >= 300) {
+                        reject(new Error(`HTTP ${upstream.statusCode} from ${url}`));
+                        return;
+                    }
+                    try {
+                        resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8')));
+                    } catch (_e) {
+                        reject(new Error(`Malformed JSON from ${url}`));
+                    }
+                });
+            }
+        );
+
+        req.setTimeout(CHANGELOG_TIMEOUT_MS, () => {
+            req.destroy(new Error(`Timed out fetching ${url}`));
+        });
+        req.on('error', reject);
+        req.end();
+    });
+}
+
+// Read from the deployed static file on every refresh: it is a few hundred
+// bytes, and re-reading keeps the list in lockstep with what the browser sees.
+function readChangelogSources(config) {
+    const file = path.join(config.publicDir, CHANGELOG_SOURCES_FILE);
+    return fs.promises.readFile(file, 'utf-8').then((raw) => {
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) throw new Error(`${CHANGELOG_SOURCES_FILE} is not an array`);
+        const sources = parsed.filter(
+            (s) => s && typeof s.repo === 'string' && REPO_PATTERN.test(s.repo)
+        );
+        if (sources.length === 0) throw new Error(`${CHANGELOG_SOURCES_FILE} lists no usable repos`);
+        return sources;
+    });
+}
+
+// Exactly the shape the frontend renders — mirrors fetchRepoCommits in main.ts.
+function toChangelogEntry(commit, tool) {
+    const message = (commit && commit.commit && commit.commit.message) || '';
+    const lines = message.split('\n');
+    const committer = (commit && commit.commit && commit.commit.committer) || {};
+    const author = (commit && commit.commit && commit.commit.author) || {};
+    const iso = committer.date || author.date || '';
+    return {
+        sha: ((commit && commit.sha) || '').substring(0, 7),
+        date: iso.substring(0, 10),
+        iso,
+        title: lines[0] || '',
+        description: lines.slice(1).join('\n').replace(/^\n+/, '').trim(),
+        author: author.name || '',
+        tool: (tool || '').toString(),
+    };
+}
+
+async function fetchRepoCommits(config, source, branch) {
+    const url =
+        `${config.githubApiOrigin.replace(/\/+$/, '')}/repos/${source.repo}/commits` +
+        `?sha=${encodeURIComponent(branch)}&per_page=${CHANGELOG_PER_PAGE}`;
+    const commits = await fetchJson(url, {
+        accept: 'application/vnd.github+json',
+        'user-agent': CHANGELOG_USER_AGENT,
+    });
+    // Rate-limit and error payloads are objects ({message, ...}), not arrays.
+    if (!Array.isArray(commits)) throw new Error(`Unexpected GitHub payload for ${source.repo}`);
+    return commits.map((c) => toChangelogEntry(c, source.tool));
+}
+
+// All-or-nothing: one failing repo fails the whole refresh, so a partial feed
+// (a tool silently missing) can never reach the cache.
+async function fetchChangelog(config, branch) {
+    const sources = await readChangelogSources(config);
+    const perRepo = await Promise.all(sources.map((s) => fetchRepoCommits(config, s, branch)));
+    const merged = perRepo.flat();
+    merged.sort((a, b) => {
+        const byIso = (b.iso || '').localeCompare(a.iso || ''); // newest first
+        if (byIso !== 0) return byIso;
+        const byTool = a.tool.localeCompare(b.tool); // deterministic same-timestamp tiebreak
+        return byTool !== 0 ? byTool : a.sha.localeCompare(b.sha);
+    });
+    return merged.slice(0, CHANGELOG_MAX_ENTRIES);
+}
+
+// Per-server state: one cache entry and at most one in-flight refresh per branch.
+function createChangelogState() {
+    return { cache: new Map(), inFlight: new Map() };
+}
+
+function refreshChangelog(config, state, branch) {
+    const existing = state.inFlight.get(branch);
+    if (existing) return existing; // concurrent requests share one upstream round-trip
+
+    const pending = fetchChangelog(config, branch)
+        .then((entries) => {
+            state.cache.set(branch, { entries, ts: Date.now() });
+            return entries;
+        })
+        .finally(() => {
+            state.inFlight.delete(branch);
+        });
+
+    state.inFlight.set(branch, pending);
+    return pending;
+}
+
+// GET /changelog-live?branch=main|test — merged commit feed for the home page.
+// Sits behind Easy Auth like every other route; nothing here assumes anonymity.
+async function handleChangelog(res, config, state, search) {
+    const branch = new URLSearchParams(search).get('branch') || '';
+
+    if (!CHANGELOG_BRANCHES.includes(branch)) {
+        sendJson(res, 400, {
+            error: 'invalid_branch',
+            message: `branch must be one of: ${CHANGELOG_BRANCHES.join(', ')}.`,
+        });
+        return;
+    }
+
+    const cached = state.cache.get(branch);
+    if (cached && Date.now() - cached.ts < config.changelogTtlMs) {
+        sendJson(res, 200, cached.entries);
+        return;
+    }
+
+    try {
+        sendJson(res, 200, await refreshChangelog(config, state, branch));
+    } catch (e) {
+        console.error(`Changelog refresh failed (${branch}):`, e.message);
+        // Stale beats the days-old build-time snapshot the browser would use next.
+        if (cached) {
+            sendJson(res, 200, cached.entries);
+            return;
+        }
+        sendJson(res, 502, {
+            error: 'changelog_upstream_failed',
+            message: 'Could not reach the GitHub commit API.',
+        });
+    }
+}
+
 // ── Static files ─────────────────────────────────────────────────────────────
 // Vite emits content-hashed filenames under /assets/, so those can be cached
 // forever; HTML/JSON must always be revalidated or a browser keeps serving a
@@ -453,6 +646,8 @@ function serveStatic(req, res, config, pathname) {
 
 // ── Router ───────────────────────────────────────────────────────────────────
 function createRequestHandler(config) {
+    const changelogState = createChangelogState();
+
     return function handleRequest(req, res) {
         const url = req.url || '/';
         const queryIndex = url.indexOf('?');
@@ -478,14 +673,25 @@ function createRequestHandler(config) {
             return;
         }
 
-        // 3. Easy Auth owns /.auth/* at the platform level; if anything reaches
+        // 3. Cached GitHub commit feed for the "What's New" panel.
+        if (pathname === '/changelog-live') {
+            handleChangelog(res, config, changelogState, search).catch((e) => {
+                console.error('Changelog handler error:', e.message);
+                if (!res.headersSent) {
+                    sendJson(res, 500, { error: 'changelog_failed', message: 'Internal Server Error' });
+                }
+            });
+            return;
+        }
+
+        // 4. Easy Auth owns /.auth/* at the platform level; if anything reaches
         //    Node it must not be swallowed by the SPA fallback.
         if (pathname === '/.auth' || pathname.startsWith('/.auth/')) {
             notFound(res);
             return;
         }
 
-        // 4. /<tool>/api/* → that tool's Function App, /<tool> stripped so the
+        // 5. /<tool>/api/* → that tool's Function App, /<tool> stripped so the
         //    backends keep their default /api route prefix.
         const toolApi = /^\/([^/]+)(\/api(?:\/.*)?)$/.exec(pathname);
         if (toolApi && TOOLS.includes(toolApi[1])) {
@@ -493,20 +699,20 @@ function createRequestHandler(config) {
             return;
         }
 
-        // 5. /api/* → platform Function App (competitions registry).
+        // 6. /api/* → platform Function App (competitions registry).
         if (pathname === '/api' || pathname.startsWith('/api/')) {
             proxy(req, res, config, PLATFORM, pathname + search);
             return;
         }
 
-        // 6. /<tool> → /<tool>/ (guaranteed even before the dist exists).
+        // 7. /<tool> → /<tool>/ (guaranteed even before the dist exists).
         if (TOOLS.includes(pathname.slice(1))) {
             res.writeHead(301, { Location: pathname + '/' + search, 'Cache-Control': 'no-cache' });
             res.end();
             return;
         }
 
-        // 7. Static files + per-prefix SPA fallback.
+        // 8. Static files + per-prefix SPA fallback.
         serveStatic(req, res, config, pathname);
     };
 }
@@ -539,4 +745,6 @@ module.exports = {
     cacheControlFor,
     urlEnvVar,
     secretEnvVar,
+    CHANGELOG_BRANCHES,
+    CHANGELOG_MAX_ENTRIES,
 };

@@ -405,6 +405,20 @@ function changelogBranch(): string {
   return getEnvPrefix() === 'test.' ? 'test' : 'main';
 }
 
+/**
+ * Preferred source: the router's cached, merged commit feed (same origin).
+ * One GitHub round-trip per branch per 10 minutes for the whole site instead
+ * of four per browser, so nobody burns the 60 req/hr unauthenticated limit.
+ * Absent under `vite dev`, where there is no router — hence the fallbacks.
+ */
+async function fetchProxiedChangelog(): Promise<ChangelogEntry[]> {
+  const resp = await fetch(`/changelog-live?branch=${encodeURIComponent(changelogBranch())}`);
+  if (!resp.ok) throw new Error(`changelog-live ${resp.status}`);
+  const entries = await resp.json();
+  if (!Array.isArray(entries)) throw new Error('Unexpected changelog-live payload');
+  return entries.slice(0, CHANGELOG_DISPLAY_MAX);
+}
+
 /** Fetch recent commits for one source repo from the public GitHub API */
 async function fetchRepoCommits(source: ChangelogSource, branch: string): Promise<ChangelogEntry[]> {
   const url = `https://api.github.com/repos/${source.repo}/commits`
@@ -453,7 +467,7 @@ async function fetchLiveChangelog(): Promise<ChangelogEntry[]> {
 
 function readChangelogCache(): ChangelogEntry[] | null {
   try {
-    const raw = sessionStorage.getItem(CHANGELOG_CACHE_KEY);
+    const raw = localStorage.getItem(CHANGELOG_CACHE_KEY);
     if (!raw) return null;
     const { ts, entries } = JSON.parse(raw);
     if (typeof ts !== 'number' || !Array.isArray(entries)) return null;
@@ -466,12 +480,17 @@ function readChangelogCache(): ChangelogEntry[] | null {
 
 function writeChangelogCache(entries: ChangelogEntry[]): void {
   try {
-    sessionStorage.setItem(CHANGELOG_CACHE_KEY, JSON.stringify({ ts: Date.now(), entries }));
+    localStorage.setItem(CHANGELOG_CACHE_KEY, JSON.stringify({ ts: Date.now(), entries }));
   } catch (_e) {
-    // sessionStorage disabled or quota exceeded — ignore
+    // localStorage disabled or quota exceeded — ignore
   }
 }
 
+/**
+ * Cache → router proxy → direct GitHub → build-time snapshot.
+ * Each step is strictly staler than the one before it, so the panel degrades
+ * instead of disappearing.
+ */
 async function loadChangelog() {
   const container = document.getElementById('changelog-entries');
   if (!container) return;
@@ -480,18 +499,24 @@ async function loadChangelog() {
 
   if (!entries) {
     try {
-      entries = await fetchLiveChangelog();
+      entries = await fetchProxiedChangelog();
       writeChangelogCache(entries);
     } catch (_e) {
-      // Live fetch failed (offline, rate-limited, repo went private) —
-      // fall back to the changelog.json generated at deploy time.
       try {
-        const resp = await fetch('/changelog.json');
-        if (!resp.ok) throw new Error('Not found');
-        entries = (await resp.json() as ChangelogEntry[]).slice(0, CHANGELOG_DISPLAY_MAX);
+        // No router (vite dev) or it could not reach GitHub either.
+        entries = await fetchLiveChangelog();
+        writeChangelogCache(entries);
       } catch (_e2) {
-        container.innerHTML = '<p class="text-secondary">Changelog not available.</p>';
-        return;
+        // Offline, rate-limited or a repo went private — fall back to the
+        // changelog.json generated at deploy time.
+        try {
+          const resp = await fetch('/changelog.json');
+          if (!resp.ok) throw new Error('Not found');
+          entries = (await resp.json() as ChangelogEntry[]).slice(0, CHANGELOG_DISPLAY_MAX);
+        } catch (_e3) {
+          container.innerHTML = '<p class="text-secondary">Changelog not available.</p>';
+          return;
+        }
       }
     }
   }
