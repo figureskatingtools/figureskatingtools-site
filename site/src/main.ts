@@ -226,7 +226,8 @@ function renderCompetitionPanel(competitions: PlatformCompetition[] | null): voi
    deletion. The whole section is optional: a pool API that is missing, failing
    or empty renders nothing at all. */
 
-/** `1.4 MB` / `812 kB` / `— ` for an unknown size */
+/** `1.4 MB` / `812 kB` — or `''` for an unknown size, so the caller's
+ *  `filter(Boolean)` drops the segment instead of rendering a dangling dash. */
 function formatFileSize(bytes: number): string {
   if (!bytes) return '';
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
