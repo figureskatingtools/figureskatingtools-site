@@ -11,6 +11,11 @@ export interface FileMeta {
   size: number;
   uploadedAt: string;
   blob?: string;
+  /** Placed into its slot by filename recognition, not by hand — shown as the
+   * `auto` pill and cleared server-side as soon as the user drags the chip. */
+  autoAssigned?: boolean;
+  /** Name of the competition-pool file this copy was imported from. */
+  poolName?: string;
 }
 
 export interface PageRef {

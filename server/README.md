@@ -17,11 +17,12 @@ site root/
 | --- | --- | --- |
 | 1 | `/health` | `200 {"ok":true}`. Assumes nothing about auth — list it in Easy Auth `globalValidation.excludedPaths`. |
 | 2 | `/userinfo` | Flat user object decoded from the Easy Auth `X-MS-CLIENT-PRINCIPAL` header (no tokens are ever exposed). |
-| 3 | `/.auth`, `/.auth/*` | `404` — Easy Auth owns these at the platform level; the router must never swallow them into the SPA fallback. |
-| 4 | `/<tool>/api/*` | Proxied to that tool's Function App with the `/<tool>` prefix **stripped**: `/judgepapers/api/upload_file` → `$FUNCTION_APP_URL_JUDGEPAPERS/api/upload_file`. Backends keep their default `/api` route prefix — zero backend route changes. |
-| 5 | `/api/*` | Proxied to the platform Function App (competitions registry). |
-| 6 | `/<tool>` | `301` → `/<tool>/` (query string preserved). |
-| 7 | anything else | Static file from `public/`, else a **per-prefix** SPA fallback. |
+| 3 | `/changelog-live?branch=main\|test` | Merged, server-cached GitHub commit feed for the home page's "What's New" panel (see below). |
+| 4 | `/.auth`, `/.auth/*` | `404` — Easy Auth owns these at the platform level; the router must never swallow them into the SPA fallback. |
+| 5 | `/<tool>/api/*` | Proxied to that tool's Function App with the `/<tool>` prefix **stripped**: `/judgepapers/api/upload_file` → `$FUNCTION_APP_URL_JUDGEPAPERS/api/upload_file`. Backends keep their default `/api` route prefix — zero backend route changes. |
+| 6 | `/api/*` | Proxied to the platform Function App (competitions registry). |
+| 7 | `/<tool>` | `301` → `/<tool>/` (query string preserved). |
+| 8 | anything else | Static file from `public/`, else a **per-prefix** SPA fallback. |
 
 `<tool>` ∈ `judgepapers`, `scoremodifier`, `protocolgenerator`.
 
@@ -59,6 +60,35 @@ site root/
   `{"error":"proxy_target_not_configured","tool":"scoremodifier","message":"… set FUNCTION_APP_URL_SCOREMODIFIER."}`
 - `http://` targets are supported (local `func start`), `https://` targets use
   port 443 by default.
+
+### `/changelog-live`
+
+The "What's New" panel used to call `api.github.com` from every browser: four
+repos per page load against an unauthenticated 60 req/hr **per client IP**
+budget. The router does it instead.
+
+- Repos come from `public/changelog-sources.json` — the same file the browser
+  reads — re-read on every refresh (it is a few hundred bytes).
+- Per repo: `GET /repos/<repo>/commits?sha=<branch>&per_page=20` with
+  `Accept: application/vnd.github+json` and a `User-Agent` (GitHub rejects calls
+  without one). Commits are mapped to the entry shape the frontend renders
+  (`sha` first 7, `date`, `iso`, `title`, `description`, `author`, `tool`),
+  merged, sorted newest-first and sliced to 20.
+- `branch` must be `main` or `test`; anything else (including a missing value)
+  is `400 {"error":"invalid_branch"}` and never reaches GitHub.
+- **In-memory cache per branch, TTL 10 min.** Concurrent requests during a
+  refresh share one upstream round-trip, so a traffic spike is still four
+  GitHub calls.
+- All-or-nothing: one failing repo fails the whole refresh, so a partial feed
+  (a tool silently missing) can never be cached. On failure a previous good
+  result is served **stale** if there is one — staleness beats the browser
+  dropping to the days-old build-time `/changelog.json`; with nothing cached
+  it is `502 {"error":"changelog_upstream_failed"}`.
+- Behind Easy Auth like every other route — it is **not** in the `/health`
+  exclusion list.
+
+Nothing here is env-configurable; the GitHub origin and TTL are constants on
+the config object (tests override them).
 
 ## Environment variables
 
@@ -158,8 +188,10 @@ mock upstream and a temp `public/` fixture. Coverage: `/health`; `/userinfo`
 with, without and with a malformed principal, plus `DEV_FAKE_USER`; prefix
 stripping and per-tool header injection; a 6 MiB upload / 4 MiB download
 streamed through the proxy and hash-compared; root statics vs per-prefix SPA
-fallback; per-prefix CSP; the `/<tool>` → `/<tool>/` redirect; and the `502`
-for an unconfigured backend.
+fallback; per-prefix CSP; the `/<tool>` → `/<tool>/` redirect; the `502`
+for an unconfigured backend; and `/changelog-live` (mapping/sorting/slice,
+branch validation, cache hit, stale-on-failure, in-flight dedup, `502` with an
+empty cache) against a stub GitHub.
 
 > Note: `node --test server/` (bare directory argument) is not supported by the
 > Node 22.17 build in use here — it tries to `require` the directory. Use one of

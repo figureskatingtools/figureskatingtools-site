@@ -8,7 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const { createServer, loadConfig, buildCsp } = require('./server.js');
+const { createServer, loadConfig, buildCsp, CHANGELOG_MAX_ENTRIES } = require('./server.js');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -483,6 +483,300 @@ test('buildCsp is stable and prefix-specific', () => {
     assert.notEqual(buildCsp('judgepapers'), buildCsp(''));
     assert.notEqual(buildCsp('protocolgenerator'), buildCsp('judgepapers'));
     assert.equal(buildCsp('judgepapers'), buildCsp('scoremodifier'));
+});
+
+// ── /changelog-live ──────────────────────────────────────────────────────────
+
+const SOURCES = [
+    { repo: 'figureskatingtools/fs-alpha', tool: 'Alpha' },
+    { repo: 'figureskatingtools/fs-beta', tool: 'Beta' },
+];
+
+// public/ tree carrying only what the changelog route reads.
+function makeChangelogFixture(sources = SOURCES) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fst-changelog-'));
+    fs.writeFileSync(path.join(dir, 'changelog-sources.json'), JSON.stringify(sources));
+    return dir;
+}
+
+// Minimal GitHub commit object, only the fields the mapper reads.
+function commitFixture(sha, iso, message, author = 'Committer Person') {
+    return {
+        sha,
+        commit: {
+            message,
+            author: { name: author, date: iso },
+            committer: { name: 'Ignored Committer', date: iso },
+        },
+    };
+}
+
+// `count` commits, one per minute, newest last. `minuteOffset` interleaves repos.
+function commitsFor(prefix, count, minuteOffset) {
+    return Array.from({ length: count }, (_, i) => {
+        const iso = new Date(Date.UTC(2026, 7, 1, 0, i * 2 + minuteOffset)).toISOString();
+        return commitFixture(`${prefix}${String(i).padStart(4, '0')}deadbeef`, iso, `${prefix} commit ${i}`);
+    }).reverse(); // GitHub returns newest first
+}
+
+// Stand-in for api.github.com. `state.fail` flips it to 500s; `state.hold`
+// parks responses so concurrency can be observed.
+async function startFakeGitHub(commitsByRepo) {
+    const state = { fail: false, hold: false, held: [] };
+    const upstream = await startUpstream((req, res) => {
+        const respond = () => {
+            if (state.fail) {
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end('{"message":"API rate limit exceeded"}');
+                return;
+            }
+            const repo = /^\/repos\/([^/]+\/[^/]+)\/commits$/.exec(req.url.split('?')[0]);
+            const commits = repo && commitsByRepo[repo[1]];
+            if (!commits) {
+                res.writeHead(404, { 'Content-Type': 'application/json' });
+                res.end('{"message":"Not Found"}');
+                return;
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify(commits));
+        };
+        if (state.hold) state.held.push(respond);
+        else respond();
+    });
+    return {
+        ...upstream,
+        state,
+        release() {
+            const pending = state.held.splice(0);
+            for (const respond of pending) respond();
+            return pending.length;
+        },
+    };
+}
+
+async function startChangelogRouter(github, overrides = {}) {
+    const publicDir = makeChangelogFixture(overrides.sources);
+    delete overrides.sources;
+    const started = await startRouter({ publicDir, githubApiOrigin: github.url, ...overrides });
+    return { ...started, publicDir };
+}
+
+function waitFor(predicate, timeoutMs = 2000) {
+    const deadline = Date.now() + timeoutMs;
+    return new Promise((resolve, reject) => {
+        const tick = () => {
+            if (predicate()) return resolve();
+            if (Date.now() > deadline) return reject(new Error('waitFor timed out'));
+            setTimeout(tick, 10);
+        };
+        tick();
+    });
+}
+
+test('GET /changelog-live merges repos, maps commit shape, sorts newest-first and caps at 20', async () => {
+    const github = await startFakeGitHub({
+        'figureskatingtools/fs-alpha': [
+            commitFixture('abcdef1234567890', '2026-08-02T10:00:00Z', 'Alpha headline\n\n- did a thing\n- did another', 'Alpha Author'),
+            ...commitsFor('alpha', 12, 0),
+        ],
+        'figureskatingtools/fs-beta': commitsFor('beta', 12, 1),
+    });
+    const { server, port, publicDir } = await startChangelogRouter(github);
+    try {
+        const res = await request(port, '/changelog-live?branch=main');
+        assert.equal(res.status, 200);
+        assert.match(res.headers['content-type'], /application\/json/);
+
+        const entries = json(res);
+        assert.ok(Array.isArray(entries));
+        assert.equal(entries.length, CHANGELOG_MAX_ENTRIES);
+
+        // Newest commit overall, fully mapped.
+        assert.deepEqual(entries[0], {
+            sha: 'abcdef1',
+            date: '2026-08-02',
+            iso: '2026-08-02T10:00:00Z',
+            title: 'Alpha headline',
+            description: '- did a thing\n- did another',
+            author: 'Alpha Author',
+            tool: 'Alpha',
+        });
+
+        // Strictly newest-first, and both tools survive the merge.
+        const isos = entries.map((e) => e.iso);
+        assert.deepEqual(isos, [...isos].sort().reverse());
+        assert.ok(entries.some((e) => e.tool === 'Alpha'));
+        assert.ok(entries.some((e) => e.tool === 'Beta'));
+
+        // One upstream call per source, with the branch and GitHub headers.
+        assert.equal(github.received.length, 2);
+        for (const seen of github.received) {
+            assert.match(seen.url, /\/commits\?sha=main&per_page=20$/);
+            assert.equal(seen.headers['accept'], 'application/vnd.github+json');
+            assert.ok(seen.headers['user-agent']);
+        }
+    } finally {
+        await close(server);
+        await close(github.server);
+        fs.rmSync(publicDir, { recursive: true, force: true });
+    }
+});
+
+test('GET /changelog-live rejects any branch other than main/test', async () => {
+    const github = await startFakeGitHub({});
+    const { server, port, publicDir } = await startChangelogRouter(github);
+    try {
+        for (const query of ['?branch=evil', '?branch=', '', '?branch=main%2Ftest']) {
+            const res = await request(port, `/changelog-live${query}`);
+            assert.equal(res.status, 400, `expected 400 for "${query}"`);
+            assert.match(res.headers['content-type'], /application\/json/);
+            assert.equal(json(res).error, 'invalid_branch');
+        }
+        // Nothing invalid ever reaches GitHub.
+        assert.equal(github.received.length, 0);
+
+        assert.equal((await request(port, '/changelog-live?branch=test')).status, 502);
+    } finally {
+        await close(server);
+        await close(github.server);
+        fs.rmSync(publicDir, { recursive: true, force: true });
+    }
+});
+
+test('GET /changelog-live returns 502 when GitHub fails and nothing is cached', async () => {
+    const github = await startFakeGitHub({
+        'figureskatingtools/fs-alpha': commitsFor('alpha', 2, 0),
+        'figureskatingtools/fs-beta': commitsFor('beta', 2, 1),
+    });
+    github.state.fail = true;
+    const { server, port, publicDir } = await startChangelogRouter(github);
+    try {
+        const res = await request(port, '/changelog-live?branch=main');
+        assert.equal(res.status, 502);
+        assert.equal(json(res).error, 'changelog_upstream_failed');
+    } finally {
+        await close(server);
+        await close(github.server);
+        fs.rmSync(publicDir, { recursive: true, force: true });
+    }
+});
+
+test('a single failing repo fails the whole refresh — partial feeds never get cached', async () => {
+    const github = await startFakeGitHub({
+        // fs-beta is missing → 404 for that repo only.
+        'figureskatingtools/fs-alpha': commitsFor('alpha', 2, 0),
+    });
+    const { server, port, publicDir } = await startChangelogRouter(github);
+    try {
+        assert.equal((await request(port, '/changelog-live?branch=main')).status, 502);
+    } finally {
+        await close(server);
+        await close(github.server);
+        fs.rmSync(publicDir, { recursive: true, force: true });
+    }
+});
+
+test('a fresh cache entry is served without touching GitHub again', async () => {
+    const github = await startFakeGitHub({
+        'figureskatingtools/fs-alpha': commitsFor('alpha', 3, 0),
+        'figureskatingtools/fs-beta': commitsFor('beta', 3, 1),
+    });
+    const { server, port, publicDir } = await startChangelogRouter(github);
+    try {
+        const first = await request(port, '/changelog-live?branch=main');
+        assert.equal(first.status, 200);
+        assert.equal(github.received.length, 2);
+
+        const second = await request(port, '/changelog-live?branch=main');
+        assert.equal(second.status, 200);
+        assert.deepEqual(json(second), json(first));
+        assert.equal(github.received.length, 2, 'cache hit must not re-fetch');
+
+        // A different branch is cached separately.
+        const other = await request(port, '/changelog-live?branch=test');
+        assert.equal(other.status, 200);
+        assert.equal(github.received.length, 4);
+        assert.match(github.received[2].url, /sha=test/);
+    } finally {
+        await close(server);
+        await close(github.server);
+        fs.rmSync(publicDir, { recursive: true, force: true });
+    }
+});
+
+test('an expired cache entry is served stale when the refresh fails', async () => {
+    const github = await startFakeGitHub({
+        'figureskatingtools/fs-alpha': commitsFor('alpha', 3, 0),
+        'figureskatingtools/fs-beta': commitsFor('beta', 3, 1),
+    });
+    // TTL 0: every request re-fetches, so the second one exercises the stale path.
+    const { server, port, publicDir } = await startChangelogRouter(github, { changelogTtlMs: 0 });
+    try {
+        const good = await request(port, '/changelog-live?branch=main');
+        assert.equal(good.status, 200);
+        assert.equal(json(good).length, 6);
+
+        github.state.fail = true;
+        const stale = await request(port, '/changelog-live?branch=main');
+        assert.equal(stale.status, 200, 'stale data beats the days-old build-time snapshot');
+        assert.deepEqual(json(stale), json(good));
+    } finally {
+        await close(server);
+        await close(github.server);
+        fs.rmSync(publicDir, { recursive: true, force: true });
+    }
+});
+
+test('concurrent requests share one refresh instead of stampeding GitHub', async () => {
+    const github = await startFakeGitHub({
+        'figureskatingtools/fs-alpha': commitsFor('alpha', 3, 0),
+        'figureskatingtools/fs-beta': commitsFor('beta', 3, 1),
+    });
+    github.state.hold = true;
+    // TTL 0 so no request can be answered from cache — only the in-flight
+    // memoisation can keep the upstream count down.
+    const { server, port, publicDir } = await startChangelogRouter(github, { changelogTtlMs: 0 });
+    try {
+        const inFlight = [
+            request(port, '/changelog-live?branch=main'),
+            request(port, '/changelog-live?branch=main'),
+            request(port, '/changelog-live?branch=main'),
+        ];
+
+        // Two upstream calls (one per repo) for three client requests.
+        await waitFor(() => github.state.held.length >= 2);
+        await new Promise((r) => setTimeout(r, 50)); // give a stampede time to show up
+        assert.equal(github.state.held.length, 2);
+
+        github.release();
+        const responses = await Promise.all(inFlight);
+        for (const res of responses) {
+            assert.equal(res.status, 200);
+            assert.deepEqual(json(res), json(responses[0]));
+        }
+        assert.equal(github.received.length, 2);
+    } finally {
+        await close(server);
+        await close(github.server);
+        fs.rmSync(publicDir, { recursive: true, force: true });
+    }
+});
+
+test('/changelog-live 502s when the sources file is missing', async () => {
+    const github = await startFakeGitHub({});
+    const { server, port } = await startRouter({
+        publicDir: path.join(os.tmpdir(), 'fst-no-such-dir'),
+        githubApiOrigin: github.url,
+    });
+    try {
+        const res = await request(port, '/changelog-live?branch=main');
+        assert.equal(res.status, 502);
+        assert.equal(json(res).error, 'changelog_upstream_failed');
+        assert.equal(github.received.length, 0);
+    } finally {
+        await close(server);
+        await close(github.server);
+    }
 });
 
 // ── Config contract ──────────────────────────────────────────────────────────

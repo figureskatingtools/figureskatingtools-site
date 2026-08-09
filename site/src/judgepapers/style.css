@@ -866,6 +866,92 @@ input[type="checkbox"] {
   color: var(--error-color);
 }
 
+/* ── Shared competition file pool (files uploaded in another tool) ── */
+.pool-import {
+  margin: 1.25rem 0;
+  padding: 0.9rem 1rem;
+  background: var(--paper-tint);
+  border: 1px dashed var(--line-strong);
+  border-radius: 0.5rem;
+}
+
+.pool-import-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  cursor: pointer;
+  list-style: none; /* hide the default disclosure marker; the chevron below replaces it */
+  user-select: none;
+}
+.pool-import-head::-webkit-details-marker { display: none; }
+
+.pool-import-head::before {
+  content: '▸';
+  font-size: 0.7rem;
+  color: var(--ink-faint);
+  transition: transform 0.15s;
+}
+.pool-import[open] > .pool-import-head::before { transform: rotate(90deg); }
+
+.pool-import-title {
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.pool-import-count {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+}
+
+.pool-import-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.pool-import-sub {
+  margin: 0.35rem 0 0.6rem;
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+
+.pool-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  max-height: 14rem;
+  overflow-y: auto;
+  padding-right: 0.25rem;
+}
+
+.pool-file {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.pool-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pool-file-src {
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
 /* ── Generated files — download tickets ── */
 .action-container {
   margin-top: 2rem;
@@ -881,6 +967,13 @@ input[type="checkbox"] {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+/* Verify-before-generate reminder above the Generate button. */
+.generate-note {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--ink-muted);
 }
 
 .right-panel {

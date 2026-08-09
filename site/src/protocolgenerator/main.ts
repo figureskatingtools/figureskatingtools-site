@@ -8,6 +8,19 @@ import {
   competitionLabel,
   formatDateFi,
   subscribeActiveCompetition,
+  listCompetitionFiles,
+  uploadCompetitionFile,
+  sortCategoriesForMatching,
+  matchCategory,
+  planAutoAssignment,
+  applyOutcomeLocally,
+  stripTrailingDashes,
+  type CategoryInfo,
+  type AutoAssignOutcome,
+  type AutoAssignTarget,
+  type StructureLike,
+  type TrayReason,
+  type PoolFile,
 } from '@figureskatingtools/shared-ui';
 import type { CompetitionDetails, Structure, Category, Segment, SlotTarget, FileMeta } from './types';
 import { attachPreview } from './preview';
@@ -40,6 +53,12 @@ let boundPlatformId: string | null = null;
 /** Guards against an out-of-order resolve when the selection changes mid-flight. */
 let bindToken = 0;
 let details: CompetitionDetails | null = null;
+/** Files in the platform competition pool; null = unbound or pool unavailable. */
+let poolFiles: PoolFile[] | null = null;
+/** Set once the pool proves unusable for this competition (unbound, off, down). */
+let poolDisabled = false;
+/** The "uploaded to this tool only" notice is worth saying once, not per file. */
+let poolNoticeShown = false;
 const openCats = new Set<string>();
 /** Collapsed-by-default state of the "Team rosters" per-category groups. */
 const openRosterCats = new Set<string>();
@@ -89,8 +108,11 @@ const APP_HTML = `
                   <li>Upload the competition's <strong>schedule</strong> (PDF or DT_SCHEDULE XML) — it builds the categories and segments automatically.</li>
                   <li>Fill in the <strong>event details</strong> (organiser, venue, dates); they feed the cover and information pages.</li>
                   <li>Drop each category's result PDFs and photos onto their <strong>slots</strong>; drag between slots to fix placements, and hover a file to preview it.</li>
+                  <li>Files exported from <strong>Figure Skating Manager</strong> are recognized by their file name and placed into the right category and segment automatically — placed files carry an <strong>auto</strong> tag. <strong>Auto-place files</strong> retries recognition for anything still in Uploads.</li>
+                  <li><strong>Competition files</strong> are shared between the tools: PDFs uploaded for the same competition in Judge Paper Creator can be imported from the Uploads section without re-uploading.</li>
                   <li>Required files (marked <span class="req">•</span>) drive each category's <em>"n/n uploaded"</em> readiness badge.</li>
                   <li>For synchronized skating, import the <strong>DT_PARTIC</strong> team rosters to add team pages.</li>
+                  <li>Before generating, <strong>check every auto-tagged file</strong> — automatic placement goes by file name, so confirm each one sits in the right slot. Dragging a file by hand clears its tag.</li>
                   <li>Press <strong>Generate Protocol</strong> to build the bound PDF; download or delete generated protocols from the list below.</li>
                 </ul>
               </span></span>
@@ -131,8 +153,9 @@ function showPickCompetition() {
       every tool works on the same selected competition.</p>
     <ol class="howto-list">
       <li>Upload the competition's <strong>schedule</strong> (DT_SCHEDULE XML or PDF).</li>
-      <li>Fill in the event details and drop result PDFs and photos into the slots.</li>
-      <li>Drag files between slots to fix placements; hover to preview.</li>
+      <li>Fill in the event details and drop in the result PDFs and photos — Figure Skating Manager
+        exports are recognized by name and placed automatically with an <strong>auto</strong> tag.</li>
+      <li>Check the auto-tagged files and drag any file between slots to fix placements; hover to preview.</li>
       <li>Press <strong>Generate Protocol</strong> to build the bound PDF.</li>
     </ol>`);
 }
@@ -172,11 +195,17 @@ async function bindActiveCompetition(force = false): Promise<void> {
     boundPlatformId = null;
     currentId = null;
     details = null;
+    poolFiles = null;
     showPickCompetition();
     return;
   }
 
   if (!force && active.id === boundPlatformId) return;
+
+  // Pool availability is per competition (a tool record can be unbound) — a new
+  // selection gets a clean slate.
+  poolFiles = null;
+  poolDisabled = false;
 
   const label = competitionLabel(active);
   showBindLoading(label);
@@ -300,6 +329,7 @@ async function loadDetails() {
     const resp = await apiGet(`/get_competition_details?id=${encodeURIComponent(currentId)}`);
     if (!resp.ok) throw new Error(String(resp.status));
     details = await resp.json();
+    await refreshPoolFiles();
     renderDetails();
   } catch {
     document.getElementById('detail-body')!.innerHTML = '<p class="text-error">Failed to load competition.</p>';
@@ -319,9 +349,13 @@ function chipHtml(fileId: string): string {
   const m = fileMeta(fileId);
   if (!m) return '';
   const kindClass = m.kind === 'image' ? 'chip-kind--image' : m.kind === 'xml' ? 'chip-kind--xml' : '';
+  const autoPill = m.autoAssigned
+    ? '<span class="chip-auto" title="Placed automatically from the filename — drag to move it, or leave it to confirm">auto</span>'
+    : '';
   return `<span class="file-chip" draggable="true" data-file-id="${escapeHtml(fileId)}">
       <span class="chip-kind ${kindClass}">${escapeHtml(m.kind)}</span>
       <span class="chip-name" title="${escapeHtml(m.filename)}">${escapeHtml(m.filename)}</span>
+      ${autoPill}
       <button class="chip-x" data-del-file="${escapeHtml(fileId)}" title="Delete file">×</button>
     </span>`;
 }
@@ -583,6 +617,7 @@ function categoryHtml(cat: Category): string {
 
 function renderDetails() {
   if (!details) return;
+  ensureAutoPlaceReady();
   const s: Structure = details.structure;
   document.getElementById('detail-title')!.textContent = s.name;
   renderRetention(details.deletionDate);
@@ -597,6 +632,10 @@ function renderDetails() {
   const trayChips = details.unassigned.length
     ? details.unassigned.map(chipHtml).join('')
     : '<span class="tray-empty">No unassigned files. Uploads land here, then drag them into slots.</span>';
+
+  // The tag only survives on files whose automatic slot assignment succeeded,
+  // so this is exactly the set the user should verify before generating.
+  const autoTagged = Object.values(s.files || {}).filter(m => m.autoAssigned).length;
 
   const scheduleSection = s.scheduleParsed
     ? `<p class="section-sub">${(s.categories || []).length} categories parsed from the schedule.
@@ -663,13 +702,20 @@ function renderDetails() {
 
     <div class="section">
       <div class="section-head"><h3>Uploads</h3>
-        <button class="btn btn-xs btn-primary" id="tray-browse">Upload files…</button>
-        <input type="file" id="tray-input" multiple accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.xml" style="display:none;">
+        <div class="section-head-actions">
+          ${autoPlaceButtonHtml()}
+          <button class="btn btn-xs btn-primary" id="tray-browse">Upload files…</button>
+          <input type="file" id="tray-input" multiple accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.xml" style="display:none;">
+        </div>
       </div>
-      <p class="section-sub">Drop PDFs and photos here or into any slot; drag chips between slots to move them.</p>
+      <p class="section-sub">Drop PDFs and photos here or into any slot — Figure Skating Manager exports
+        are recognized by their file name and placed automatically with an <strong>auto</strong> tag.
+        <strong>Auto-place files</strong> retries recognition for everything still here;
+        drag chips between slots to move them.</p>
       <div class="tray" data-target='${attr({ kind: 'tray' })}'>
         <div class="tray-chips">${trayChips}</div>
       </div>
+      ${poolImportHtml()}
     </div>
 
     <div class="section">
@@ -732,6 +778,9 @@ function renderDetails() {
       ${rosterReportHtml(s)}
     </div>` : ''}
 
+    ${autoTagged ? `<p class="auto-check-note">${autoTagged} file${autoTagged === 1 ? ' was' : 's were'}
+      placed automatically (<span class="chip-auto">auto</span>) — check they sit in the right slots
+      before generating. Dragging a file by hand confirms it and clears the tag.</p>` : ''}
     <div class="action-bar">
       <div class="gen-list">${genHtml}</div>
       <button class="btn btn-primary btn-generate" id="btn-generate">Generate Protocol</button>
@@ -892,6 +941,20 @@ function wireDetail() {
   trayBrowse?.addEventListener('click', () => trayInput?.click());
   trayInput?.addEventListener('change', () => { if (trayInput.files?.length) uploadFiles(trayInput.files); trayInput.value = ''; });
 
+  // Place recognized tray files into their slots in one go.
+  document.getElementById('btn-auto-place')?.addEventListener('click', () => void autoPlaceTrayFiles());
+
+  // Import files another tool (or FSM) put in this competition's shared pool.
+  document.getElementById('btn-pool-import')?.addEventListener('click', () => void importPoolFiles());
+  document.querySelector('.pool-import .pool-file-list')?.addEventListener('change', syncPoolImportButton);
+  document.getElementById('btn-pool-select-all')?.addEventListener('click', (e) => {
+    const all = poolChecks();
+    const everySelected = all.length > 0 && all.every(c => c.checked);
+    all.forEach(c => { c.checked = !everySelected; });
+    (e.currentTarget as HTMLButtonElement).textContent = everySelected ? 'Select all' : 'Clear selection';
+    syncPoolImportButton();
+  });
+
   // Delete a generated protocol file.
   body.querySelectorAll<HTMLElement>('[data-del-protocol]').forEach(b =>
     b.addEventListener('click', () => deleteProtocol(b.dataset.delProtocol!)));
@@ -938,13 +1001,369 @@ async function assignFile(fileId: string, target: SlotTarget) {
   try {
     const resp = await apiJson('/assign_file', { id: currentId, fileId, target });
     if (!resp.ok) { alert('Could not move file: ' + (await resp.text())); return; }
+    await learnFromManualAssign(fileId, target);
     await loadDetails();
   } catch { alert('Network error moving file.'); }
 }
 
+/** Category-scoped slots: dropping into one names the file's category. */
+const LEARNABLE_KINDS: ReadonlySet<SlotTarget['kind']> = new Set(['categoryTitle', 'totalResults', 'segment']);
+
+/**
+ * One manual drag teaches the category. The user just told us this file belongs
+ * to this category, so its filename's abbreviation is the category's code —
+ * stamp it and every sibling file matches by code from then on. Silent when
+ * recognition is unavailable or the filename says nothing.
+ */
+async function learnFromManualAssign(fileId: string, target: SlotTarget): Promise<void> {
+  if (!LEARNABLE_KINDS.has(target.kind) || !categoryNeedsCode(target.categoryId)) return;
+  const filename = fileMeta(fileId)?.filename;
+  if (!filename) return;
+  const categories = await loadJpCategories();
+  if (!categories) return;
+  const matched = matchCategory(filename, categories);
+  if (matched?.abbreviation) await stampCategoryCode(target.categoryId!, matched.abbreviation);
+}
+
+/* ── filename recognition → automatic slot placement ──
+   Judge Papers owns the `categories` table that turns an FSM export filename
+   into a category; this tool reads the very same table through that tool's API
+   prefix (the router proxies each prefix to its own backend), so a category
+   added there works here with no code change. The table being unreachable is
+   not an error: recognition simply switches off and every file lands in the
+   tray, exactly as before this feature existed. */
+
+const JP_CATEGORIES_URL = '/judgepapers/api/get_categories';
+
+/** In-flight/settled memo — the table is fetched at most once per page load. */
+let jpCategories: Promise<CategoryInfo[] | null> | null = null;
+
+function loadJpCategories(): Promise<CategoryInfo[] | null> {
+  if (!jpCategories) {
+    jpCategories = (async () => {
+      try {
+        const resp = await fetch(JP_CATEGORIES_URL, { headers: { Accept: 'application/json' } });
+        if (!resp.ok) return null;
+        const rows = await resp.json();
+        return Array.isArray(rows) && rows.length
+          ? sortCategoriesForMatching(rows as CategoryInfo[])
+          : null;
+      } catch {
+        return null;
+      }
+    })();
+  }
+  return jpCategories;
+}
+
+/** Whether recognition is known to work — the "Auto-place files" button must
+ * not offer what it cannot do. Resolving it is async, so the first usable
+ * answer re-renders the view (once: the flag only ever goes true). */
+let autoPlaceReady = false;
+
+function ensureAutoPlaceReady(): void {
+  if (autoPlaceReady) return;
+  void loadJpCategories().then(cats => {
+    if (!cats || autoPlaceReady) return;
+    autoPlaceReady = true;
+    renderDetails();
+  });
+}
+
+/** Offered only when there is something to place, somewhere to place it, and a
+ * category table to place it with. */
+function autoPlaceButtonHtml(): string {
+  if (!details || !details.unassigned.length) return '';
+  if (!(details.structure.categories || []).length || !autoPlaceReady) return '';
+  return '<button class="btn btn-xs btn-ghost" id="btn-auto-place">Auto-place files</button>';
+}
+
+/** How the summary toast names each reason a file stayed in the tray. */
+const TRAY_REASON_LABEL: Record<TrayReason, string> = {
+  'unrecognized': 'unrecognized',
+  'not-for-protocol': 'not used in protocols',
+  'unknown-suffix': 'unknown file kind',
+  'ambiguous-category': 'category unclear',
+  'ambiguous-segment': 'segment unclear',
+  'slot-occupied': 'slot occupied',
+};
+
+/**
+ * Plan a whole batch at once. Each outcome is applied to a **clone** of the
+ * rendered structure, so two files in the same drop can never be sent to the
+ * same slot. Null = recognition unavailable; the caller uploads as before.
+ */
+async function planBatch(names: string[]): Promise<AutoAssignOutcome[] | null> {
+  if (!details || !names.length) return null;
+  const categories = await loadJpCategories();
+  if (!categories) return null;
+  const working: StructureLike = structuredClone(details.structure);
+  return names.map(name => {
+    const outcome = planAutoAssignment(name, categories, working);
+    applyOutcomeLocally(working, outcome, name);
+    return outcome;
+  });
+}
+
+/** Add a planned placement's slot params (the backend tags only if it sticks). */
+function applyAutoParams(params: URLSearchParams, outcome: AutoAssignOutcome | undefined): void {
+  if (!outcome || outcome.action !== 'assign') return;
+  const t = outcome.target;
+  params.set('slotKind', t.kind);
+  params.set('categoryId', t.categoryId);
+  if (t.segmentId) params.set('segmentId', t.segmentId);
+  if (t.role) params.set('role', t.role);
+  params.set('autoAssigned', '1');
+}
+
+/* ── learned category codes ──
+   A schedule PDF gives its categories no ISU code, so the very first file of
+   each has to be recognized by *name*. Stamping the abbreviation that match
+   proved onto the code-less category turns every sibling file into a cheap,
+   unambiguous code match — a category learns its code once, from whichever
+   file (or manual drag) got there first. Failing to stamp costs nothing: the
+   next batch simply matches by name again. */
+
+/** Does this category still have no ISU code? (`----` padding counts as none,
+ * exactly as the planner's own code matching reads it.) */
+function categoryNeedsCode(categoryId: string | undefined): boolean {
+  if (!categoryId || !details) return false;
+  const cat = details.structure.categories?.find(c => c.id === categoryId);
+  return !!cat && !stripTrailingDashes(cat.code);
+}
+
+/** Write a learned code; never fatal, so callers don't guard it. */
+async function stampCategoryCode(categoryId: string, code: string): Promise<void> {
+  if (!currentId) return;
+  try {
+    await apiJson('/edit_structure', { id: currentId, op: 'set_category', categoryId, code });
+  } catch { /* ignore — recognition keeps working by name */ }
+}
+
+/** Stamp the codes a planned batch learned: one call per category, at most. */
+async function stampLearnedCodes(outcomes: (AutoAssignOutcome | undefined)[]): Promise<void> {
+  const learned = new Map<string, string>();
+  outcomes.forEach(o => {
+    if (!o || o.action !== 'assign') return;
+    const { categoryId, categoryCode, matchedBy } = o.target;
+    if (matchedBy !== 'name' || !categoryCode || learned.has(categoryId)) return;
+    if (categoryNeedsCode(categoryId)) learned.set(categoryId, categoryCode);
+  });
+  for (const [categoryId, code] of learned) await stampCategoryCode(categoryId, code);
+}
+
+/** The wire shape `assign_file` expects — `categoryCode`/`matchedBy` are the
+ * planner's own provenance and have no place in the request body. */
+function slotTargetOf(t: AutoAssignTarget): SlotTarget {
+  const target: SlotTarget = { kind: t.kind, categoryId: t.categoryId };
+  if (t.segmentId) target.segmentId = t.segmentId;
+  if (t.role) target.role = t.role;
+  return target;
+}
+
+/** "3 placed automatically · 2 left in Uploads (1 unrecognized, 1 slot occupied)" */
+function summarizeBatch(outcomes: AutoAssignOutcome[]): string | null {
+  const placed = outcomes.filter(o => o.action === 'assign').length;
+  if (!placed) return null;   // nothing recognized — stay quiet, as before
+  const counts = new Map<TrayReason, number>();
+  outcomes.forEach(o => {
+    if (o.action === 'tray') counts.set(o.reason, (counts.get(o.reason) ?? 0) + 1);
+  });
+  const trayed = outcomes.length - placed;
+  const why = [...counts.entries()].map(([r, n]) => `${n} ${TRAY_REASON_LABEL[r]}`).join(', ');
+  return `${placed} placed automatically`
+    + (trayed ? ` · ${trayed} left in Uploads (${why})` : '');
+}
+
+/* ── competition file pool ── */
+
+function notePoolUnavailable(): void {
+  poolDisabled = true;
+  poolFiles = null;
+  if (poolNoticeShown) return;
+  poolNoticeShown = true;
+  flash('Competition file pool unavailable — uploaded to this tool only.');
+}
+
+/** Refresh the pool listing; any failure just hides the import section. */
+async function refreshPoolFiles(): Promise<void> {
+  if (!boundPlatformId || poolDisabled) { poolFiles = null; return; }
+  try {
+    poolFiles = await listCompetitionFiles(boundPlatformId);
+  } catch {
+    poolFiles = null;
+  }
+}
+
+/** Pool files this competition has not imported yet. */
+function pendingPoolFiles(): PoolFile[] {
+  if (!poolFiles || !details) return [];
+  const known = new Set<string>();
+  Object.values(details.structure.files || {}).forEach(m => {
+    if (m.poolName) known.add(m.poolName);
+    if (m.filename) known.add(m.filename);
+  });
+  return poolFiles.filter(f => !known.has(f.name));
+}
+
+function poolImportHtml(): string {
+  const pending = pendingPoolFiles();
+  if (!pending.length) return '';
+  // Collapsed by default; a re-render (details refresh) keeps it open.
+  const wasOpen = document.querySelector('details.pool-import')?.hasAttribute('open') ?? false;
+  return `<details class="pool-import"${wasOpen ? ' open' : ''}>
+      <summary class="pool-import-head">
+        <span class="pool-import-title">Competition files</span>
+        <span class="pool-import-count">${pending.length} available</span>
+      </summary>
+      <p class="section-sub">Uploaded for this competition in another tool — select the files you need and press Import. Recognized files go straight into their slots.</p>
+      <div class="pool-file-list">${pending.map(f =>
+        `<label class="pool-file" title="${escapeHtml(f.sourceTool || f.source)}">
+           <input type="checkbox" class="pool-file-check" value="${escapeHtml(f.name)}">
+           <span class="pool-file-name">${escapeHtml(f.name)}</span>
+         </label>`).join('')}</div>
+      <div class="pool-import-actions">
+        <button class="btn btn-xs btn-ghost" id="btn-pool-select-all">Select all</button>
+        <button class="btn btn-xs btn-primary" id="btn-pool-import" disabled>Import selected</button>
+      </div>
+    </details>`;
+}
+
+function poolChecks(): HTMLInputElement[] {
+  return Array.from(document.querySelectorAll<HTMLInputElement>('.pool-file-check'));
+}
+
+function syncPoolImportButton(): void {
+  const btn = document.getElementById('btn-pool-import') as HTMLButtonElement | null;
+  if (!btn) return;
+  const n = poolChecks().filter(c => c.checked).length;
+  btn.disabled = n === 0;
+  btn.textContent = n ? `Import selected (${n})` : 'Import selected';
+}
+
+/** Import the selected pool files, auto-placing what we can. */
+async function importPoolFiles(): Promise<void> {
+  if (!currentId || !boundPlatformId) return;
+  const chosen = poolChecks().filter(c => c.checked).map(c => c.value);
+  if (!chosen.length) return;
+
+  const btn = document.getElementById('btn-pool-import') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
+
+  const outcomes = await planBatch(chosen);
+  let failed = 0;
+  for (let i = 0; i < chosen.length; i++) {
+    const params = new URLSearchParams({ competition: currentId, name: chosen[i]! });
+    applyAutoParams(params, outcomes?.[i]);
+    try {
+      const resp = await fetch(apiUrl(`/import_platform_file?${params.toString()}`), { method: 'POST' });
+      if (!resp.ok) {
+        failed++;
+        if (resp.status === 503 || resp.status === 409) { notePoolUnavailable(); break; }
+      }
+    } catch { failed++; }
+  }
+
+  if (outcomes) await stampLearnedCodes(outcomes);
+  await loadDetails();
+  const parts = [`Imported ${chosen.length - failed} of ${chosen.length} competition file(s)`];
+  const summary = outcomes ? summarizeBatch(outcomes) : null;
+  if (summary) parts.push(summary);
+  flash(parts.join(' · ') + '.');
+}
+
+/**
+ * Place every tray file the recognizer is sure about.
+ *
+ * Planning is the upload path's (a clone of the structure, outcomes applied one
+ * by one, so two files never chase the same slot); placing is the manual drag's
+ * `assign_file`, flagged `autoAssigned` so the chips keep their "auto" pill and
+ * a later drag still counts as the user's confirmation.
+ */
+async function autoPlaceTrayFiles(): Promise<void> {
+  if (!currentId || !details) return;
+  const fileIds = details.unassigned.slice();
+  if (!fileIds.length) return;
+
+  const btn = document.getElementById('btn-auto-place') as HTMLButtonElement | null;
+  if (btn) { btn.disabled = true; btn.textContent = 'Placing…'; }
+
+  const outcomes = await planBatch(fileIds.map(fid => fileMeta(fid)?.filename || ''));
+  if (!outcomes) {
+    if (btn) { btn.disabled = false; btn.textContent = 'Auto-place files'; }
+    flash('Filename recognition is unavailable right now.');
+    return;
+  }
+
+  let failed = 0;
+  for (let i = 0; i < fileIds.length; i++) {
+    const outcome = outcomes[i]!;
+    if (outcome.action !== 'assign') continue;
+    try {
+      const resp = await apiJson('/assign_file', {
+        id: currentId,
+        fileId: fileIds[i],
+        target: slotTargetOf(outcome.target),
+        autoAssigned: true,
+      });
+      if (!resp.ok) failed++;
+    } catch { failed++; }
+  }
+
+  await stampLearnedCodes(outcomes);
+  await loadDetails();
+  const parts = [summarizeBatch(outcomes) ?? 'Nothing recognized — every file stayed in Uploads'];
+  if (failed) parts.push(`${failed} could not be moved`);
+  flash(parts.join(' · ') + '.');
+}
+
+/**
+ * Upload one file's bytes.
+ *
+ * With a platform competition bound the bytes go to the shared pool first and
+ * are imported from there, so every tool sees the same file. Any pool trouble
+ * (unreachable, not configured, this record unbound) falls back to the tool's
+ * own upload route with identical slot params — the upload always happens, it
+ * is just not shared.
+ */
+async function uploadOneFile(file: File, params: URLSearchParams): Promise<void> {
+  if (boundPlatformId && !poolDisabled) {
+    let poolName: string | null = null;
+    try {
+      poolName = (await uploadCompetitionFile(boundPlatformId, file, 'protocolgenerator')).name;
+    } catch {
+      notePoolUnavailable();
+    }
+    if (poolName) {
+      const importParams = new URLSearchParams(params);
+      importParams.delete('filename');
+      importParams.set('name', poolName);
+      try {
+        const resp = await fetch(apiUrl(`/import_platform_file?${importParams.toString()}`), { method: 'POST' });
+        if (resp.ok) return;
+        if (resp.status === 503 || resp.status === 409) notePoolUnavailable();
+        // Any other failure falls through: the direct upload below both stores
+        // the file and reports whatever is actually wrong with it.
+      } catch { /* fall through to the direct upload */ }
+    }
+  }
+  try {
+    const resp = await apiRaw(`/upload_file?${params.toString()}`, file);
+    if (!resp.ok) alert(`Upload failed for ${file.name}: ${await resp.text()}`);
+  } catch { alert(`Upload error for ${file.name}.`); }
+}
+
 async function uploadFiles(files: FileList, target?: SlotTarget) {
   if (!currentId) return;
-  for (const file of Array.from(files)) {
+  const list = Array.from(files);
+  // A drop onto a specific slot is a deliberate manual placement — only tray
+  // drops and the Browse button go through filename recognition.
+  const outcomes = (!target || target.kind === 'tray')
+    ? await planBatch(list.map(f => f.name))
+    : null;
+
+  for (let i = 0; i < list.length; i++) {
+    const file = list[i]!;
     const params = new URLSearchParams({ competition: currentId, filename: file.name });
     if (target && target.kind !== 'tray') {
       params.set('slotKind', target.kind);
@@ -952,13 +1371,16 @@ async function uploadFiles(files: FileList, target?: SlotTarget) {
       if (target.segmentId) params.set('segmentId', target.segmentId);
       if (target.teamId) params.set('teamId', target.teamId);
       if (target.role) params.set('role', target.role);
+    } else {
+      applyAutoParams(params, outcomes?.[i]);
     }
-    try {
-      const resp = await apiRaw(`/upload_file?${params.toString()}`, file);
-      if (!resp.ok) alert(`Upload failed for ${file.name}: ${await resp.text()}`);
-    } catch { alert(`Upload error for ${file.name}.`); }
+    await uploadOneFile(file, params);
   }
+  if (outcomes) await stampLearnedCodes(outcomes);
   await loadDetails();
+
+  const summary = outcomes ? summarizeBatch(outcomes) : null;
+  if (summary) flash(summary);
 }
 
 async function deleteFile(fileId: string) {

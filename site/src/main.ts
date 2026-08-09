@@ -15,7 +15,11 @@ import {
   subscribeActiveCompetition,
   competitionLabel,
   formatDateFi,
+  listCompetitionFiles,
+  deleteCompetitionFile,
+  competitionFileUrl,
   type PlatformCompetition,
+  type PoolFile,
 } from '@figureskatingtools/shared-ui'
 import { escapeHtml, fetchUser, renderSignInView, setupUserMenu, type UserInfo } from './shell.js'
 
@@ -211,6 +215,85 @@ function renderCompetitionPanel(competitions: PlatformCompetition[] | null): voi
       setActiveCompetition(created);
     });
   });
+
+  if (active) void renderCompetitionFiles(active.id);
+}
+
+/* ── Competition files (the shared file pool) ───────────────────────────────
+   Every tool uploads the competition's source files into one pool, so the home
+   panel is where you see — and clean up — everything that belongs to the
+   selected competition. FSM-pushed files are read-only, hence upload-only
+   deletion. The whole section is optional: a pool API that is missing, failing
+   or empty renders nothing at all. */
+
+/** `1.4 MB` / `812 kB` — or `''` for an unknown size, so the caller's
+ *  `filter(Boolean)` drops the segment instead of rendering a dangling dash. */
+function formatFileSize(bytes: number): string {
+  if (!bytes) return '';
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} kB`;
+}
+
+async function renderCompetitionFiles(competitionId: string): Promise<void> {
+  const host = document.getElementById('comp-files');
+  if (!host) return;
+
+  let files: PoolFile[];
+  try {
+    files = await listCompetitionFiles(competitionId);
+  } catch (_e) {
+    host.innerHTML = '';
+    return;
+  }
+  // The selection may have changed while the listing was in flight
+  if (getActiveCompetition()?.id !== competitionId) return;
+  if (!files.length) { host.innerHTML = ''; return; }
+
+  // Collapsed by default, but a re-render (e.g. after a delete) keeps it open.
+  const wasOpen = host.querySelector('details.comp-files-details')?.hasAttribute('open') ?? false;
+
+  host.innerHTML = `
+    <details class="comp-files-details"${wasOpen ? ' open' : ''}>
+      <summary class="comp-files-summary">
+        <span class="comp-files-title">Competition files</span>
+        <span class="comp-files-count">${files.length}</span>
+      </summary>
+      <ul class="comp-files-list">${files.map((f) => {
+        const meta = [formatFileSize(f.size), f.sourceTool || f.source, formatDateFi(f.uploadedUtc)]
+          .filter(Boolean).join(' · ');
+        return `
+          <li class="comp-file-row">
+            <a class="comp-file-link" href="${escapeHtml(competitionFileUrl(competitionId, f.name, f.source))}"
+               target="_blank" rel="noopener noreferrer" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</a>
+            <span class="comp-file-meta">${escapeHtml(meta)}</span>
+            ${f.source === 'upload'
+              ? `<button type="button" class="comp-delete comp-file-delete" data-delete-file="${escapeHtml(f.name)}">×</button>`
+              : ''}
+          </li>`;
+      }).join('')}</ul>
+    </details>
+  `;
+
+  host.querySelectorAll<HTMLButtonElement>('[data-delete-file]').forEach((btn) => {
+    const name = btn.getAttribute('data-delete-file')!;
+    btn.title = `Delete ${name}`;
+    btn.setAttribute('aria-label', `Delete ${name}`);
+    btn.addEventListener('click', async () => {
+      if (!window.confirm(`Delete "${name}" from this competition's files?`)) return;
+      btn.disabled = true;
+      try {
+        await deleteCompetitionFile(competitionId, name);
+      } catch (err: unknown) {
+        btn.disabled = false;
+        panelError = err instanceof CompetitionApiError
+          ? `Could not delete "${name}": ${err.message}`
+          : `Could not delete "${name}". Please try again.`;
+        renderCompetitionPanel(knownCompetitions);
+        return;
+      }
+      await renderCompetitionFiles(competitionId);
+    });
+  });
 }
 
 /**
@@ -283,6 +366,7 @@ function activeCompetitionHtml(active: PlatformCompetition): string {
         ).join('')}
       </div>
     </div>
+    <div class="comp-files" id="comp-files"></div>
   `;
 }
 
@@ -326,6 +410,20 @@ function changelogBranch(): string {
   const host = window.location.hostname;
   if (host === 'localhost' || host === '127.0.0.1') return 'test';
   return getEnvPrefix() === 'test.' ? 'test' : 'main';
+}
+
+/**
+ * Preferred source: the router's cached, merged commit feed (same origin).
+ * One GitHub round-trip per branch per 10 minutes for the whole site instead
+ * of four per browser, so nobody burns the 60 req/hr unauthenticated limit.
+ * Absent under `vite dev`, where there is no router — hence the fallbacks.
+ */
+async function fetchProxiedChangelog(): Promise<ChangelogEntry[]> {
+  const resp = await fetch(`/changelog-live?branch=${encodeURIComponent(changelogBranch())}`);
+  if (!resp.ok) throw new Error(`changelog-live ${resp.status}`);
+  const entries = await resp.json();
+  if (!Array.isArray(entries)) throw new Error('Unexpected changelog-live payload');
+  return entries.slice(0, CHANGELOG_DISPLAY_MAX);
 }
 
 /** Fetch recent commits for one source repo from the public GitHub API */
@@ -376,7 +474,7 @@ async function fetchLiveChangelog(): Promise<ChangelogEntry[]> {
 
 function readChangelogCache(): ChangelogEntry[] | null {
   try {
-    const raw = sessionStorage.getItem(CHANGELOG_CACHE_KEY);
+    const raw = localStorage.getItem(CHANGELOG_CACHE_KEY);
     if (!raw) return null;
     const { ts, entries } = JSON.parse(raw);
     if (typeof ts !== 'number' || !Array.isArray(entries)) return null;
@@ -389,12 +487,17 @@ function readChangelogCache(): ChangelogEntry[] | null {
 
 function writeChangelogCache(entries: ChangelogEntry[]): void {
   try {
-    sessionStorage.setItem(CHANGELOG_CACHE_KEY, JSON.stringify({ ts: Date.now(), entries }));
+    localStorage.setItem(CHANGELOG_CACHE_KEY, JSON.stringify({ ts: Date.now(), entries }));
   } catch (_e) {
-    // sessionStorage disabled or quota exceeded — ignore
+    // localStorage disabled or quota exceeded — ignore
   }
 }
 
+/**
+ * Cache → router proxy → direct GitHub → build-time snapshot.
+ * Each step is strictly staler than the one before it, so the panel degrades
+ * instead of disappearing.
+ */
 async function loadChangelog() {
   const container = document.getElementById('changelog-entries');
   if (!container) return;
@@ -403,18 +506,24 @@ async function loadChangelog() {
 
   if (!entries) {
     try {
-      entries = await fetchLiveChangelog();
+      entries = await fetchProxiedChangelog();
       writeChangelogCache(entries);
     } catch (_e) {
-      // Live fetch failed (offline, rate-limited, repo went private) —
-      // fall back to the changelog.json generated at deploy time.
       try {
-        const resp = await fetch('/changelog.json');
-        if (!resp.ok) throw new Error('Not found');
-        entries = (await resp.json() as ChangelogEntry[]).slice(0, CHANGELOG_DISPLAY_MAX);
+        // No router (vite dev) or it could not reach GitHub either.
+        entries = await fetchLiveChangelog();
+        writeChangelogCache(entries);
       } catch (_e2) {
-        container.innerHTML = '<p class="text-secondary">Changelog not available.</p>';
-        return;
+        // Offline, rate-limited or a repo went private — fall back to the
+        // changelog.json generated at deploy time.
+        try {
+          const resp = await fetch('/changelog.json');
+          if (!resp.ok) throw new Error('Not found');
+          entries = (await resp.json() as ChangelogEntry[]).slice(0, CHANGELOG_DISPLAY_MAX);
+        } catch (_e3) {
+          container.innerHTML = '<p class="text-secondary">Changelog not available.</p>';
+          return;
+        }
       }
     }
   }

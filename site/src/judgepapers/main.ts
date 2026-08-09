@@ -8,6 +8,10 @@ import {
     subscribeActiveCompetition,
     competitionLabel,
     formatDateFi,
+    listCompetitionFiles,
+    uploadCompetitionFile,
+    type CategoryInfo,
+    type PoolFile,
 } from '@figureskatingtools/shared-ui';
 import {
     escapeHtml,
@@ -32,13 +36,8 @@ const APP_PATH = '/judgepapers/';
  */
 const API_BASE = '/judgepapers/api';
 
-interface CategoryInfo {
-  abbreviation: string;
-  displayName: string;
-  displayNameFi: string;
-  judgingMethod: string;
-  competitionType: string;
-}
+// `CategoryInfo` is the shared shape of one `categories` table row — the same
+// type the filename recognizer in shared-ui consumes.
 
 // Module-level categories cache, loaded once from the API
 let categoriesCache: CategoryInfo[] = [];
@@ -184,6 +183,10 @@ appElement.innerHTML = `
                 </div>
             </div>
 
+            <!-- Files the competition already has in the shared pool (uploaded
+                 in another tool) but this tool has not imported yet -->
+            <div id="pool-import-container"></div>
+
             <div id="comp-files-container">
                 <p class="text-muted">Loading files...</p>
             </div>
@@ -197,6 +200,8 @@ appElement.innerHTML = `
                       <div id="options-area" class="options-area">
                           <!-- Options injected here -->
                       </div>
+                      <p class="generate-note">Files are grouped into categories by their file
+                         names — check the listing above before generating.</p>
                       <button id="btn-generate" class="btn btn-primary btn-generate" disabled>
                          Generate Papers
                       </button>
@@ -233,6 +238,51 @@ function showView(viewId: string) {
 let boundPlatformId: string | null = null;
 /** Guards against an out-of-order resolve when the selection changes mid-flight */
 let bindToken = 0;
+/**
+ * Set once the shared competition file pool proves unusable for the current
+ * competition — the pool API is unreachable, the tool backend has no platform
+ * storage configured (503) or this record is not bound (409). Uploads then take
+ * the direct route exactly as they did before the pool existed.
+ */
+let poolDisabled = false;
+
+/**
+ * Upload one PDF.
+ *
+ * With a platform competition bound the bytes go to the shared competition file
+ * pool first and are imported from there, so every tool sees the same file. Any
+ * pool trouble falls back to this tool's own upload route — the file always
+ * lands here, it is just not shared.
+ */
+async function uploadJudgePaperFile(file: File, competitionId: string): Promise<boolean> {
+    if (boundPlatformId && !poolDisabled) {
+        let poolName: string | null = null;
+        try {
+            poolName = (await uploadCompetitionFile(boundPlatformId, file, 'judgepapers')).name;
+        } catch (_e) {
+            poolDisabled = true;
+        }
+        if (poolName) {
+            try {
+                const resp = await fetch(
+                    `${API_BASE}/import_platform_file?competition=${encodeURIComponent(competitionId)}`
+                    + `&name=${encodeURIComponent(poolName)}`,
+                    { method: 'POST' });
+                if (resp.ok) return true;
+                // 503 = pool not configured for this tool, 409 = record not bound:
+                // the feature is simply off, so stop trying for this competition.
+                if (resp.status === 503 || resp.status === 409) poolDisabled = true;
+            } catch (_e) {
+                // fall through to the direct upload
+            }
+        }
+    }
+
+    const url = `${API_BASE}/upload_file?competition=${encodeURIComponent(competitionId)}`
+        + `&filename=${encodeURIComponent(file.name)}`;
+    const resp = await fetch(url, { method: 'POST', body: file });
+    return resp.ok;
+}
 
 /** Render one card into the "pick a competition" view */
 function renderBindCard(html: string) {
@@ -252,7 +302,9 @@ function showPickCompetition() {
         <ol class="howto-list">
             <li>Select the competition in the top bar; this tool opens its workspace automatically.</li>
             <li><strong>Upload the PDF exports</strong> from <em>Figure Skating Manager</em> ${renderHelpTrigger('help-files-welcome', 'Which files do I need?', filesHelpHtml())}<br><span class="howto-caution">Export <strong>PlannedProgramContent</strong>, not <strong>PlannedProgramContentChecklist</strong> &mdash; they look similar but the Checklist won't work.</span></li>
-            <li>The system validates the files and ensures all required documents are present.</li>
+            <li>PDFs uploaded for the same competition in another tool appear under <strong>Competition files</strong> — import them here without re-uploading.</li>
+            <li>The system validates the files, groups them into categories by their file names, and ensures all required documents are present.</li>
+            <li><strong>Check that every file sits under the right category</strong> — grouping goes by file name, so verify the listing before generating.</li>
             <li>Once validated, click <strong>Generate Papers</strong> to create the combined PDF booklets and ZIP archives.</li>
             <li>Download the generated files using the links that appear. You can also copy the links to share them.</li>
         </ol>
@@ -308,6 +360,10 @@ async function bindActiveCompetition(force = false): Promise<void> {
     }
 
     if (!force && active.id === boundPlatformId) return;
+
+    // Pool availability is per competition (a tool record may be unbound), so a
+    // new selection starts from a clean slate.
+    poolDisabled = false;
 
     const label = competitionLabel(active);
     showBindLoading(label);
@@ -876,6 +932,10 @@ async function init() {
                  }
             }
 
+            // Shared-pool files this tool has not imported yet (renders nothing
+            // when the pool is unavailable or everything is already here).
+            void renderPoolImport(id);
+
         } catch (_e) {
             container.innerHTML = '<p class="text-error">Error loading files.</p>';
         }
@@ -1010,28 +1070,129 @@ async function init() {
         });
     }
 
+    /** Every filename this competition already holds — competition-wide files
+     *  plus every category/segment file. Used to hide pool files already here. */
+    function existingFilenames(): Set<string> {
+        const names = new Set<string>();
+        if (!currentCompetitionData) return names;
+        (currentCompetitionData.competitionFiles || []).forEach((f: any) => {
+            if (f?.filename) names.add(f.filename);
+        });
+        Object.values(currentCompetitionData.structure || {}).forEach((segments: any) => {
+            Object.values(segments || {}).forEach((segFiles: any) => {
+                (segFiles as any[]).forEach(f => { if (f?.filename) names.add(f.filename); });
+            });
+        });
+        return names;
+    }
+
+    /**
+     * "Import from competition files" — the pool files this tool does not have
+     * yet. Renders nothing at all when there is no pool, no binding or nothing
+     * left to import, so the view is unchanged for standalone use.
+     */
+    async function renderPoolImport(competitionId: string) {
+        const host = document.getElementById('pool-import-container');
+        if (!host) return;
+        host.innerHTML = '';
+        if (!boundPlatformId || poolDisabled) return;
+
+        let files: PoolFile[];
+        try {
+            files = await listCompetitionFiles(boundPlatformId);
+        } catch (_e) {
+            return;   // pool unavailable — degrade to no section
+        }
+
+        const have = existingFilenames();
+        const pending = files.filter(f => f.name.toLowerCase().endsWith('.pdf') && !have.has(f.name));
+        if (!pending.length) return;
+
+        host.innerHTML = `
+            <details class="pool-import">
+                <summary class="pool-import-head">
+                    <span class="pool-import-title">Competition files</span>
+                    <span class="pool-import-count">${pending.length} available</span>
+                </summary>
+                <p class="pool-import-sub">Uploaded for this competition in another tool — select the files you need and press Import.</p>
+                <div class="pool-file-list">
+                    ${pending.map(f => `
+                        <label class="pool-file">
+                            <input type="checkbox" class="pool-file-check" value="${escapeHtml(f.name)}">
+                            <span class="pool-file-name">${escapeHtml(f.name)}</span>
+                            ${f.sourceTool ? `<span class="pool-file-src">${escapeHtml(f.sourceTool)}</span>` : ''}
+                        </label>`).join('')}
+                </div>
+                <div class="pool-import-actions">
+                    <button id="btn-pool-select-all" class="btn btn-xs btn-ghost">Select all</button>
+                    <button id="btn-pool-import" class="btn btn-xs btn-primary" disabled>Import selected</button>
+                </div>
+            </details>`;
+
+        const importBtn = document.getElementById('btn-pool-import') as HTMLButtonElement;
+        const checks = () => Array.from(document.querySelectorAll<HTMLInputElement>('.pool-file-check'));
+        const syncImportButton = () => {
+            const n = checks().filter(c => c.checked).length;
+            importBtn.disabled = n === 0;
+            importBtn.textContent = n ? `Import selected (${n})` : 'Import selected';
+        };
+        host.querySelector('.pool-file-list')?.addEventListener('change', syncImportButton);
+        document.getElementById('btn-pool-select-all')?.addEventListener('click', (e) => {
+            const all = checks();
+            const everySelected = all.every(c => c.checked);
+            all.forEach(c => { c.checked = !everySelected; });
+            (e.currentTarget as HTMLButtonElement).textContent = everySelected ? 'Select all' : 'Clear selection';
+            syncImportButton();
+        });
+
+        importBtn.addEventListener('click', async () => {
+            const btn = importBtn;
+            const chosen = checks().filter(c => c.checked).map(c => c.value);
+            if (!chosen.length) return;
+            btn.disabled = true;
+            btn.textContent = 'Importing…';
+
+            let failed = 0;
+            for (const name of chosen) {
+                try {
+                    const resp = await fetch(
+                        `${API_BASE}/import_platform_file?competition=${encodeURIComponent(competitionId)}`
+                        + `&name=${encodeURIComponent(name)}`,
+                        { method: 'POST' });
+                    if (!resp.ok) {
+                        failed++;
+                        if (resp.status === 503 || resp.status === 409) { poolDisabled = true; break; }
+                    }
+                } catch (_e) {
+                    failed++;
+                }
+            }
+
+            const statusEl = document.getElementById('upload-status');
+            if (statusEl) {
+                statusEl.innerHTML = `<span style="color: var(--success-color);">Imported ${chosen.length - failed} file(s).</span>`
+                    + (failed ? ` <span style="color: var(--error-color);">Failed: ${failed}</span>` : '');
+            }
+            await loadCompetitionDetails(competitionId);
+        });
+    }
+
     async function handleFiles(files: FileList, competitionId: string) {
         const statusEl = document.getElementById('upload-status')!;
         let successCount = 0;
         let errors: string[] = [];
-        
+
         statusEl.innerHTML = `<span style="color: var(--text-secondary);">Uploading ${files.length} files...</span>`;
-        
+
         for (let i = 0; i < files.length; i++) {
             const file = files[i];
             if (file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
                 errors.push(`${file.name}: Not a PDF`);
                 continue;
             }
-            
+
             try {
-                const url = `${API_BASE}/upload_file?competition=${encodeURIComponent(competitionId)}&filename=${encodeURIComponent(file.name)}`;
-                const resp = await fetch(url, {
-                    method: 'POST',
-                    body: file 
-                });
-                
-                if (resp.ok) {
+                if (await uploadJudgePaperFile(file, competitionId)) {
                     successCount++;
                 } else {
                     errors.push(`${file.name}: Upload failed`);

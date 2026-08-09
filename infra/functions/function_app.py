@@ -21,6 +21,12 @@ literal URLs the router proxies to — and the URLs
     DELETE /api/competitions/{id}       -> 200 Competition (status "deleted") | 404
     GET    /api/health                  -> 200 {"status": "ok"}
 
+    GET    /api/competitions/{id}/files          -> 200 {"files": [FileInfo, ...]}
+    POST   /api/competitions/{id}/files          -> 201 FileInfo
+                                                    ?filename=&sourceTool=, raw body
+    GET    /api/competitions/{id}/files/{name}   -> 200 bytes  (?source=upload|fsm)
+    DELETE /api/competitions/{id}/files/{name}   -> 200 {"status": "deleted", ...}
+
 Competition JSON (both directions; server-owned fields are ignored on input):
 
     {
@@ -34,6 +40,18 @@ Competition JSON (both directions; server-owned fields are ignored on input):
       "createdUtc":"2026-01-02T10:00:00Z",
       "updatedUtc":"2026-01-02T10:00:00Z",
       "status":    "active" | "deleted"
+    }
+
+FileInfo JSON (the shared competition file pool):
+
+    {
+      "name":        "FSKWSINGLES-----QUAL000100--_SegmentResults.pdf",
+      "source":      "upload" | "fsm",
+      "size":        123456,
+      "contentType": "application/pdf",
+      "uploadedUtc": "2026-01-02T10:00:00Z",
+      "uploadedBy":  "user@example.com",
+      "sourceTool":  "protocolgenerator"
     }
 
 Every non-2xx body is {"error": "<machine_code>", "message": "<human text>"}.
@@ -61,11 +79,13 @@ import unicodedata
 from datetime import datetime, timezone
 from uuid import uuid4
 
+from urllib.parse import quote
+
 import azure.functions as func
 from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
 from azure.data.tables import TableClient, UpdateMode
 from azure.identity import DefaultAzureCredential
-from azure.storage.blob import BlobServiceClient
+from azure.storage.blob import BlobServiceClient, ContentSettings
 
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
@@ -82,7 +102,29 @@ MAX_VENUE_LENGTH = 200
 
 DATA_CONTAINER = os.environ.get("COMPETITION_DATA_CONTAINER", "competition-data")
 
+SOURCE_UPLOAD = "upload"
+SOURCE_FSM = "fsm"
+
+POOL_MAX_FILE_SIZE = 50 * 1024 * 1024
+MAX_FILENAME_LENGTH = 200
+MAX_SOURCE_TOOL_LENGTH = 40
+
+POOL_CONTENT_TYPES = {
+    ".pdf": "application/pdf",
+    ".xml": "application/xml",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+}
+ALLOWED_FILE_EXTENSIONS = frozenset(POOL_CONTENT_TYPES)
+
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+# Control chars break HTTP headers; '#?%' break URLs (the blob name travels in
+# the path of /api/competitions/{id}/files/{name}); '"' breaks Content-Disposition.
+_FILENAME_STRIP_RE = re.compile(r'[\x00-\x1f\x7f#?%"]')
+_SOURCE_TOOL_STRIP_RE = re.compile(r"[^a-zA-Z0-9_-]+")
 
 
 # ── storage clients ───────────────────────────────────────────────────────────
@@ -334,6 +376,125 @@ def _delete_code_row(table_client, code: str) -> None:
         pass
     except Exception as e:
         logging.warning(f"Could not delete CODE row '{code}': {e}")
+
+
+# ── file pool helpers ─────────────────────────────────────────────────────────
+
+def _get_container_client():
+    """Client for the shared `competition-data` container, or None."""
+    service = get_blob_service_client()
+    if service is None:
+        return None
+    try:
+        return service.get_container_client(DATA_CONTAINER)
+    except Exception as e:
+        logging.error(f"Failed to create container client: {e}")
+        return None
+
+
+def sanitize_pool_filename(value) -> tuple[str, str]:
+    """
+    Reduce a client-supplied filename to a safe, flat blob name.
+
+    Returns (name, "") on success or ("", error_code) with error_code one of
+    'invalid_filename' / 'unsupported_type'. Directory components are dropped
+    outright, so no name can ever escape the competition's own prefix.
+    """
+    raw = str(value or "").strip()
+    # basename() alone is POSIX-only; Windows-style separators are folded first.
+    name = os.path.basename(raw.replace("\\", "/")).strip()
+    name = _FILENAME_STRIP_RE.sub("", name).strip()
+
+    if not name or name in (".", ".."):
+        return "", "invalid_filename"
+    if len(name) > MAX_FILENAME_LENGTH:
+        return "", "invalid_filename"
+
+    extension = os.path.splitext(name)[1].lower()
+    if extension not in ALLOWED_FILE_EXTENSIONS:
+        return "", "unsupported_type"
+
+    return name, ""
+
+
+def _pool_content_type(name: str) -> str:
+    return POOL_CONTENT_TYPES.get(os.path.splitext(name)[1].lower(), "application/octet-stream")
+
+
+def _pool_prefix(competition_id: str, source: str) -> str:
+    if source == SOURCE_FSM:
+        return competition_fsm_prefix(competition_id)
+    return competition_upload_prefix(competition_id)
+
+
+def _ascii_metadata(value) -> str:
+    """Blob metadata rides in HTTP headers, which must be ASCII."""
+    return str(value or "").encode("ascii", "replace").decode("ascii")[:256]
+
+
+def _metadata_value(metadata, key: str) -> str:
+    """Case-insensitive read — metadata keys come back from Azure as headers."""
+    for existing_key, existing_value in (metadata or {}).items():
+        if existing_key.lower() == key.lower():
+            return existing_value or ""
+    return ""
+
+
+def _iso_utc(value) -> str:
+    if not value:
+        return ""
+    try:
+        return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (AttributeError, TypeError, ValueError):
+        return str(value)
+
+
+def _file_info(name: str, source: str, properties) -> dict:
+    """Blob properties (from list_blobs or get_blob_properties) -> FileInfo."""
+    metadata = getattr(properties, "metadata", None) or {}
+    content_settings = getattr(properties, "content_settings", None)
+    content_type = getattr(content_settings, "content_type", None) or _pool_content_type(name)
+    return {
+        "name": name,
+        "source": source,
+        "size": getattr(properties, "size", 0) or 0,
+        "contentType": content_type,
+        "uploadedUtc": _iso_utc(getattr(properties, "last_modified", None)),
+        "uploadedBy": _metadata_value(metadata, "uploadedBy"),
+        "sourceTool": _metadata_value(metadata, "sourceTool"),
+    }
+
+
+def _load_competition(competition_id: str):
+    """(entity, None) or (None, error response) — shared by every file route."""
+    table_client = get_table_client()
+    if not table_client:
+        return None, _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    try:
+        entity = _get_competition_entity(table_client, competition_id)
+    except Exception as e:
+        logging.error(f"Error reading competition '{competition_id}': {e}")
+        return None, _error("internal_error", "Could not read the competition.", 500)
+
+    if entity is None:
+        return None, _error("not_found", "Competition not found.", 404)
+
+    return entity, None
+
+
+def _requested_source(req: func.HttpRequest) -> str | None:
+    """`?source=upload|fsm`, defaulting to uploads. None => invalid value."""
+    source = (req.params.get("source") or SOURCE_UPLOAD).strip().lower()
+    return source if source in (SOURCE_UPLOAD, SOURCE_FSM) else None
+
+
+def _route_file_name(req: func.HttpRequest) -> str:
+    """The {name} route param, rejected unless it is one plain path segment."""
+    name = (req.route_params.get("name") or "").strip()
+    if not name or name in (".", "..") or "/" in name or "\\" in name:
+        return ""
+    return name
 
 
 # ── request handlers ──────────────────────────────────────────────────────────
@@ -617,6 +778,212 @@ def _delete_competition(req: func.HttpRequest) -> func.HttpResponse:
     return _json(entity_to_competition(merged))
 
 
+# ── file pool handlers ────────────────────────────────────────────────────────
+# competition-data/<guid>/uploads/<name> is name-keyed and overwritten in place:
+# the same filename is the same logical file, which is what an FSM re-export of
+# an already-uploaded PDF means. <guid>/fsm/ is written only by the (unbuilt)
+# ingest, so it is readable but never writable through these routes.
+
+def _list_competition_files(req: func.HttpRequest) -> func.HttpResponse:
+    email = get_user_email_from_header(req)
+    if not email:
+        return _error("unauthorized", "Sign-in required.", 401)
+
+    competition_id = req.route_params.get("id")
+    if not competition_id:
+        return _error("invalid_id", "A competition id is required.", 400)
+
+    _entity, error = _load_competition(competition_id)
+    if error is not None:
+        return error
+
+    container = _get_container_client()
+    if container is None:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    files = []
+    try:
+        for source in (SOURCE_UPLOAD, SOURCE_FSM):
+            prefix = _pool_prefix(competition_id, source)
+            for blob in container.list_blobs(name_starts_with=prefix, include=["metadata"]):
+                name = blob.name[len(prefix):]
+                # Skip the prefix placeholder and anything nested deeper.
+                if not name or "/" in name:
+                    continue
+                files.append(_file_info(name, source, blob))
+    except Exception as e:
+        logging.error(f"Error listing files for competition '{competition_id}': {e}")
+        return _error("internal_error", "Could not list the competition files.", 500)
+
+    files.sort(key=lambda info: (info["source"], info["name"].lower()))
+    return _json({"files": files})
+
+
+def _upload_competition_file(req: func.HttpRequest) -> func.HttpResponse:
+    email = get_user_email_from_header(req)
+    if not email:
+        return _error("unauthorized", "Sign-in required.", 401)
+
+    competition_id = req.route_params.get("id")
+    if not competition_id:
+        return _error("invalid_id", "A competition id is required.", 400)
+
+    name, name_error = sanitize_pool_filename(req.params.get("filename"))
+    if name_error == "unsupported_type":
+        return _error("unsupported_type",
+                      "Only PDF, XML and image files can be added to the competition files.", 400)
+    if name_error:
+        return _error("invalid_filename", "A usable filename is required.", 400)
+
+    source_tool = _SOURCE_TOOL_STRIP_RE.sub("", str(req.params.get("sourceTool") or ""))
+    source_tool = source_tool[:MAX_SOURCE_TOOL_LENGTH].lower()
+
+    # Cheap pre-check: refuse an oversized upload from its declared length
+    # before the body is materialised. The real check is on the bytes below.
+    declared_length = req.headers.get("Content-Length") or req.headers.get("content-length")
+    if declared_length:
+        try:
+            if int(declared_length) > POOL_MAX_FILE_SIZE:
+                return _error("file_too_large", "Files are limited to 50 MB.", 413)
+        except ValueError:
+            pass
+
+    entity, error = _load_competition(competition_id)
+    if error is not None:
+        return error
+    if entity.get("Status") == STATUS_DELETED:
+        return _error("competition_deleted", "This competition has been deleted.", 409)
+
+    body = req.get_body() or b""
+    if not body:
+        return _error("empty_file", "The uploaded file is empty.", 400)
+    if len(body) > POOL_MAX_FILE_SIZE:
+        return _error("file_too_large", "Files are limited to 50 MB.", 413)
+
+    container = _get_container_client()
+    if container is None:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    content_type = _pool_content_type(name)
+    try:
+        container.upload_blob(
+            name=_pool_prefix(competition_id, SOURCE_UPLOAD) + name,
+            data=body,
+            overwrite=True,
+            metadata={
+                "uploadedBy": _ascii_metadata(email),
+                "sourceTool": source_tool,
+                "origName": quote(str(req.params.get("filename") or ""), safe=""),
+            },
+            content_settings=ContentSettings(content_type=content_type),
+        )
+    except Exception as e:
+        logging.error(f"Error uploading '{name}' for competition '{competition_id}': {e}")
+        return _error("internal_error", "Could not store the file.", 500)
+
+    return _json({
+        "name": name,
+        "source": SOURCE_UPLOAD,
+        "size": len(body),
+        "contentType": content_type,
+        "uploadedUtc": _now_utc(),
+        "uploadedBy": email,
+        "sourceTool": source_tool,
+    }, 201)
+
+
+def _download_competition_file(req: func.HttpRequest) -> func.HttpResponse:
+    email = get_user_email_from_header(req)
+    if not email:
+        return _error("unauthorized", "Sign-in required.", 401)
+
+    competition_id = req.route_params.get("id")
+    if not competition_id:
+        return _error("invalid_id", "A competition id is required.", 400)
+
+    name = _route_file_name(req)
+    if not name:
+        return _error("invalid_filename", "A usable filename is required.", 400)
+
+    source = _requested_source(req)
+    if source is None:
+        return _error("invalid_source", "The source must be 'upload' or 'fsm'.", 400)
+
+    # Reads stay available on a soft-deleted competition; only writes don't.
+    _entity, error = _load_competition(competition_id)
+    if error is not None:
+        return error
+
+    container = _get_container_client()
+    if container is None:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    try:
+        blob_client = container.get_blob_client(_pool_prefix(competition_id, source) + name)
+        if not blob_client.exists():
+            return _error("file_not_found", "File not found.", 404)
+        properties = blob_client.get_blob_properties()
+        data = blob_client.download_blob().readall()
+    except ResourceNotFoundError:
+        return _error("file_not_found", "File not found.", 404)
+    except Exception as e:
+        logging.error(f"Error reading '{name}' for competition '{competition_id}': {e}")
+        return _error("internal_error", "Could not read the file.", 500)
+
+    content_settings = getattr(properties, "content_settings", None)
+    content_type = getattr(content_settings, "content_type", None) or _pool_content_type(name)
+
+    return func.HttpResponse(
+        data,
+        status_code=200,
+        mimetype=content_type,
+        headers={"Content-Disposition": f'inline; filename="{name}"'},
+    )
+
+
+def _delete_competition_file(req: func.HttpRequest) -> func.HttpResponse:
+    email = get_user_email_from_header(req)
+    if not email:
+        return _error("unauthorized", "Sign-in required.", 401)
+
+    competition_id = req.route_params.get("id")
+    if not competition_id:
+        return _error("invalid_id", "A competition id is required.", 400)
+
+    name = _route_file_name(req)
+    if not name:
+        return _error("invalid_filename", "A usable filename is required.", 400)
+
+    source = _requested_source(req)
+    if source is None:
+        return _error("invalid_source", "The source must be 'upload' or 'fsm'.", 400)
+    if source == SOURCE_FSM:
+        return _error("fsm_readonly", "Files delivered by the results system cannot be deleted.", 403)
+
+    entity, error = _load_competition(competition_id)
+    if error is not None:
+        return error
+    if entity.get("Status") == STATUS_DELETED:
+        return _error("competition_deleted", "This competition has been deleted.", 409)
+
+    container = _get_container_client()
+    if container is None:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    try:
+        blob_client = container.get_blob_client(_pool_prefix(competition_id, SOURCE_UPLOAD) + name)
+        if not blob_client.exists():
+            return _error("file_not_found", "File not found.", 404)
+        blob_client.delete_blob()
+    except ResourceNotFoundError:
+        return _error("file_not_found", "File not found.", 404)
+    except Exception as e:
+        logging.error(f"Error deleting '{name}' from competition '{competition_id}': {e}")
+        return _error("internal_error", "Could not delete the file.", 500)
+
+    return _json({"status": "deleted", "name": name, "source": SOURCE_UPLOAD})
+
+
 # ── HTTP routes ───────────────────────────────────────────────────────────────
 # The Functions host prepends the default `api` route prefix, so these register
 # as /api/competitions and /api/competitions/{id}.
@@ -636,6 +1003,22 @@ def competition_by_id(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "DELETE":
         return _delete_competition(req)
     return _get_competition(req)
+
+
+@app.route(route="competitions/{id}/files", auth_level=func.AuthLevel.ANONYMOUS,
+           methods=["GET", "POST"])
+def competition_files(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "POST":
+        return _upload_competition_file(req)
+    return _list_competition_files(req)
+
+
+@app.route(route="competitions/{id}/files/{name}", auth_level=func.AuthLevel.ANONYMOUS,
+           methods=["GET", "DELETE"])
+def competition_file_by_name(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "DELETE":
+        return _delete_competition_file(req)
+    return _download_competition_file(req)
 
 
 @app.route(route="health", auth_level=func.AuthLevel.ANONYMOUS, methods=["GET"])
