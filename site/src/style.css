@@ -428,6 +428,62 @@ a {
   border-top: 1px solid var(--line);
 }
 
+/* ── Competition files — the shared pool every tool uploads into ── */
+.comp-files:not(:empty) {
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--line);
+}
+
+.comp-files-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.comp-file-row {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  margin: 0 -0.6rem;
+  padding-right: 0.35rem;
+  border-radius: 0.4rem;
+  transition: background-color 0.15s;
+}
+
+.comp-file-row:hover {
+  background-color: var(--rink-tint);
+}
+
+.comp-file-link {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  flex: 1;
+  min-width: 0;
+  padding: 0.4rem 0.6rem;
+  text-decoration: none;
+}
+
+.comp-file-name {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.comp-file-meta {
+  font-size: 0.7rem;
+  color: var(--ink-faint);
+}
+
+.comp-file-row:hover .comp-file-delete,
+.comp-file-delete:focus-visible {
+  opacity: 1;
+}
+
 .comp-recent-list {
   list-style: none;
   margin: 0;

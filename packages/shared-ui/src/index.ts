@@ -27,6 +27,45 @@ export {
 export type { PlatformCompetition, NewCompetitionInput } from './competition.js';
 
 export {
+  competitionFileUrl,
+  competitionFilesUrl,
+  deleteCompetitionFile,
+  extractPoolFileList,
+  listCompetitionFiles,
+  toPoolFile,
+  uploadCompetitionFile,
+} from './competition-files.js';
+export type { PoolFile, PoolFileSource } from './competition-files.js';
+
+export {
+  matchCategory,
+  parseFilenameGeneric,
+  sortCategoriesForMatching,
+} from './category-recognition.js';
+export type { CategoryInfo, ParsedFilename } from './category-recognition.js';
+
+export {
+  SUFFIX_SLOTS,
+  applyOutcomeLocally,
+  normalizeMatchName,
+  planAutoAssignment,
+  slotOccupant,
+  stripTrailingDashes,
+} from './protocol-auto-assign.js';
+export type {
+  AutoAssignKind,
+  AutoAssignOutcome,
+  AutoAssignTarget,
+  CategoryLike,
+  FileMetaLike,
+  SegmentLike,
+  SegmentRole,
+  StructureLike,
+  SuffixSlot,
+  TrayReason,
+} from './protocol-auto-assign.js';
+
+export {
   initCompetitionSelector,
   openCreateCompetitionDialog,
 } from './competition-selector.js';

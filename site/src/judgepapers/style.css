@@ -866,6 +866,65 @@ input[type="checkbox"] {
   color: var(--error-color);
 }
 
+/* ── Shared competition file pool (files uploaded in another tool) ── */
+.pool-import {
+  margin: 1.25rem 0;
+  padding: 0.9rem 1rem;
+  background: var(--paper-tint);
+  border: 1px dashed var(--line-strong);
+  border-radius: 0.5rem;
+}
+
+.pool-import-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.pool-import-title {
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+.pool-import-sub {
+  margin: 0.35rem 0 0.6rem;
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+
+.pool-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.pool-file {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.pool-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pool-file-src {
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
 /* ── Generated files — download tickets ── */
 .action-container {
   margin-top: 2rem;

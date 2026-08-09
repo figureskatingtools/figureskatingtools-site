@@ -542,6 +542,32 @@ input[type="checkbox"] { accent-color: var(--ink); }
 .tray-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; }
 .tray-empty { color: var(--ink-faint); font-size: 0.85rem; font-style: italic; }
 
+/* ── Shared competition file pool (files uploaded in another tool) ── */
+.pool-import { margin-top: 0.85rem; padding-top: 0.85rem; border-top: 1px solid var(--line); }
+.pool-import-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.35rem; }
+.pool-import-title {
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.pool-import .section-sub { margin-bottom: 0.5rem; }
+.pool-file-list { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.pool-file {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--ink-soft);
+  background: var(--paper);
+  border: 1px dashed var(--line-strong);
+  border-radius: 0.35rem;
+  padding: 0.18rem 0.45rem;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ── File chips (draggable) ── */
 .file-chip {
   display: inline-flex;
@@ -574,6 +600,20 @@ input[type="checkbox"] { accent-color: var(--ink); }
 .file-chip .chip-kind--image { background: var(--gold-tint); color: var(--gold); }
 .file-chip .chip-kind--xml { background: var(--success-tint); color: var(--success-color); }
 .file-chip .chip-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 16rem; }
+/* Placed by filename recognition, not by hand — a soft gold "confirm me" mark
+   that the backend clears the moment the chip is dragged anywhere. */
+.file-chip .chip-auto {
+  font-size: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.05rem 0.3rem;
+  border-radius: 0.25rem;
+  background: var(--gold-tint);
+  border: 1px solid var(--gold-bright);
+  color: var(--gold);
+  cursor: help;
+}
 .file-chip .chip-x { border: none; background: none; color: var(--ink-faint); cursor: pointer; font-size: 1rem; line-height: 1; padding: 0; }
 .file-chip .chip-x:hover { color: var(--error-color); }
 

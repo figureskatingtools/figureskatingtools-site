@@ -15,7 +15,11 @@ import {
   subscribeActiveCompetition,
   competitionLabel,
   formatDateFi,
+  listCompetitionFiles,
+  deleteCompetitionFile,
+  competitionFileUrl,
   type PlatformCompetition,
+  type PoolFile,
 } from '@figureskatingtools/shared-ui'
 import { escapeHtml, fetchUser, renderSignInView, setupUserMenu, type UserInfo } from './shell.js'
 
@@ -211,6 +215,78 @@ function renderCompetitionPanel(competitions: PlatformCompetition[] | null): voi
       setActiveCompetition(created);
     });
   });
+
+  if (active) void renderCompetitionFiles(active.id);
+}
+
+/* ── Competition files (the shared file pool) ───────────────────────────────
+   Every tool uploads the competition's source files into one pool, so the home
+   panel is where you see — and clean up — everything that belongs to the
+   selected competition. FSM-pushed files are read-only, hence upload-only
+   deletion. The whole section is optional: a pool API that is missing, failing
+   or empty renders nothing at all. */
+
+/** `1.4 MB` / `812 kB` / `— ` for an unknown size */
+function formatFileSize(bytes: number): string {
+  if (!bytes) return '';
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} kB`;
+}
+
+async function renderCompetitionFiles(competitionId: string): Promise<void> {
+  const host = document.getElementById('comp-files');
+  if (!host) return;
+
+  let files: PoolFile[];
+  try {
+    files = await listCompetitionFiles(competitionId);
+  } catch (_e) {
+    host.innerHTML = '';
+    return;
+  }
+  // The selection may have changed while the listing was in flight
+  if (getActiveCompetition()?.id !== competitionId) return;
+  if (!files.length) { host.innerHTML = ''; return; }
+
+  host.innerHTML = `
+    <h3 class="comp-recent-title">Competition files</h3>
+    <ul class="comp-files-list">${files.map((f) => {
+      const meta = [formatFileSize(f.size), f.sourceTool || f.source, formatDateFi(f.uploadedUtc)]
+        .filter(Boolean).join(' · ');
+      return `
+        <li class="comp-file-row">
+          <a class="comp-file-link" href="${escapeHtml(competitionFileUrl(competitionId, f.name, f.source))}"
+             target="_blank" rel="noopener noreferrer">
+            <span class="comp-file-name">${escapeHtml(f.name)}</span>
+            <span class="comp-file-meta">${escapeHtml(meta)}</span>
+          </a>
+          ${f.source === 'upload'
+            ? `<button type="button" class="comp-delete comp-file-delete" data-delete-file="${escapeHtml(f.name)}">×</button>`
+            : ''}
+        </li>`;
+    }).join('')}</ul>
+  `;
+
+  host.querySelectorAll<HTMLButtonElement>('[data-delete-file]').forEach((btn) => {
+    const name = btn.getAttribute('data-delete-file')!;
+    btn.title = `Delete ${name}`;
+    btn.setAttribute('aria-label', `Delete ${name}`);
+    btn.addEventListener('click', async () => {
+      if (!window.confirm(`Delete "${name}" from this competition's files?`)) return;
+      btn.disabled = true;
+      try {
+        await deleteCompetitionFile(competitionId, name);
+      } catch (err: unknown) {
+        btn.disabled = false;
+        panelError = err instanceof CompetitionApiError
+          ? `Could not delete "${name}": ${err.message}`
+          : `Could not delete "${name}". Please try again.`;
+        renderCompetitionPanel(knownCompetitions);
+        return;
+      }
+      await renderCompetitionFiles(competitionId);
+    });
+  });
 }
 
 /**
@@ -283,6 +359,7 @@ function activeCompetitionHtml(active: PlatformCompetition): string {
         ).join('')}
       </div>
     </div>
+    <div class="comp-files" id="comp-files"></div>
   `;
 }
 
