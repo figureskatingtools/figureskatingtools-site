@@ -581,6 +581,9 @@ input[type="checkbox"] { accent-color: var(--ink); }
 .pool-import .section-sub { margin-bottom: 0.5rem; }
 .pool-file-list { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .pool-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
   font-family: var(--font-mono);
   font-size: 0.7rem;
   color: var(--ink-soft);
@@ -589,6 +592,14 @@ input[type="checkbox"] { accent-color: var(--ink); }
   border-radius: 0.35rem;
   padding: 0.18rem 0.45rem;
   max-width: 100%;
+  cursor: pointer;
+}
+.pool-file:has(.pool-file-check:checked) {
+  border-style: solid;
+  border-color: var(--rink-strong, var(--line-strong));
+  background: var(--rink-tint, var(--paper));
+}
+.pool-file-name {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

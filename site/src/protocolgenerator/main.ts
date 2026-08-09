@@ -946,6 +946,14 @@ function wireDetail() {
 
   // Import files another tool (or FSM) put in this competition's shared pool.
   document.getElementById('btn-pool-import')?.addEventListener('click', () => void importPoolFiles());
+  document.querySelector('.pool-import .pool-file-list')?.addEventListener('change', syncPoolImportButton);
+  document.getElementById('btn-pool-select-all')?.addEventListener('click', (e) => {
+    const all = poolChecks();
+    const everySelected = all.length > 0 && all.every(c => c.checked);
+    all.forEach(c => { c.checked = !everySelected; });
+    (e.currentTarget as HTMLButtonElement).textContent = everySelected ? 'Select all' : 'Clear selection';
+    syncPoolImportButton();
+  });
 
   // Delete a generated protocol file.
   body.querySelectorAll<HTMLElement>('[data-del-protocol]').forEach(b =>
@@ -1208,28 +1216,44 @@ function poolImportHtml(): string {
         <span class="pool-import-title">Competition files</span>
         <span class="pool-import-count">${pending.length} available</span>
       </summary>
-      <p class="section-sub">Uploaded for this competition in another tool. Recognized files go straight into their slots.</p>
+      <p class="section-sub">Uploaded for this competition in another tool — select the files you need and press Import. Recognized files go straight into their slots.</p>
       <div class="pool-file-list">${pending.map(f =>
-        `<span class="pool-file" title="${escapeHtml(f.sourceTool || f.source)}">${escapeHtml(f.name)}</span>`).join('')}</div>
+        `<label class="pool-file" title="${escapeHtml(f.sourceTool || f.source)}">
+           <input type="checkbox" class="pool-file-check" value="${escapeHtml(f.name)}">
+           <span class="pool-file-name">${escapeHtml(f.name)}</span>
+         </label>`).join('')}</div>
       <div class="pool-import-actions">
-        <button class="btn btn-xs btn-primary" id="btn-pool-import">Import ${pending.length} file${pending.length === 1 ? '' : 's'}</button>
+        <button class="btn btn-xs btn-ghost" id="btn-pool-select-all">Select all</button>
+        <button class="btn btn-xs btn-primary" id="btn-pool-import" disabled>Import selected</button>
       </div>
     </details>`;
 }
 
-/** Import every pool file this competition is missing, auto-placing what we can. */
+function poolChecks(): HTMLInputElement[] {
+  return Array.from(document.querySelectorAll<HTMLInputElement>('.pool-file-check'));
+}
+
+function syncPoolImportButton(): void {
+  const btn = document.getElementById('btn-pool-import') as HTMLButtonElement | null;
+  if (!btn) return;
+  const n = poolChecks().filter(c => c.checked).length;
+  btn.disabled = n === 0;
+  btn.textContent = n ? `Import selected (${n})` : 'Import selected';
+}
+
+/** Import the selected pool files, auto-placing what we can. */
 async function importPoolFiles(): Promise<void> {
   if (!currentId || !boundPlatformId) return;
-  const pending = pendingPoolFiles();
-  if (!pending.length) return;
+  const chosen = poolChecks().filter(c => c.checked).map(c => c.value);
+  if (!chosen.length) return;
 
   const btn = document.getElementById('btn-pool-import') as HTMLButtonElement | null;
   if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
 
-  const outcomes = await planBatch(pending.map(f => f.name));
+  const outcomes = await planBatch(chosen);
   let failed = 0;
-  for (let i = 0; i < pending.length; i++) {
-    const params = new URLSearchParams({ competition: currentId, name: pending[i]!.name });
+  for (let i = 0; i < chosen.length; i++) {
+    const params = new URLSearchParams({ competition: currentId, name: chosen[i]! });
     applyAutoParams(params, outcomes?.[i]);
     try {
       const resp = await fetch(apiUrl(`/import_platform_file?${params.toString()}`), { method: 'POST' });
@@ -1242,7 +1266,7 @@ async function importPoolFiles(): Promise<void> {
 
   if (outcomes) await stampLearnedCodes(outcomes);
   await loadDetails();
-  const parts = [`Imported ${pending.length - failed} of ${pending.length} competition file(s)`];
+  const parts = [`Imported ${chosen.length - failed} of ${chosen.length} competition file(s)`];
   const summary = outcomes ? summarizeBatch(outcomes) : null;
   if (summary) parts.push(summary);
   flash(parts.join(' · ') + '.');
