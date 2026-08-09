@@ -878,9 +878,20 @@ input[type="checkbox"] {
 .pool-import-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
+  gap: 0.6rem;
+  cursor: pointer;
+  list-style: none; /* hide the default disclosure marker; the chevron below replaces it */
+  user-select: none;
 }
+.pool-import-head::-webkit-details-marker { display: none; }
+
+.pool-import-head::before {
+  content: '▸';
+  font-size: 0.7rem;
+  color: var(--ink-faint);
+  transition: transform 0.15s;
+}
+.pool-import[open] > .pool-import-head::before { transform: rotate(90deg); }
 
 .pool-import-title {
   font-family: var(--font-mono);
@@ -888,6 +899,19 @@ input[type="checkbox"] {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--ink-faint);
+}
+
+.pool-import-count {
+  margin-left: auto;
+  font-size: 0.72rem;
+  color: var(--ink-muted);
+}
+
+.pool-import-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
 }
 
 .pool-import-sub {
@@ -900,6 +924,9 @@ input[type="checkbox"] {
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
+  max-height: 14rem;
+  overflow-y: auto;
+  padding-right: 0.25rem;
 }
 
 .pool-file {

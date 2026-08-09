@@ -1109,26 +1109,45 @@ async function init() {
         if (!pending.length) return;
 
         host.innerHTML = `
-            <div class="pool-import">
-                <div class="pool-import-head">
+            <details class="pool-import">
+                <summary class="pool-import-head">
                     <span class="pool-import-title">Competition files</span>
-                    <button id="btn-pool-import" class="btn btn-xs btn-primary">Import selected</button>
-                </div>
-                <p class="pool-import-sub">Uploaded for this competition in another tool — import them here to use them.</p>
+                    <span class="pool-import-count">${pending.length} available</span>
+                </summary>
+                <p class="pool-import-sub">Uploaded for this competition in another tool — select the files you need and press Import.</p>
                 <div class="pool-file-list">
                     ${pending.map(f => `
                         <label class="pool-file">
-                            <input type="checkbox" class="pool-file-check" value="${escapeHtml(f.name)}" checked>
+                            <input type="checkbox" class="pool-file-check" value="${escapeHtml(f.name)}">
                             <span class="pool-file-name">${escapeHtml(f.name)}</span>
                             ${f.sourceTool ? `<span class="pool-file-src">${escapeHtml(f.sourceTool)}</span>` : ''}
                         </label>`).join('')}
                 </div>
-            </div>`;
+                <div class="pool-import-actions">
+                    <button id="btn-pool-select-all" class="btn btn-xs btn-ghost">Select all</button>
+                    <button id="btn-pool-import" class="btn btn-xs btn-primary" disabled>Import selected</button>
+                </div>
+            </details>`;
 
-        document.getElementById('btn-pool-import')?.addEventListener('click', async () => {
-            const btn = document.getElementById('btn-pool-import') as HTMLButtonElement;
-            const chosen = Array.from(document.querySelectorAll<HTMLInputElement>('.pool-file-check'))
-                .filter(c => c.checked).map(c => c.value);
+        const importBtn = document.getElementById('btn-pool-import') as HTMLButtonElement;
+        const checks = () => Array.from(document.querySelectorAll<HTMLInputElement>('.pool-file-check'));
+        const syncImportButton = () => {
+            const n = checks().filter(c => c.checked).length;
+            importBtn.disabled = n === 0;
+            importBtn.textContent = n ? `Import selected (${n})` : 'Import selected';
+        };
+        host.querySelector('.pool-file-list')?.addEventListener('change', syncImportButton);
+        document.getElementById('btn-pool-select-all')?.addEventListener('click', (e) => {
+            const all = checks();
+            const everySelected = all.every(c => c.checked);
+            all.forEach(c => { c.checked = !everySelected; });
+            (e.currentTarget as HTMLButtonElement).textContent = everySelected ? 'Select all' : 'Clear selection';
+            syncImportButton();
+        });
+
+        importBtn.addEventListener('click', async () => {
+            const btn = importBtn;
+            const chosen = checks().filter(c => c.checked).map(c => c.value);
             if (!chosen.length) return;
             btn.disabled = true;
             btn.textContent = 'Importing…';

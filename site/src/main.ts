@@ -248,23 +248,29 @@ async function renderCompetitionFiles(competitionId: string): Promise<void> {
   if (getActiveCompetition()?.id !== competitionId) return;
   if (!files.length) { host.innerHTML = ''; return; }
 
+  // Collapsed by default, but a re-render (e.g. after a delete) keeps it open.
+  const wasOpen = host.querySelector('details.comp-files-details')?.hasAttribute('open') ?? false;
+
   host.innerHTML = `
-    <h3 class="comp-recent-title">Competition files</h3>
-    <ul class="comp-files-list">${files.map((f) => {
-      const meta = [formatFileSize(f.size), f.sourceTool || f.source, formatDateFi(f.uploadedUtc)]
-        .filter(Boolean).join(' · ');
-      return `
-        <li class="comp-file-row">
-          <a class="comp-file-link" href="${escapeHtml(competitionFileUrl(competitionId, f.name, f.source))}"
-             target="_blank" rel="noopener noreferrer">
-            <span class="comp-file-name">${escapeHtml(f.name)}</span>
+    <details class="comp-files-details"${wasOpen ? ' open' : ''}>
+      <summary class="comp-files-summary">
+        <span class="comp-files-title">Competition files</span>
+        <span class="comp-files-count">${files.length}</span>
+      </summary>
+      <ul class="comp-files-list">${files.map((f) => {
+        const meta = [formatFileSize(f.size), f.sourceTool || f.source, formatDateFi(f.uploadedUtc)]
+          .filter(Boolean).join(' · ');
+        return `
+          <li class="comp-file-row">
+            <a class="comp-file-link" href="${escapeHtml(competitionFileUrl(competitionId, f.name, f.source))}"
+               target="_blank" rel="noopener noreferrer" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</a>
             <span class="comp-file-meta">${escapeHtml(meta)}</span>
-          </a>
-          ${f.source === 'upload'
-            ? `<button type="button" class="comp-delete comp-file-delete" data-delete-file="${escapeHtml(f.name)}">×</button>`
-            : ''}
-        </li>`;
-    }).join('')}</ul>
+            ${f.source === 'upload'
+              ? `<button type="button" class="comp-delete comp-file-delete" data-delete-file="${escapeHtml(f.name)}">×</button>`
+              : ''}
+          </li>`;
+      }).join('')}</ul>
+    </details>
   `;
 
   host.querySelectorAll<HTMLButtonElement>('[data-delete-file]').forEach((btn) => {
