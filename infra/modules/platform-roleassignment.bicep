@@ -1,9 +1,16 @@
-// Data-plane RBAC for the platform Function App's system-assigned identity on
-// the platform storage account. Flex Consumption also uses this identity for
+// Data-plane RBAC for a Function App's system-assigned identity on the platform
+// storage account. Flex Consumption also uses this identity for
 // AzureWebJobsStorage and the one-deploy package container, so Blob Data
 // Contributor is required for the host itself, not just app code.
+//
+// Used twice: once for the platform (registry) Function App and once for the
+// HOVTP listener. Every assignment name is guid(storage, principal, role), so
+// the two principals never collide.
 param storageAccountName string
 param functionPrincipalId string
+
+@description('Grant Storage Blob Delegator (user-delegation SAS for downloads). The HOVTP listener only writes, so it does not need it.')
+param grantBlobDelegator bool = true
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' existing = {
   name: storageAccountName
@@ -35,7 +42,7 @@ resource storageBlobDataContributor 'Microsoft.Authorization/roleAssignments@202
 
 // Storage Blob Delegator — needed to mint user-delegation SAS for downloads
 var storageBlobDelegatorId = 'db58b8e5-c6ad-4a2a-8342-4190687cbf4a'
-resource storageBlobDelegator 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+resource storageBlobDelegator 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (grantBlobDelegator) {
   name: guid(storageAccount.id, functionPrincipalId, storageBlobDelegatorId)
   scope: storageAccount
   properties: {

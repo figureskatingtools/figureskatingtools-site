@@ -60,6 +60,16 @@ param proxySharedSecretProtocolgenerator string = ''
 @description('System-assigned principal ids of the tool Function Apps that need read access to competition-data. May be empty on a first deploy.')
 param toolFunctionPrincipalIds array = []
 
+@description('Kill switch for the HOVTP listener. false = the app is still deployed but answers every request 503 (see modules/hovtp-function.bicep).')
+param hovtpEnabled bool = true
+
+@description('Environment the HOVTP listener reports to FS Manager.')
+@allowed([
+  'Test'
+  'Production'
+])
+param hovtpEnvironment string = 'Test'
+
 // Per-environment site resource group.
 resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
   name: resourceGroupName
@@ -145,6 +155,40 @@ module platformRoleAssignment 'modules/platform-roleassignment.bicep' = {
   }
 }
 
+// --- HOVTP listener (FS Manager push endpoint) ----------------------------------
+
+// Separate Function App on purpose: the only anonymous, internet-facing surface
+// of the platform, so it can be stopped or revoked without touching the site API.
+// Shares the platform storage account and App Insights; own plan, own package
+// container, own identity.
+module hovtpFunction 'modules/hovtp-function.bicep' = {
+  scope: rg
+  name: 'hovtpFunctionDeployment'
+  params: {
+    location: location
+    functionAppName: 'func-fs-hovtp-${uniqueString(rg.id)}'
+    appServicePlanName: 'asp-fs-hovtp'
+    storageAccountName: platformStorage.outputs.storageAccountName
+    deploymentContainerUrl: platformStorage.outputs.hovtpDeploymentContainerUrl
+    appInsightsConnectionString: platformFunction.outputs.appInsightsConnectionString
+    dataContainerName: platformStorage.outputs.dataContainerName
+    hovtpEnabled: hovtpEnabled
+    hovtpEnvironment: hovtpEnvironment
+  }
+}
+
+// Same data-plane roles as the platform app minus Blob Delegator — the listener
+// only writes competition files, it never mints download SAS.
+module hovtpRoleAssignment 'modules/platform-roleassignment.bicep' = {
+  scope: rg
+  name: 'hovtpRoleAssignmentDeployment'
+  params: {
+    storageAccountName: platformStorage.outputs.storageAccountName
+    functionPrincipalId: hovtpFunction.outputs.functionPrincipalId
+    grantBlobDelegator: false
+  }
+}
+
 // Cross-tool read access to the shared competition-data container. No-op until
 // the TOOL_PRINCIPAL_ID_* GitHub env vars are populated.
 module sharedDataAccess 'modules/shared-data-access.bicep' = {
@@ -199,6 +243,9 @@ output platformFunctionAppName string = platformFunction.outputs.functionAppName
 output platformFunctionAppUrl string = platformFunction.outputs.functionAppUrl
 output platformFunctionPrincipalId string = platformFunction.outputs.functionPrincipalId
 output platformStorageAccountName string = platformStorage.outputs.storageAccountName
+output hovtpFunctionAppName string = hovtpFunction.outputs.functionAppName
+output hovtpFunctionAppUrl string = hovtpFunction.outputs.functionAppUrl
+output hovtpFunctionPrincipalId string = hovtpFunction.outputs.functionPrincipalId
 output toolPrincipalsGranted int = sharedDataAccess.outputs.grantedCount
 output customDomain string = customDomain
 output dnsZoneName string = dnsZoneName

@@ -62,6 +62,8 @@ jobs:
       auth_mi_object_id: ${{ steps.deploy.outputs.authManagedIdentityObjectId }}
       platform_function_app_name: ${{ steps.deploy.outputs.platformFunctionAppName }}
       platform_function_app_url: ${{ steps.deploy.outputs.platformFunctionAppUrl }}
+      hovtp_function_app_name: ${{ steps.deploy.outputs.hovtpFunctionAppName }}
+      hovtp_function_app_url: ${{ steps.deploy.outputs.hovtpFunctionAppUrl }}
       custom_domain: ${{ steps.deploy.outputs.customDomain }}
     steps:
       - name: Checkout code
@@ -100,6 +102,10 @@ jobs:
           # Set to 'true' to deploy on the default *.azurewebsites.net hostname
           # only (migration step 1, before the DNS cutover).
           SKIP_CUSTOM_DOMAIN: ${{ vars.SKIP_CUSTOM_DOMAIN }}
+          # Kill switch for the HOVTP listener (FS Manager push endpoint):
+          # 'false' keeps the app deployed but makes it answer 503. Unset means
+          # the per-environment default in the bicepparam (test on, prod off).
+          HOVTP_ENABLED: ${{ vars.HOVTP_ENABLED }}
         run: |
           set -euo pipefail
           ENV_NAME="${{ needs.set-environment.outputs.env_name }}"
@@ -126,7 +132,8 @@ jobs:
           for key in webAppName webAppDefaultHostName webAppInboundIpAddress \
                      resourceGroupName authManagedIdentityClientId \
                      authManagedIdentityObjectId platformFunctionAppName \
-                     platformFunctionAppUrl customDomain; do
+                     platformFunctionAppUrl hovtpFunctionAppName \
+                     hovtpFunctionAppUrl customDomain; do
             echo "${key}=$(echo "$OUTPUT" | jq -r ".${key}.value")" >> "$GITHUB_OUTPUT"
           done
 
@@ -288,6 +295,96 @@ jobs:
             --src platform-backend.zip \
             --name "${{ needs.deploy-infra.outputs.platform_function_app_name }}" \
             --resource-group "${{ needs.deploy-infra.outputs.resource_group_name }}"
+
+  deploy-hovtp-backend:
+    name: Deploy HOVTP Listener (Functions)
+    needs: [set-environment, deploy-infra]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.set-environment.outputs.env_name }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Run HOVTP listener tests
+        run: |
+          cd infra/hovtp
+          pip install -r requirements-dev.txt
+          python -m pytest -q
+
+      - name: Build HOVTP package
+        run: |
+          set -euo pipefail
+          BUILD_DIR=$(mktemp -d)
+          cp -r infra/hovtp/* "$BUILD_DIR/"
+
+          cd "$BUILD_DIR"
+          rm -rf .venv __pycache__ .git .vscode .pytest_cache tests local.settings.json
+          rm -f ./*.pyc requirements-dev.txt
+
+          mkdir -p .python_packages/lib/site-packages
+          pip install -r requirements.txt --target .python_packages/lib/site-packages
+
+          zip -r "$GITHUB_WORKSPACE/hovtp-backend.zip" .
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Azure Functions
+        run: |
+          az functionapp deployment source config-zip \
+            --src hovtp-backend.zip \
+            --name "${{ needs.deploy-infra.outputs.hovtp_function_app_name }}" \
+            --resource-group "${{ needs.deploy-infra.outputs.resource_group_name }}"
+
+      - name: Smoke check (HOVTP OPTIONS)
+        # OPTIONS is the protocol's own status/keep-alive probe and is defined to
+        # have no side effects, so this is safe to run against a live listener.
+        # Warning-only: a cold Flex Consumption app can outlast the retries, and a
+        # slow first response is not a reason to fail an otherwise good deploy.
+        env:
+          URL: ${{ needs.deploy-infra.outputs.hovtp_function_app_url }}
+          HOVTP_ENABLED: ${{ vars.HOVTP_ENABLED }}
+        run: |
+          set -uo pipefail
+          # HOVTP_ENABLED=false is the kill switch: the app is deployed but every
+          # request is answered 503, which is then the expected smoke result.
+          if [ "${HOVTP_ENABLED:-}" = "false" ]; then
+            EXPECT=503
+          else
+            EXPECT=200
+          fi
+          for i in $(seq 1 10); do
+            HEADERS=$(curl -s -D - -o /dev/null -X OPTIONS "${URL}/api/hovtp" \
+              -H 'X-HOVTP-Session-Id: 00000000-0000-4000-8000-000000000001' \
+              -H 'X-HOVTP-Origin: ci-smoke' \
+              -H 'X-HOVTP-Environment: Test' \
+              -H 'X-HOVTP-Data-Type: ODF' || echo "")
+            CODE=$(printf '%s' "$HEADERS" | head -n 1 | awk '{print $2}')
+            if [ "$CODE" = "$EXPECT" ]; then
+              if [ "$EXPECT" = "503" ]; then
+                echo "HOVTP listener is deployed and disabled (503) at ${URL}/api/hovtp"
+                exit 0
+              fi
+              if printf '%s' "$HEADERS" | grep -qi '^x-hovtp-last-serial-number:[[:space:]]*0'; then
+                echo "HOVTP listener healthy at ${URL}/api/hovtp"
+                exit 0
+              fi
+              echo "OPTIONS returned 200 without x-hovtp-last-serial-number: 0, retrying..."
+            else
+              echo "OPTIONS returned ${CODE:-000} (expected ${EXPECT}), retrying..."
+            fi
+            sleep 10
+          done
+          echo "::warning::HOVTP smoke check never returned ${EXPECT} with x-hovtp-last-serial-number: 0 at ${URL}/api/hovtp"
 
   deploy-frontend:
     name: Deploy Frontend (Web App)

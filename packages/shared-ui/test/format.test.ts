@@ -2,12 +2,13 @@
  * Unit tests for the shared display formatters.
  *
  * `formatDateFi` is deliberately DOM-free and time-zone-safe for date-only
- * input, so plain vitest in the default node environment is enough.
+ * input, so plain vitest in the default node environment is enough; the same
+ * goes for `formatFileSize`.
  */
 
 import { describe, expect, it } from 'vitest';
 
-import { formatDateFi } from '../src/format.js';
+import { formatDateFi, formatFileSize } from '../src/format.js';
 
 describe('formatDateFi', () => {
   it('formats an ISO date as dd.MM.yyyy', () => {
@@ -66,5 +67,24 @@ describe('formatDateFi', () => {
 
   it('keeps a leap day', () => {
     expect(formatDateFi('2024-02-29')).toBe('29.02.2024');
+  });
+});
+
+describe('formatFileSize', () => {
+  it('renders an unknown or zero size as an empty string', () => {
+    // The callers join their meta line with filter(Boolean) — '' drops the
+    // whole segment rather than leaving a dangling separator.
+    expect(formatFileSize(0)).toBe('');
+  });
+
+  it('rounds small files up to a whole kilobyte', () => {
+    expect(formatFileSize(1)).toBe('1 kB');
+    expect(formatFileSize(511)).toBe('1 kB');
+    expect(formatFileSize(1536)).toBe('2 kB');
+  });
+
+  it('switches to megabytes with one decimal at a full MiB', () => {
+    expect(formatFileSize(1048576)).toBe('1.0 MB');
+    expect(formatFileSize(1468006)).toBe('1.4 MB');
   });
 });

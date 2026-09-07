@@ -4,7 +4,8 @@
  * Every human-facing date on figureskatingtools.com is Finnish: `dd.MM.yyyy`
  * (25.01.2025), zero-padded, day first. Machine-facing values — anything that
  * goes back to an API, a `<input type="date">` value or a sort key — stay ISO;
- * this module is only for what a person reads.
+ * this module is only for what a person reads. File sizes are formatted the
+ * same way: for a person scanning a list, not for arithmetic.
  *
  * DOM-free and dependency-free, so it unit tests in plain node.
  */
@@ -74,4 +75,18 @@ export function formatDateFi(value: string | Date | null | undefined): string {
   }
 
   return raw;
+}
+
+/**
+ * Format a byte count for a file list: `1.4 MB` / `812 kB`.
+ *
+ * Binary units under decimal labels, matching what a file manager shows.
+ * Anything under a kilobyte still reads `1 kB` — "0 kB" would look like a
+ * broken upload. An unknown or zero size comes back as `''`, so a caller's
+ * `filter(Boolean)` drops the segment instead of rendering a dangling dash.
+ */
+export function formatFileSize(bytes: number): string {
+  if (!bytes) return '';
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1024))} kB`;
 }

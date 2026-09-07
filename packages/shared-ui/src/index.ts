@@ -2,7 +2,7 @@ export { renderSiteNav, initSiteNav, getEnvPrefix } from './nav.js';
 export { injectSiteNavStyles } from './nav-styles.js';
 export type { SiteNavOptions, NavSubItem, NavTool, NavSmallTool } from './types.js';
 
-export { formatDateFi } from './format.js';
+export { formatDateFi, formatFileSize } from './format.js';
 
 export {
   ACTIVE_COMPETITION_KEY,
@@ -36,6 +36,24 @@ export {
   uploadCompetitionFile,
 } from './competition-files.js';
 export type { PoolFile, PoolFileSource } from './competition-files.js';
+
+export {
+  ACCEPT_DAYS,
+  acceptHovtpSource,
+  extractHovtpSourceList,
+  hovtpSourceUrl,
+  hovtpSourcesUrl,
+  listHovtpSources,
+  rejectHovtpSource,
+  revokeHovtpSource,
+  toHovtpSource,
+} from './hovtp-sources.js';
+export type {
+  AcceptDays,
+  AcceptHovtpSourceResult,
+  HovtpSource,
+  HovtpSourceStatus,
+} from './hovtp-sources.js';
 
 export {
   matchCategory,
