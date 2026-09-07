@@ -42,6 +42,13 @@ def test_session_without_serial_is_400():
     assert caught.value.reason == "serial number missing"
 
 
+def test_status_request_may_carry_a_session_without_a_serial():
+    hdr = fa.parse_hovtp_headers(
+        _headers(session_id="6d4f1b9e-2c3a-4c0d-9f1e-0a1b2c3d4e5f"), status_request=True)
+    assert hdr.session_id == "6d4f1b9e-2c3a-4c0d-9f1e-0a1b2c3d4e5f"
+    assert hdr.serial is None
+
+
 def test_serial_without_session_is_400():
     with pytest.raises(fa.HovtpError) as caught:
         fa.parse_hovtp_headers(_headers(serial=3))

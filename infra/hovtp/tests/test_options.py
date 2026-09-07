@@ -24,7 +24,7 @@ def test_options_has_no_side_effects(table, blobs):
     seed_session(table, last_serial=4)
     table.calls.clear()
 
-    response = fa._handle_hovtp(make_request("OPTIONS", session_id=SESSION_ID, serial=5))
+    response = fa._handle_hovtp(make_request("OPTIONS", session_id=SESSION_ID))
 
     assert response.status_code == 200
     assert table.writes() == []
@@ -35,14 +35,14 @@ def test_options_has_no_side_effects(table, blobs):
 def test_options_reports_the_last_accepted_serial(table, blobs):
     seed_session(table, last_serial=42)
 
-    response = fa._handle_hovtp(make_request("OPTIONS", session_id=SESSION_ID, serial=43))
+    response = fa._handle_hovtp(make_request("OPTIONS", session_id=SESSION_ID))
 
     assert head(response, "X-HOVTP-Last-Serial-Number") == "42"
 
 
 def test_options_reports_zero_for_an_unknown_session(table, blobs):
     response = fa._handle_hovtp(make_request(
-        "OPTIONS", session_id="11111111-2222-4333-8444-555555555555", serial=1))
+        "OPTIONS", session_id="11111111-2222-4333-8444-555555555555"))
 
     assert head(response, "X-HOVTP-Last-Serial-Number") == "0"
 
@@ -79,3 +79,28 @@ def test_keep_alive_header_is_omitted_when_disabled(table, blobs, monkeypatch):
     response = fa._handle_hovtp(make_request("OPTIONS"))
 
     assert head(response, "X-HOVTP-Keep-Alive-Interval") is None
+
+
+def test_options_carries_the_session_id_without_a_serial_number(table, blobs):
+    """Spec §4.2: the status request has a Session-Id but NO Serial-Number.
+
+    The first deployed build answered this exact request 400 "serial number
+    missing", which would have made FSM see the receiver as down forever.
+    """
+    seed_session(table, last_serial=7)
+    table.calls.clear()
+
+    response = fa._handle_hovtp(make_request("OPTIONS", session_id=SESSION_ID))
+
+    assert response.status_code == 200
+    assert head(response, "X-HOVTP-Last-Serial-Number") == "7"
+    assert table.writes() == []
+
+
+def test_options_with_a_serial_number_is_still_tolerated(table, blobs):
+    seed_session(table, last_serial=7)
+
+    response = fa._handle_hovtp(make_request("OPTIONS", session_id=SESSION_ID, serial=8))
+
+    assert response.status_code == 200
+    assert head(response, "X-HOVTP-Last-Serial-Number") == "7"

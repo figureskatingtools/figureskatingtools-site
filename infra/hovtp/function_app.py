@@ -390,19 +390,21 @@ class HovtpHeaders:
     data_layer: dict = field(default_factory=dict)
 
 
-def parse_hovtp_headers(headers) -> HovtpHeaders:
+def parse_hovtp_headers(headers, *, status_request: bool = False) -> HovtpHeaders:
     """
     Spec §5. `req.headers` is already case-insensitive and order-independent,
     so nothing here depends on how FSM spells or orders the header names.
 
-    Session-Id and Serial-Number travel together: one without the other is a
-    protocol error (400). Both absent is tolerated — the real captures show FSM
-    installations that send neither — and answered with Last-Serial 0.
+    On a data transfer Session-Id and Serial-Number travel together: one without
+    the other is a protocol error (400). Both absent is tolerated — the real
+    captures show FSM installations that send neither — and answered with
+    Last-Serial 0. A status request (OPTIONS, spec §4.2) carries the session id
+    WITHOUT a serial number, so `status_request=True` only validates the id.
     """
     session_raw = (headers.get("X-HOVTP-Session-Id") or "").strip()
     serial_raw = (headers.get("X-HOVTP-Serial-Number") or "").strip()
 
-    if session_raw and not serial_raw:
+    if session_raw and not serial_raw and not status_request:
         raise HovtpError(400, "serial number missing")
     if serial_raw and not session_raw:
         raise HovtpError(400, "session id missing")
@@ -415,6 +417,7 @@ def parse_hovtp_headers(headers) -> HovtpHeaders:
         except (ValueError, AttributeError, TypeError):
             raise HovtpError(400, "invalid session id")
 
+    if serial_raw:
         if not serial_raw.isdigit():
             raise HovtpError(400, "invalid serial number")
         serial = int(serial_raw)
@@ -923,7 +926,7 @@ def _hovtp_options(req: func.HttpRequest, record: dict) -> func.HttpResponse:
     if not _enabled():
         raise HovtpError(503, "receiver disabled")
 
-    hdr = parse_hovtp_headers(req.headers)
+    hdr = parse_hovtp_headers(req.headers, status_request=True)
     record.update({
         "origin": hdr.origin,
         "environment": hdr.environment,
