@@ -15,6 +15,7 @@ import {
   planAutoAssignment,
   applyOutcomeLocally,
   stripTrailingDashes,
+  SUFFIX_SLOTS,
   type CategoryInfo,
   type AutoAssignOutcome,
   type AutoAssignTarget,
@@ -975,6 +976,10 @@ function wireDetail() {
   // Import files another tool (or FSM) put in this competition's shared pool.
   document.getElementById('btn-pool-import')?.addEventListener('click', () => void importPoolFiles());
   document.querySelector('.pool-import .pool-file-list')?.addEventListener('change', syncPoolImportButton);
+  document.getElementById('pool-show-all')?.addEventListener('change', (e) => {
+    writePoolShowAll((e.currentTarget as HTMLInputElement).checked);
+    renderDetails();   // re-renders the list; the <details> stays open
+  });
   document.getElementById('btn-pool-select-all')?.addEventListener('click', (e) => {
     const all = poolChecks();
     const everySelected = all.length > 0 && all.every(c => c.checked);
@@ -1223,17 +1228,54 @@ async function refreshPoolFiles(): Promise<void> {
   }
 }
 
-/** Pool files this competition has not imported yet. */
-function pendingPoolFiles(): PoolFile[] {
+/**
+ * "Show all files" in the import list. Off by default: the pool also holds the
+ * Judge Papers sheets FS Manager pushes for every segment, which this tool never
+ * uses, and they would otherwise bury the two or three files that matter.
+ */
+const POOL_SHOW_ALL_KEY = 'pg:pool-show-all:v1';
+let showAllPoolFiles = readPoolShowAll();
+
+function readPoolShowAll(): boolean {
+  try { return localStorage.getItem(POOL_SHOW_ALL_KEY) === '1'; } catch { return false; }
+}
+function writePoolShowAll(value: boolean): void {
+  showAllPoolFiles = value;
+  try { localStorage.setItem(POOL_SHOW_ALL_KEY, value ? '1' : '0'); } catch { /* private mode etc. */ }
+}
+
+/**
+ * Does Protocol Generator have any use for this pool file?
+ *
+ * Judged by the FSM suffix (everything after the last underscore) against the
+ * recognizer's slot table: a suffix it marks `skip` is a Judge Papers sheet
+ * (start lists, judges' sheets, referee/technical sheets…). Unknown suffixes stay
+ * visible — they may be anything a user uploaded by hand.
+ */
+function isProtocolGeneratorFile(name: string): boolean {
+  const suffix = name.slice(name.lastIndexOf('_') + 1);
+  return SUFFIX_SLOTS[suffix]?.kind !== 'skip';
+}
+
+/** Pool PDFs this competition has not imported yet (XML never shows here). */
+function importablePoolFiles(): PoolFile[] {
   if (!poolFiles || !details) return [];
   const known = new Set<string>();
   Object.values(details.structure.files || {}).forEach(m => {
     if (m.poolName) known.add(m.poolName);
     if (m.filename) known.add(m.filename);
   });
-  // The schedule is handled by the Schedule section (parsed, not imported as a
-  // loose file), so it never shows up in the plain import list.
-  return poolFiles.filter(f => !known.has(f.name) && !isScheduleCandidate(f.name));
+  // Only PDFs: the ODF XML messages (schedule updates, participants…) are data
+  // feeds, not protocol pages. The schedule itself is handled by the Schedule
+  // section (parsed, not imported as a loose file).
+  return poolFiles.filter(f => /\.pdf$/i.test(f.name)
+    && !known.has(f.name) && !isScheduleCandidate(f.name));
+}
+
+/** The import list as shown: everything, or only what this tool uses. */
+function pendingPoolFiles(): PoolFile[] {
+  const all = importablePoolFiles();
+  return showAllPoolFiles ? all : all.filter(f => isProtocolGeneratorFile(f.name));
 }
 
 /**
@@ -1258,16 +1300,26 @@ function scheduleCandidates(): PoolFile[] {
 }
 
 function poolImportHtml(): string {
+  const all = importablePoolFiles();
   const pending = pendingPoolFiles();
-  if (!pending.length) return '';
+  const hidden = all.length - pending.length;
+  if (!all.length) return '';
   // Collapsed by default; a re-render (details refresh) keeps it open.
   const wasOpen = document.querySelector('details.pool-import')?.hasAttribute('open') ?? false;
+  const hiddenNote = hidden
+    ? ` (${hidden} Judge Papers ${hidden === 1 ? 'sheet' : 'sheets'} hidden)`
+    : '';
   return `<details class="pool-import"${wasOpen ? ' open' : ''}>
       <summary class="pool-import-head">
         <span class="pool-import-title">Competition files</span>
         <span class="pool-import-count">${pending.length} available</span>
       </summary>
       <p class="section-sub">Uploaded for this competition in another tool — select the files you need and press Import. Recognized files go straight into their slots.</p>
+      <label class="pool-import-toggle">
+        <input type="checkbox" id="pool-show-all"${showAllPoolFiles ? ' checked' : ''}>
+        Show all files${hiddenNote}
+      </label>
+      ${pending.length ? '' : '<p class="section-sub">Nothing left that Protocol Generator uses — tick "Show all files" to see the rest.</p>'}
       <div class="pool-file-list">${pending.map(f =>
         `<label class="pool-file" title="${escapeHtml(f.sourceTool || f.source)}">
            <input type="checkbox" class="pool-file-check" value="${escapeHtml(f.name)}" data-source="${escapeHtml(f.source)}">
