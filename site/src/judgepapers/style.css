@@ -1383,3 +1383,15 @@ input[type="checkbox"] {
   color: var(--gold);
   font-size: 0.95em;
 }
+
+/* ── Site footer (same recipe as the home page) ── */
+.site-footer {
+  margin-top: auto;
+  text-align: center;
+  padding: 2rem 1.5rem;
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  border-top: 1px solid var(--line);
+}

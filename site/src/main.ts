@@ -90,7 +90,7 @@ function renderAuthenticatedView(userInfo: UserInfo) {
     </main>
 
     <footer class="site-footer">
-      <p>&copy; ${new Date().getFullYear()} Figure Skating Tools</p>
+      <p>Supporting the figure skating community — created with a pinch of AI ❤️</p>
     </footer>
   `;
 

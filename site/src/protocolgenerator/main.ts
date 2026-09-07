@@ -132,6 +132,10 @@ const APP_HTML = `
       </div>
     </div>
   </main>
+
+  <footer class="site-footer">
+    <p>Supporting the figure skating community — created with a pinch of AI ❤️</p>
+  </footer>
 `;
 
 function showView(viewId: string) {
