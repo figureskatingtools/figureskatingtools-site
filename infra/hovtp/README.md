@@ -106,10 +106,14 @@ surfaces in the UI for the operator to accept.
 ### File names
 
 * `DT_PDF` — the base64 in `<PDFData>` is decoded (it must start with `%PDF`)
-  and stored **on its own**; the ODF wrapper is not kept. The name is
-  `<DocumentCode without trailing '-'>_<DocumentSubtype>_<REPORT_TITLE slug>.pdf`:
-  `FSK_C08_Competition_Schedule.pdf`,
-  `FSKWSINGLES-ADVNOV----FNL-000100_C73A1_Segment_Results.pdf`.
+  and stored **on its own**; the ODF wrapper is not kept. The name mirrors FS
+  Manager's own PDF export exactly — `<DocumentCode as sent, padding dashes
+  included>_<REPORT_TITLE with everything but letters and digits removed>.pdf`
+  — because Judge Papers recognises category, segment and sheet type from that
+  shape: `FSKWSINGLES-DEBYTW----FNL-000100--_StartListwithTimes.pdf`,
+  `FSKWSINGLES-DEBYTW----------------_CalculationSetupVerificationforReferee.pdf`,
+  `FSK-------------------------------_CompetitionSchedule.pdf`. Without a
+  REPORT_TITLE the DocumentSubtype (`C08`) stands in for the title.
 * everything else — the raw request body as
   `<DocumentType>_<DocumentCode>[_<DocumentSubcode>].xml`. A `*_UPDATE` type
   gets `_<LogicalDate><Time>` appended (serial as a fallback) so increments do

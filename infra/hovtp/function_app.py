@@ -807,8 +807,9 @@ def upsert_source(table_client, competition_id: str, ip: str, hdr: HovtpHeaders,
 
 # ── file derivation ───────────────────────────────────────────────────────────
 
-def _slug(value: str) -> str:
-    return re.sub(r"[^A-Za-z0-9]+", "_", str(value or "")).strip("_")
+def _compact(value: str) -> str:
+    """`Start List with Times` -> `StartListwithTimes` (FS Manager's file-name style)."""
+    return re.sub(r"[^A-Za-z0-9]+", "", str(value or ""))
 
 
 def _join_nonempty(parts) -> str:
@@ -839,12 +840,18 @@ def derive_files(message: OdfMessage, hdr: HovtpHeaders, body: bytes,
         if not data.startswith(b"%PDF"):
             raise HovtpError(451, "PDFData is not a PDF")
 
-        raw_name = _join_nonempty([
-            message.document_code.rstrip("-"),
-            message.document_subtype,
-            _slug(message.report_title),
-        ]) + ".pdf"
-        return [DerivedFile(_checked_name(raw_name), data, "application/pdf")]
+        # Mirror FS Manager's own PDF export names exactly —
+        # `<DocumentCode>_<REPORT_TITLE with everything but letters/digits removed>.pdf`,
+        # e.g. `FSKWSINGLES-DEBYTW----FNL-000100--_StartListwithTimes.pdf` — because
+        # Judge Papers recognises category, segment and sheet type from that
+        # shape (the padded RSC included). Anything else lands as "missing".
+        stem = _join_nonempty([
+            message.document_code,
+            _compact(message.report_title) or message.document_subtype,
+        ])
+        if not re.search(r"[A-Za-z0-9]", stem):
+            raise HovtpError(451, "unusable document name")
+        return [DerivedFile(_checked_name(stem + ".pdf"), data, "application/pdf")]
 
     raw_name = _join_nonempty([
         message.document_type,

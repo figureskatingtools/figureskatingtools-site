@@ -31,7 +31,7 @@ def test_dt_pdf_stores_only_the_decoded_pdf(table, blobs):
 
     assert response.status_code == 200
     blob = _only(blobs)
-    assert blob.name == PENDING + "FSK_C08_Competition_Schedule.pdf"
+    assert blob.name == PENDING + "FSK-------------------------------_CompetitionSchedule.pdf"
     assert blob.data == fixtures.PDF_BYTES
     assert blob.content_type == "application/pdf"
 
@@ -59,17 +59,18 @@ def test_dt_pdf_metadata_records_the_odf_attributes_and_the_report_title(table, 
     assert metadata["report_title"] == "Competition Schedule"
 
 
-def test_the_segment_report_keeps_its_document_code_without_the_padding(table, blobs):
+def test_the_segment_report_is_named_like_fs_managers_own_export(table, blobs):
+    """Judge Papers parses `<padded RSC>_<CompactTitle>.pdf`, FS Manager's export shape."""
     _post(body=fixtures.DT_PDF_SEGMENT_BODY)
 
     assert _only(blobs).name == (
-        PENDING + "FSKWSINGLES-ADVNOV----FNL-000100_C73A1_Segment_Results.pdf")
+        PENDING + "FSKWSINGLES-ADVNOV----FNL-000100--_SegmentResults.pdf")
 
 
 def test_a_pdf_without_a_report_title_falls_back_to_code_and_subtype(table, blobs):
     _post(body=fixtures.pdf_message(report_title=""))
 
-    assert _only(blobs).name == PENDING + "FSK_C08.pdf"
+    assert _only(blobs).name == PENDING + "FSK-------------------------------_C08.pdf"
 
 
 def test_invalid_base64_is_451(table, blobs):

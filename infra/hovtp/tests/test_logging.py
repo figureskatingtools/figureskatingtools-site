@@ -39,7 +39,7 @@ def test_a_stored_message_logs_every_field(table, blobs, caplog):
     assert record["serial"] == 1
     assert record["lastSerial"] == 1
     assert record["bytes"] == len(fixtures.DT_PDF_BODY)
-    assert record["blobs"] == ["FSK_C08_Competition_Schedule.pdf"]
+    assert record["blobs"] == ["FSK-------------------------------_CompetitionSchedule.pdf"]
 
 
 def test_the_body_is_never_logged(table, blobs, caplog):

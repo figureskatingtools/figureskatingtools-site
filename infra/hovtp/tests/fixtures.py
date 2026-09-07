@@ -30,7 +30,7 @@ def odf(attributes: dict, inner: str = "") -> bytes:
     ).encode("utf-8")
 
 
-def pdf_message(*, document_code="FSK", document_subtype="C08",
+def pdf_message(*, document_code="FSK-------------------------------", document_subtype="C08",
                 report_title="Competition Schedule", pdf_base64=PDF_BASE64,
                 include_pdf_data=True, competition_code=COMPETITION_CODE_RAW) -> bytes:
     inner = (
@@ -56,7 +56,7 @@ def pdf_message(*, document_code="FSK", document_subtype="C08",
     }, inner)
 
 
-# The C08 competition-schedule PDF: DocumentCode "FSK", no segment.
+# The C08 competition-schedule PDF: the padded discipline-level DocumentCode, no segment.
 DT_PDF_BODY = pdf_message()
 
 # The C73A1 segment-results PDF: the long padded segment DocumentCode.
