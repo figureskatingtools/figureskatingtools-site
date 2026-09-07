@@ -2,8 +2,9 @@
 tests put that directory on sys.path and import it the same way.
 
 The in-memory Table Storage and Blob Storage doubles every test uses live in
-`fakes.py` next door — the HOVTP listener app in `infra/hovtp/` writes into the
-same table and container, and shares them from there.
+`fakes.py` next door. The HOVTP listener app in `infra/hovtp/` writes into the
+same table and container but is tested with its own copy of the doubles (see
+`infra/hovtp/tests/conftest.py`).
 """
 import json
 import os

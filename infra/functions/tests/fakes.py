@@ -1,10 +1,11 @@
-"""In-memory Table Storage and Blob Storage doubles shared by the test suites.
+"""In-memory Table Storage and Blob Storage doubles for the platform API tests.
 
-They live in their own module (rather than inside `conftest.py`) because the
-HOVTP listener app in `infra/hovtp/` drives the *same* storage layout — the
-`competitions` table and the `competition-data` container — and must be tested
-against the same behaviours. Its conftest puts this directory on `sys.path` and
-imports `fakes`.
+They live in their own module (rather than inside `conftest.py`) so the doubles
+are importable on their own. The HOVTP listener app in `infra/hovtp/` drives the
+*same* storage layout — the `competitions` table and the `competition-data`
+container — but is a separately deployed app and keeps its own copy of these
+doubles in `infra/hovtp/tests/conftest.py` (extended with what the listener
+needs); a behaviour fixed here should be mirrored there.
 
 The doubles reproduce only what the routes actually depend on, so a route that
 gets the storage contract wrong fails a test:
