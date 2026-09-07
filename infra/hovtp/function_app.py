@@ -13,10 +13,13 @@ competition's file pool.
 
 HTTP contract (the Functions host prepends the default `api` route prefix):
 
-    POST    /api/hovtp                 -> 200 | 400 | 413 | 450 | 451 | 500 | 503
-    POST    /api/hovtp/{code}          -> same; the path code wins over the body
-    OPTIONS /api/hovtp[/{code}]        -> 200, status/keep-alive, NO side effects
+    POST    /api/v1/hovtp              -> 200 | 400 | 413 | 450 | 451 | 500 | 503
+    OPTIONS /api/v1/hovtp              -> 200, status/keep-alive, NO side effects
     GET     /api/health                -> 200 {"status": "ok"}
+
+The competition is recognised from the message itself (`OdfBody/@CompetitionCode`,
+with an `X-*-Competition*` header as a fallback) — the URL carries no code, so
+one FSM Endpoint setting serves every competition.
 
 Every response — success or failure — carries the HOVTP response headers:
 
@@ -568,11 +571,8 @@ def parse_odf(body: bytes) -> OdfMessage:
     return message
 
 
-def resolve_code(route_code: str, message: OdfMessage, headers) -> str:
-    """Path wins (the operator typed it into FSM), then the body, then a header."""
-    if (route_code or "").strip():
-        return route_code.strip()
-
+def resolve_code(message: OdfMessage, headers) -> str:
+    """The body's `CompetitionCode` wins, then an `X-*-Competition*` header."""
     from_body = (message.attrs.get("CompetitionCode") or "").strip()
     if from_body:
         return from_body
@@ -989,7 +989,7 @@ def _hovtp_post(req: func.HttpRequest, record: dict) -> func.HttpResponse:
     if table_client is None:
         raise HovtpError(500, "storage unavailable")
 
-    code = resolve_code(req.route_params.get("code") or "", message, req.headers)
+    code = resolve_code(message, req.headers)
     normalized, competition_id = lookup_competition(table_client, code)
     record.update({"code": normalized, "competitionId": competition_id})
 
@@ -1125,15 +1125,10 @@ def _handle_hovtp(req: func.HttpRequest) -> func.HttpResponse:
 
 # ── HTTP routes ───────────────────────────────────────────────────────────────
 # The Functions host prepends the default `api` route prefix, so these register
-# as /api/hovtp, /api/hovtp/{code} and /api/health.
+# as /api/v1/hovtp and /api/health.
 
-@app.route(route="hovtp", auth_level=func.AuthLevel.ANONYMOUS, methods=["POST", "OPTIONS"])
+@app.route(route="v1/hovtp", auth_level=func.AuthLevel.ANONYMOUS, methods=["POST", "OPTIONS"])
 def hovtp(req: func.HttpRequest) -> func.HttpResponse:
-    return _handle_hovtp(req)
-
-
-@app.route(route="hovtp/{code}", auth_level=func.AuthLevel.ANONYMOUS, methods=["POST", "OPTIONS"])
-def hovtp_for_code(req: func.HttpRequest) -> func.HttpResponse:
     return _handle_hovtp(req)
 
 

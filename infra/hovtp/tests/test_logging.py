@@ -52,7 +52,7 @@ def test_the_body_is_never_logged(table, blobs, caplog):
 def test_each_refusal_carries_its_own_outcome(table, blobs, caplog):
     cases = [
         (dict(body=fixtures.NOT_XML_BODY), "bad_request"),
-        (dict(body=fixtures.DT_SCHEDULE_BODY, code="nope"), "unknown_code"),
+        (dict(body=fixtures.schedule_message(competition_code="nope")), "unknown_code"),
         (dict(body=fixtures.DT_RESULT_BODY), "dropped"),
     ]
     for kwargs, expected in cases:

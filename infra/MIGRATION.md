@@ -66,8 +66,8 @@ in `infra/parameters/<env>.bicepparam`.
 `func-fs-hovtp-<suffix>` is deployed by the same Bicep run as everything else and
 is the endpoint FS Manager pushes to. In FSM: **Settings / HOVTP Settings** —
 hostname `func-fs-hovtp-<suffix>.azurewebsites.net`, port `443`, endpoint
-`/api/hovtp/<competition code>` (the code in the path is optional; without it the
-listener reads `OdfBody/@CompetitionCode` from the message body).
+`/api/v1/hovtp` — no competition code in the path: the listener reads
+`OdfBody/@CompetitionCode` from the message body.
 
 ```bash
 az deployment sub show -n <deployment> --query 'properties.outputs.hovtpFunctionAppUrl.value' -o tsv

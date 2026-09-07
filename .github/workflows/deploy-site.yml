@@ -363,7 +363,7 @@ jobs:
             EXPECT=200
           fi
           for i in $(seq 1 10); do
-            HEADERS=$(curl -s -D - -o /dev/null -X OPTIONS "${URL}/api/hovtp" \
+            HEADERS=$(curl -s -D - -o /dev/null -X OPTIONS "${URL}/api/v1/hovtp" \
               -H 'X-HOVTP-Session-Id: 00000000-0000-4000-8000-000000000001' \
               -H 'X-HOVTP-Origin: ci-smoke' \
               -H 'X-HOVTP-Environment: Test' \
@@ -371,11 +371,11 @@ jobs:
             CODE=$(printf '%s' "$HEADERS" | head -n 1 | awk '{print $2}')
             if [ "$CODE" = "$EXPECT" ]; then
               if [ "$EXPECT" = "503" ]; then
-                echo "HOVTP listener is deployed and disabled (503) at ${URL}/api/hovtp"
+                echo "HOVTP listener is deployed and disabled (503) at ${URL}/api/v1/hovtp"
                 exit 0
               fi
               if printf '%s' "$HEADERS" | grep -qi '^x-hovtp-last-serial-number:[[:space:]]*0'; then
-                echo "HOVTP listener healthy at ${URL}/api/hovtp"
+                echo "HOVTP listener healthy at ${URL}/api/v1/hovtp"
                 exit 0
               fi
               echo "OPTIONS returned 200 without x-hovtp-last-serial-number: 0, retrying..."
@@ -384,7 +384,7 @@ jobs:
             fi
             sleep 10
           done
-          echo "::warning::HOVTP smoke check never returned ${EXPECT} with x-hovtp-last-serial-number: 0 at ${URL}/api/hovtp"
+          echo "::warning::HOVTP smoke check never returned ${EXPECT} with x-hovtp-last-serial-number: 0 at ${URL}/api/v1/hovtp"
 
   deploy-frontend:
     name: Deploy Frontend (Web App)

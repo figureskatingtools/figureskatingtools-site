@@ -347,7 +347,7 @@ def seed_session(table_client, session_id=SESSION_ID, last_serial=1, ip=DEFAULT_
     })
 
 
-def make_request(method="POST", *, body=b"", path=None, code=None, headers=None,
+def make_request(method="POST", *, body=b"", path=None, headers=None,
                  session_id=None, serial=None, client_ip=DEFAULT_IP, params=None,
                  content_length=None):
     """Build the HttpRequest the Functions host would have produced."""
@@ -368,16 +368,12 @@ def make_request(method="POST", *, body=b"", path=None, code=None, headers=None,
         request_headers["Content-Length"] = str(content_length)
     request_headers.update(headers or {})
 
-    route_params = {"code": code} if code else {}
-    if path is None:
-        path = f"/api/hovtp/{code}" if code else "/api/hovtp"
-
     return func.HttpRequest(
         method=method,
-        url=f"https://func-fs-hovtp.invalid{path}",
+        url=f"https://func-fs-hovtp.invalid{path or '/api/v1/hovtp'}",
         headers=request_headers,
         params=params or {},
-        route_params=route_params,
+        route_params={},
         body=body,
     )
 

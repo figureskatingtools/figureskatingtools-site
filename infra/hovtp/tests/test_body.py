@@ -1,9 +1,9 @@
 """Body parsing, size limits and competition-code resolution.
 
-The listener is body-first: the HTTP headers were never captured from a real
-FSM install, so the competition code is looked for on `OdfBody` before any
-header is consulted — and the path segment, which an operator types into FSM's
-Endpoint field, beats both.
+The listener is body-first: the URL carries no competition code, so the code is
+read from `OdfBody/@CompetitionCode`, and only if that is missing from an
+`X-*-Competition*` header (the HTTP headers were never captured from a real FSM
+install, so they are the last resort rather than the first).
 """
 import fixtures
 import function_app as fa
@@ -97,10 +97,10 @@ def test_the_raw_capture_code_normalizes_to_the_code_row_key(table, blobs):
     assert ("CODE", COMPETITION_CODE) in table.rows
 
 
-def test_the_path_code_wins_over_the_body(table, blobs):
+def test_a_second_competition_is_told_apart_by_the_body_code(table, blobs):
     seed_competition(table, code="other-cup", competition_id="0000-other")
 
-    response = _post(code="Other Cup")
+    response = _post(body=fixtures.schedule_message(competition_code="Other Cup"))
 
     assert response.status_code == 200
     assert list(blobs.blobs)[0].startswith("0000-other/fsm-pending/")
@@ -123,7 +123,7 @@ def test_no_code_anywhere_is_451(table, blobs):
 
 
 def test_an_unknown_code_is_451_and_stores_nothing(table, blobs):
-    response = _post(code="never-heard-of-it")
+    response = _post(body=fixtures.schedule_message(competition_code="never-heard-of-it"))
 
     assert response.status_code == 451
     assert head(response, "X-HOVTP-Error-Reason") == "unknown competition code never-heard-of-it"
@@ -135,7 +135,7 @@ def test_a_code_row_pointing_nowhere_is_451(table, blobs):
     table.create_entity({"PartitionKey": fa.PK_CODE, "RowKey": "orphan",
                          "CompetitionId": "missing-guid"})
 
-    response = _post(code="orphan")
+    response = _post(body=fixtures.schedule_message(competition_code="orphan"))
 
     assert response.status_code == 451
     assert blobs.blobs == {}

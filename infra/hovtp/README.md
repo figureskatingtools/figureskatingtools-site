@@ -21,21 +21,19 @@ connection per licence, five with TV/SCB Control).
 | Name         | anything, e.g. `figureskatingtools`         |
 | IP-Address   | `func-fs-hovtp-<suffix>.azurewebsites.net`  |
 | Port         | `443`                                       |
-| Endpoint     | `/api/hovtp/<competition code>`             |
+| Endpoint     | `/api/v1/hovtp`                             |
 
-The competition code in the endpoint is optional but recommended: it wins over
-whatever the message body says, so a mis-typed `CompetitionCode` in FSM cannot
-send a whole event to the wrong competition. Plain `/api/hovtp` also works and
-takes the code from `OdfBody/@CompetitionCode`.
+The endpoint carries no competition code: the listener takes it from the
+message itself (`OdfBody/@CompetitionCode`), so one connection setting serves
+every competition and nothing has to be re-typed between events.
 
 Leave FSM's **"Extended ODF"** checkbox as it is (see the note at the bottom).
 
 ## Endpoints
 
 ```
-POST    /api/hovtp                 receive a message
-POST    /api/hovtp/{code}          same, with the competition code in the path
-OPTIONS /api/hovtp[/{code}]        status / keep-alive probe — no side effects
+POST    /api/v1/hovtp              receive a message
+OPTIONS /api/v1/hovtp              status / keep-alive probe — no side effects
 GET     /api/health                {"status":"ok","service":"fs-hovtp"}
 ```
 

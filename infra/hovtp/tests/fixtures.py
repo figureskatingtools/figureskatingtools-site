@@ -92,17 +92,22 @@ DT_PARTIC_BODY = odf({
     "Source": "FSKFSK1",
 }, "<Competition><Participant Code=\"1234567\"/></Competition>")
 
-DT_SCHEDULE_BODY = odf({
-    "CompetitionCode": COMPETITION_CODE_RAW,
-    "DocumentCode": "FSK-------------------------------",
-    "DocumentType": "DT_SCHEDULE",
-    "Version": "1",
-    "FeedFlag": "P",
-    "Date": "2026-09-01",
-    "Time": "180500000",
-    "LogicalDate": "2026-09-01",
-    "Source": "FSKFSK1",
-}, "<Competition><Session Code=\"FSKWSINGLES\"/></Competition>")
+def schedule_message(*, competition_code=COMPETITION_CODE_RAW) -> bytes:
+    """A DT_SCHEDULE message for an arbitrary competition code."""
+    return odf({
+        "CompetitionCode": competition_code,
+        "DocumentCode": "FSK-------------------------------",
+        "DocumentType": "DT_SCHEDULE",
+        "Version": "1",
+        "FeedFlag": "P",
+        "Date": "2026-09-01",
+        "Time": "180500000",
+        "LogicalDate": "2026-09-01",
+        "Source": "FSKFSK1",
+    }, "<Competition><Session Code=\"FSKWSINGLES\"/></Competition>")
+
+
+DT_SCHEDULE_BODY = schedule_message()
 
 DT_SCHEDULE_UPDATE_BODY = odf({
     "CompetitionCode": COMPETITION_CODE_RAW,
@@ -127,7 +132,7 @@ DT_SCHEDULE_NAMESPACED_BODY = (
     "<Competition/></OdfBody>\n"
 ).encode("utf-8")
 
-# No CompetitionCode attribute at all: the code must come from the path or a header.
+# No CompetitionCode attribute at all: the code must come from a header.
 DT_SCHEDULE_NO_CODE_BODY = odf({
     "DocumentCode": "FSK-------------------------------",
     "DocumentType": "DT_SCHEDULE",

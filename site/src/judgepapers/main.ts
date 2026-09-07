@@ -1118,9 +1118,9 @@ async function init() {
                 <div class="pool-file-list">
                     ${pending.map(f => `
                         <label class="pool-file">
-                            <input type="checkbox" class="pool-file-check" value="${escapeHtml(f.name)}">
+                            <input type="checkbox" class="pool-file-check" value="${escapeHtml(f.name)}" data-source="${escapeHtml(f.source)}">
                             <span class="pool-file-name">${escapeHtml(f.name)}</span>
-                            ${f.sourceTool ? `<span class="pool-file-src">${escapeHtml(f.sourceTool)}</span>` : ''}
+                            <span class="pool-file-src">${escapeHtml(f.sourceTool || f.source)}</span>
                         </label>`).join('')}
                 </div>
                 <div class="pool-import-actions">
@@ -1147,17 +1147,20 @@ async function init() {
 
         importBtn.addEventListener('click', async () => {
             const btn = importBtn;
-            const chosen = checks().filter(c => c.checked).map(c => c.value);
+            // The pool has two folders (uploads/, fsm/); the checkbox carries
+            // which one this row came from, so the import reads the right one.
+            const chosen = checks().filter(c => c.checked)
+                .map(c => ({ name: c.value, source: c.dataset.source || 'upload' }));
             if (!chosen.length) return;
             btn.disabled = true;
             btn.textContent = 'Importing…';
 
             let failed = 0;
-            for (const name of chosen) {
+            for (const { name, source } of chosen) {
                 try {
                     const resp = await fetch(
                         `${API_BASE}/import_platform_file?competition=${encodeURIComponent(competitionId)}`
-                        + `&name=${encodeURIComponent(name)}`,
+                        + `&name=${encodeURIComponent(name)}&source=${encodeURIComponent(source)}`,
                         { method: 'POST' });
                     if (!resp.ok) {
                         failed++;

@@ -1219,7 +1219,7 @@ function poolImportHtml(): string {
       <p class="section-sub">Uploaded for this competition in another tool — select the files you need and press Import. Recognized files go straight into their slots.</p>
       <div class="pool-file-list">${pending.map(f =>
         `<label class="pool-file" title="${escapeHtml(f.sourceTool || f.source)}">
-           <input type="checkbox" class="pool-file-check" value="${escapeHtml(f.name)}">
+           <input type="checkbox" class="pool-file-check" value="${escapeHtml(f.name)}" data-source="${escapeHtml(f.source)}">
            <span class="pool-file-name">${escapeHtml(f.name)}</span>
          </label>`).join('')}</div>
       <div class="pool-import-actions">
@@ -1244,16 +1244,21 @@ function syncPoolImportButton(): void {
 /** Import the selected pool files, auto-placing what we can. */
 async function importPoolFiles(): Promise<void> {
   if (!currentId || !boundPlatformId) return;
-  const chosen = poolChecks().filter(c => c.checked).map(c => c.value);
+  // The pool has two folders (uploads/, fsm/); the checkbox carries which one
+  // this row came from, so the import reads the right one.
+  const chosen = poolChecks().filter(c => c.checked)
+    .map(c => ({ name: c.value, source: c.dataset.source || 'upload' }));
   if (!chosen.length) return;
 
   const btn = document.getElementById('btn-pool-import') as HTMLButtonElement | null;
   if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
 
-  const outcomes = await planBatch(chosen);
+  const outcomes = await planBatch(chosen.map(c => c.name));
   let failed = 0;
   for (let i = 0; i < chosen.length; i++) {
-    const params = new URLSearchParams({ competition: currentId, name: chosen[i]! });
+    const pick = chosen[i]!;
+    const params = new URLSearchParams(
+      { competition: currentId, name: pick.name, source: pick.source });
     applyAutoParams(params, outcomes?.[i]);
     try {
       const resp = await fetch(apiUrl(`/import_platform_file?${params.toString()}`), { method: 'POST' });
@@ -1328,16 +1333,17 @@ async function autoPlaceTrayFiles(): Promise<void> {
  */
 async function uploadOneFile(file: File, params: URLSearchParams): Promise<void> {
   if (boundPlatformId && !poolDisabled) {
-    let poolName: string | null = null;
+    let pooled: PoolFile | null = null;
     try {
-      poolName = (await uploadCompetitionFile(boundPlatformId, file, 'protocolgenerator')).name;
+      pooled = await uploadCompetitionFile(boundPlatformId, file, 'protocolgenerator');
     } catch {
       notePoolUnavailable();
     }
-    if (poolName) {
+    if (pooled) {
       const importParams = new URLSearchParams(params);
       importParams.delete('filename');
-      importParams.set('name', poolName);
+      importParams.set('name', pooled.name);
+      importParams.set('source', pooled.source);
       try {
         const resp = await fetch(apiUrl(`/import_platform_file?${importParams.toString()}`), { method: 'POST' });
         if (resp.ok) return;
