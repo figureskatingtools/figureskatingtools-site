@@ -59,6 +59,13 @@ let poolFiles: PoolFile[] | null = null;
 let poolDisabled = false;
 /** The "uploaded to this tool only" notice is worth saying once, not per file. */
 let poolNoticeShown = false;
+/**
+ * `<competition>::<pool file>::<uploadedUtc>` of every pool schedule this page
+ * session already parsed *by itself*. A parse that fails (or a schedule that
+ * yields no categories) must not be retried on the next details refresh, so the
+ * key is added before the request goes out.
+ */
+const autoParsedSchedules = new Set<string>();
 const openCats = new Set<string>();
 /** Collapsed-by-default state of the "Team rosters" per-category groups. */
 const openRosterCats = new Set<string>();
@@ -321,6 +328,9 @@ async function openCompetition(id: string, name: string) {
   document.getElementById('retention')!.innerHTML = '';
   document.getElementById('detail-body')!.innerHTML = '<p class="text-muted">Loading…</p>';
   await loadDetails();
+  // The pool listing is fresh now (loadDetails refreshes it), so this is the
+  // first moment we can tell whether the schedule is already sitting there.
+  await autoParsePoolSchedule();
 }
 
 async function loadDetails() {
@@ -648,6 +658,18 @@ function renderDetails() {
        </div>
        <p class="section-sub">An ISU <strong>DT_SCHEDULE</strong> XML is preferred — it carries exact times, disciplines, segments and the ice rink.</p>`;
 
+  // The schedule FS Manager pushed into the shared pool is one click away (and
+  // is parsed on its own when the competition has no categories yet).
+  const poolSchedule = scheduleCandidates()[0];
+  const poolScheduleHtml = poolSchedule
+    ? `<p class="section-sub">${s.scheduleParsed
+          ? 'A schedule is available in competition files'
+          : 'Schedule found in competition files'}:
+         <strong>${escapeHtml(poolSchedule.name)}</strong>
+         <button class="btn btn-xs btn-ghost" id="btn-pool-schedule">${
+           s.scheduleParsed ? 'Replace from it' : 'Use it'}</button></p>`
+    : '';
+
   const gen = details.generatedFiles || [];
   const genHtml = gen.length ? gen.map(g => `
       <div class="gen-file">
@@ -676,6 +698,7 @@ function renderDetails() {
     <div class="section">
       <div class="section-head"><h3>Schedule</h3></div>
       ${scheduleSection}
+      ${poolScheduleHtml}
     </div>
 
     <div class="section">
@@ -927,6 +950,11 @@ function wireDetail() {
   schedDrop?.addEventListener('drop', e => {
     e.preventDefault(); schedDrop.classList.remove('dragover');
     if (e.dataTransfer?.files?.[0]) parseSchedule(e.dataTransfer.files[0]);
+  });
+  // Parse the schedule the pool already holds (no download, no upload).
+  document.getElementById('btn-pool-schedule')?.addEventListener('click', () => {
+    const candidate = scheduleCandidates()[0];
+    if (candidate) void parseScheduleFromPool(candidate);
   });
   document.getElementById('btn-reparse')?.addEventListener('click', () => {
     const inp = document.createElement('input');
@@ -1203,7 +1231,30 @@ function pendingPoolFiles(): PoolFile[] {
     if (m.poolName) known.add(m.poolName);
     if (m.filename) known.add(m.filename);
   });
-  return poolFiles.filter(f => !known.has(f.name));
+  // The schedule is handled by the Schedule section (parsed, not imported as a
+  // loose file), so it never shows up in the plain import list.
+  return poolFiles.filter(f => !known.has(f.name) && !isScheduleCandidate(f.name));
+}
+
+/**
+ * Is this pool file the competition schedule?
+ *
+ * FS Manager pushes the ODF schedule as `DT_SCHEDULE_FSK….xml` and its print as
+ * `…_CompetitionSchedule.pdf`. The `DT_SCHEDULE_UPDATE_…_<stamp>.xml` increments
+ * are *not* schedules — they only carry the changes since the full export, so
+ * parsing one would build a structure out of a handful of units.
+ */
+function isScheduleCandidate(name: string): boolean {
+  if (/^DT_SCHEDULE_UPDATE/i.test(name)) return false;
+  return /^DT_SCHEDULE_[^/]*\.xml$/i.test(name) || /_CompetitionSchedule\.pdf$/i.test(name);
+}
+
+/** Schedules in the pool, best first: the structured XML beats the PDF print,
+ * and within a format the newest push wins. */
+function scheduleCandidates(): PoolFile[] {
+  const isXml = (f: PoolFile) => (/\.xml$/i.test(f.name) ? 0 : 1);
+  return (poolFiles || []).filter(f => isScheduleCandidate(f.name)).sort((a, b) =>
+    isXml(a) - isXml(b) || (b.uploadedUtc || '').localeCompare(a.uploadedUtc || ''));
 }
 
 function poolImportHtml(): string {
@@ -1420,6 +1471,56 @@ async function parseSchedule(file: File, force = false) {
     if (!resp.ok) { alert('Schedule parse failed: ' + (await resp.text())); return; }
     await loadDetails();
   } catch { alert('Network error parsing schedule.'); }
+}
+
+/**
+ * Parse a schedule that is already in the competition file pool.
+ *
+ * Same route as the drop box, without the bytes: the backend reads the named
+ * pool file itself (the folder comes from the competition's platform binding),
+ * so nothing has to be downloaded into the browser and back.
+ */
+async function parseScheduleFromPool(file: PoolFile, force = false): Promise<void> {
+  if (!currentId) return;
+  const url = `/parse_schedule?competition=${encodeURIComponent(currentId)}`
+    + `&poolName=${encodeURIComponent(file.name)}&source=${encodeURIComponent(file.source)}`
+    + (force ? '&force=true' : '');
+  try {
+    const resp = await fetch(apiUrl(url), { method: 'POST' });
+    if (resp.status === 409) {
+      const detail = await resp.text();
+      // The other 409 on this route is "competition not linked to the platform",
+      // which no confirmation can fix.
+      if (detail.includes('not_bound')) { alert('Schedule parse failed: ' + detail); return; }
+      if (confirm('This competition already has categories. Replace them from the schedule in the competition files?')) {
+        return parseScheduleFromPool(file, true);
+      }
+      return;
+    }
+    if (!resp.ok) { alert('Schedule parse failed: ' + (await resp.text())); return; }
+    await loadDetails();
+    flash(`Schedule parsed from competition files: ${file.name}`);
+  } catch { alert('Network error parsing schedule.'); }
+}
+
+/**
+ * Parse the pool schedule on the user's behalf when there is nothing to lose.
+ *
+ * Runs once per (competition, pool file) after a competition is opened: only
+ * with an unparsed schedule and no categories at all, so it can never replace
+ * work someone did by hand — and the guard set means a schedule that fails to
+ * parse is not retried on every refresh.
+ */
+async function autoParsePoolSchedule(): Promise<void> {
+  if (!currentId || !details) return;
+  const s = details.structure;
+  if (s.scheduleParsed || (s.categories || []).length) return;
+  const candidate = scheduleCandidates()[0];
+  if (!candidate) return;
+  const key = `${currentId}::${candidate.name}::${candidate.uploadedUtc || ''}`;
+  if (autoParsedSchedules.has(key)) return;
+  autoParsedSchedules.add(key);
+  await parseScheduleFromPool(candidate);
 }
 
 function pickRosters() {
