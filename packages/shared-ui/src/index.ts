@@ -68,6 +68,7 @@ export {
   matchNameTokens,
   normalizeMatchName,
   planAutoAssignment,
+  rscTokens,
   slotOccupant,
   stripTrailingDashes,
 } from './protocol-auto-assign.js';

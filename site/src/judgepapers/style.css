@@ -901,6 +901,17 @@ input[type="checkbox"] {
   color: var(--ink-faint);
 }
 
+.pool-import-toggle {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 0.25rem 0 0.5rem;
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+.pool-import-toggle input { margin: 0; }
+
 .pool-import-count {
   margin-left: auto;
   font-size: 0.72rem;

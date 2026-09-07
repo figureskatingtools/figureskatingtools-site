@@ -12,6 +12,7 @@ import {
     uploadCompetitionFile,
     type CategoryInfo,
     type PoolFile,
+    SUFFIX_SLOTS,
 } from '@figureskatingtools/shared-ui';
 import {
     escapeHtml,
@@ -1091,30 +1092,78 @@ async function init() {
      * yet. Renders nothing at all when there is no pool, no binding or nothing
      * left to import, so the view is unchanged for standalone use.
      */
+    /**
+     * "Show all files" in the import list. Off by default: the pool also holds
+     * the Protocol Generator pages FS Manager pushes for every segment (results,
+     * head pages…), which this tool never uses. Remembered per browser.
+     */
+    const POOL_SHOW_ALL_KEY = 'jp:pool-show-all:v1';
+    let showAllPoolFiles = (() => {
+        try { return localStorage.getItem(POOL_SHOW_ALL_KEY) === '1'; } catch { return false; }
+    })();
+    function writePoolShowAll(value: boolean): void {
+        showAllPoolFiles = value;
+        try { localStorage.setItem(POOL_SHOW_ALL_KEY, value ? '1' : '0'); } catch { /* private mode etc. */ }
+    }
+
+    /** The FSM sheet suffixes Judge Papers works from (what `parse_competition_file` looks for). */
+    const JUDGE_PAPERS_SUFFIXES = new Set([
+        'StartListwithTimes.pdf',
+        'ISUPanelofJudgesandTechnicalPanel.pdf',
+        'JudgesSheetAll.pdf',
+        'JudgesDetailsAll.pdf',
+        'RefereeSheet.pdf',
+        'PlannedProgramContent.pdf',
+        'TechnicalControllerSheet.pdf',
+        'TechnicalSpecialistSheet.pdf',
+        'TechnicalSpecialistSheet1.pdf',
+        'TechnicalSpecialistSheet2.pdf',
+        'CalculationSetupVerificationforReferee.pdf',
+    ]);
+
+    /**
+     * Does Judge Papers have any use for this pool file? Judged by the FSM suffix
+     * (everything after the last underscore). A suffix another tool's recognizer
+     * knows (SegmentResults, Results, ProtocolHeadPage…) is hidden by default;
+     * unknown suffixes stay visible — they may be anything a user uploaded by hand.
+     */
+    function isJudgePapersFile(name: string): boolean {
+        const suffix = name.slice(name.lastIndexOf('_') + 1);
+        if (JUDGE_PAPERS_SUFFIXES.has(suffix)) return true;
+        return !(suffix in SUFFIX_SLOTS);
+    }
+
     async function renderPoolImport(competitionId: string) {
         const host = document.getElementById('pool-import-container');
         if (!host) return;
-        host.innerHTML = '';
-        if (!boundPlatformId || poolDisabled) return;
+        if (!boundPlatformId || poolDisabled) { host.innerHTML = ''; return; }
 
         let files: PoolFile[];
         try {
             files = await listCompetitionFiles(boundPlatformId);
         } catch (_e) {
+            host.innerHTML = '';
             return;   // pool unavailable — degrade to no section
         }
 
         const have = existingFilenames();
-        const pending = files.filter(f => f.name.toLowerCase().endsWith('.pdf') && !have.has(f.name));
-        if (!pending.length) return;
+        const all = files.filter(f => f.name.toLowerCase().endsWith('.pdf') && !have.has(f.name));
+        const pending = showAllPoolFiles ? all : all.filter(f => isJudgePapersFile(f.name));
+        if (!all.length) { host.innerHTML = ''; return; }
+        // A re-render (toggle, import) keeps the section open.
+        const wasOpen = host.querySelector('details.pool-import')?.hasAttribute('open') ?? false;
 
         host.innerHTML = `
-            <details class="pool-import">
+            <details class="pool-import"${wasOpen ? ' open' : ''}>
                 <summary class="pool-import-head">
                     <span class="pool-import-title">Competition files</span>
                     <span class="pool-import-count">${pending.length} available</span>
                 </summary>
                 <p class="pool-import-sub">Uploaded for this competition in another tool — select the files you need and press Import.</p>
+                <label class="pool-import-toggle">
+                    <input type="checkbox" id="pool-show-all"${showAllPoolFiles ? ' checked' : ''}>
+                    Show all files
+                </label>
                 <div class="pool-file-list">
                     ${pending.map(f => `
                         <label class="pool-file">
@@ -1130,6 +1179,10 @@ async function init() {
             </details>`;
 
         const importBtn = document.getElementById('btn-pool-import') as HTMLButtonElement;
+        document.getElementById('pool-show-all')?.addEventListener('change', (e) => {
+            writePoolShowAll((e.currentTarget as HTMLInputElement).checked);
+            void renderPoolImport(competitionId);
+        });
         const checks = () => Array.from(document.querySelectorAll<HTMLInputElement>('.pool-file-check'));
         const syncImportButton = () => {
             const n = checks().filter(c => c.checked).length;

@@ -1302,13 +1302,9 @@ function scheduleCandidates(): PoolFile[] {
 function poolImportHtml(): string {
   const all = importablePoolFiles();
   const pending = pendingPoolFiles();
-  const hidden = all.length - pending.length;
   if (!all.length) return '';
   // Collapsed by default; a re-render (details refresh) keeps it open.
   const wasOpen = document.querySelector('details.pool-import')?.hasAttribute('open') ?? false;
-  const hiddenNote = hidden
-    ? ` (${hidden} Judge Papers ${hidden === 1 ? 'sheet' : 'sheets'} hidden)`
-    : '';
   return `<details class="pool-import"${wasOpen ? ' open' : ''}>
       <summary class="pool-import-head">
         <span class="pool-import-title">Competition files</span>
@@ -1317,9 +1313,8 @@ function poolImportHtml(): string {
       <p class="section-sub">Uploaded for this competition in another tool — select the files you need and press Import. Recognized files go straight into their slots.</p>
       <label class="pool-import-toggle">
         <input type="checkbox" id="pool-show-all"${showAllPoolFiles ? ' checked' : ''}>
-        Show all files${hiddenNote}
+        Show all files
       </label>
-      ${pending.length ? '' : '<p class="section-sub">Nothing left that Protocol Generator uses — tick "Show all files" to see the rest.</p>'}
       <div class="pool-file-list">${pending.map(f =>
         `<label class="pool-file" title="${escapeHtml(f.sourceTool || f.source)}">
            <input type="checkbox" class="pool-file-check" value="${escapeHtml(f.name)}" data-source="${escapeHtml(f.source)}">
