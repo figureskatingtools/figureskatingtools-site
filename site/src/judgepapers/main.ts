@@ -396,14 +396,15 @@ async function bindActiveCompetition(force = false): Promise<void> {
 }
 
 /**
- * The right-hand timestamp on a file row: when the backend last wrote that
- * copy. Files the backend re-pulled from the competition file pool get a fresh
- * stamp, so the column doubles as "this one just changed". Rendered as an
- * empty span when the backend reports no time — a missing stamp must not
- * shift the delete button out of its column.
+ * The right-hand timestamp on a file row: when the file itself was uploaded
+ * or pushed by FS Manager (`uploadedUtc`), so the operator can tell "50 min
+ * ago" from "yesterday". Not the time the backend copied it — that changes on
+ * every pool refresh. Older backends only send `lastModified`, so fall back to
+ * it. Rendered as an empty span when there is no time — a missing stamp must
+ * not shift the delete button out of its column.
  */
 function fileMetaHtml(file: any): string {
-    const stamp = formatDateTimeFi(file?.lastModified);
+    const stamp = formatDateTimeFi(file?.uploadedUtc || file?.lastModified);
     return `<span class="file-meta">${escapeHtml(stamp)}</span>`;
 }
 
