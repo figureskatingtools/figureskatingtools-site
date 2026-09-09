@@ -1,0 +1,55 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "resourceGroupName": {
+      "value": "rg-fs-site-test"
+    },
+    "location": {
+      "value": "swedencentral"
+    },
+    "customDomain": {
+      "value": "test.figureskatingtools.com"
+    },
+    "authClientId": {
+      "value": ""
+    },
+    "tenantId": {
+      "value": ""
+    },
+    "proxySharedSecretPlatform": {
+      "value": ""
+    },
+    "functionAppUrlJudgepapers": {
+      "value": ""
+    },
+    "functionAppUrlScoremodifier": {
+      "value": ""
+    },
+    "functionAppUrlProtocolgenerator": {
+      "value": ""
+    },
+    "proxySharedSecretJudgepapers": {
+      "value": ""
+    },
+    "proxySharedSecretScoremodifier": {
+      "value": ""
+    },
+    "proxySharedSecretProtocolgenerator": {
+      "value": ""
+    },
+    "toolFunctionPrincipalIds": {
+      "value": [
+        "",
+        "",
+        ""
+      ]
+    },
+    "hovtpEnabled": {
+      "value": true
+    },
+    "hovtpEnvironment": {
+      "value": "Test"
+    }
+  }
+}

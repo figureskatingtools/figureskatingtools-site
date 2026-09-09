@@ -45,6 +45,7 @@ after teardown (step 7).
 | `TOOL_PRINCIPAL_ID_SCOREMODIFIER` | ditto | **new**, optional at first |
 | `TOOL_PRINCIPAL_ID_PROTOCOLGENERATOR` | ditto | **new**, optional at first |
 | `SKIP_CUSTOM_DOMAIN` | `true` during step 3, unset/empty afterwards | **new** |
+| `HOVTP_ENABLED` | `false` to kill the HOVTP listener, unset/empty for the environment default | **new**, optional (test defaults on, prod off) |
 
 The URLs and principal ids come from each tool repo's own deployment:
 
@@ -59,6 +60,24 @@ aren't created yet. Fill them in and re-run once the tool repos are reduced.
 
 `RESOURCE_GROUP_NAME` / `CUSTOM_DOMAIN` are **not** used by this repo; both live
 in `infra/parameters/<env>.bicepparam`.
+
+### HOVTP listener
+
+`func-fs-hovtp-<suffix>` is deployed by the same Bicep run as everything else and
+is the endpoint FS Manager pushes to. In FSM: **Settings / HOVTP Settings** —
+hostname `func-fs-hovtp-<suffix>.azurewebsites.net`, port `443`, endpoint
+`/api/v1/hovtp` — no competition code in the path: the listener reads
+`OdfBody/@CompetitionCode` from the message body.
+
+```bash
+az deployment sub show -n <deployment> --query 'properties.outputs.hovtpFunctionAppUrl.value' -o tsv
+```
+
+It is a **separate Function App** precisely so it can be taken out alone:
+`HOVTP_ENABLED=false` (the GitHub variable above — Bicep-owned, so it survives a
+redeploy) makes it answer 503 without touching storage, and
+`az functionapp stop -g rg-fs-site-<env> -n func-fs-hovtp-<suffix>` stops it
+outright. Neither affects the site or the platform API.
 
 ---
 

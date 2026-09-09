@@ -41,3 +41,8 @@ param toolFunctionPrincipalIds = [
   readEnvironmentVariable('TOOL_PRINCIPAL_ID_SCOREMODIFIER', '')
   readEnvironmentVariable('TOOL_PRINCIPAL_ID_PROTOCOLGENERATOR', '')
 ]
+
+// HOVTP listener (FS Manager push endpoint). Off in prod until it has been proven
+// in test — set the GitHub environment variable HOVTP_ENABLED=true to turn it on.
+param hovtpEnabled = readEnvironmentVariable('HOVTP_ENABLED', 'false') == 'true'
+param hovtpEnvironment = 'Production'

@@ -568,6 +568,17 @@ input[type="checkbox"] { accent-color: var(--ink); }
   text-transform: uppercase;
   color: var(--ink-faint);
 }
+.pool-import-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.25rem 0 0.5rem;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.pool-import-toggle input { margin: 0; }
+
 .pool-import-count {
   margin-left: auto;
   font-size: 0.72rem;
@@ -886,3 +897,15 @@ input[type="checkbox"] { accent-color: var(--ink); }
 }
 .file-preview-pop img, .file-preview-pop canvas { display: block; max-width: 264px; max-height: 340px; border-radius: 0.25rem; }
 .file-preview-pop .preview-meta { font-family: var(--font-mono); font-size: 0.66rem; color: var(--ink-muted); padding: 0.3rem 0.1rem 0.1rem; text-align: center; }
+
+/* ── Site footer (same recipe as the home page) ── */
+.site-footer {
+  margin-top: auto;
+  text-align: center;
+  padding: 2rem 1.5rem;
+  color: var(--ink-faint);
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.06em;
+  border-top: 1px solid var(--line);
+}

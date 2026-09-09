@@ -1,0 +1,14 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "COMPETITION_DATA_CONTAINER": "competition-data",
+    "HOVTP_ENABLED": "true",
+    "HOVTP_ENVIRONMENT": "Test",
+    "HOVTP_STRICT_SERIAL": "false",
+    "HOVTP_KEEP_ALIVE_SECONDS": "60",
+    "HOVTP_TRUSTED_PROXY_HOPS": "0",
+    "HOVTP_ALLOWED_DOCUMENT_TYPES": "DT_PDF,DT_PARTIC,DT_PARTIC_TEAMS,DT_SCHEDULE,DT_SCHEDULE_UPDATE"
+  }
+}

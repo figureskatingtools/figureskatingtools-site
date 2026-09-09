@@ -2,12 +2,15 @@
  * Unit tests for the shared display formatters.
  *
  * `formatDateFi` is deliberately DOM-free and time-zone-safe for date-only
- * input, so plain vitest in the default node environment is enough.
+ * input, so plain vitest in the default node environment is enough; the same
+ * goes for `formatFileSize`. `formatDateTimeFi` does render the clock in local
+ * time, so its expectations are built from a real `Date` rather than written
+ * out literally — the suite has to pass in every time zone CI might use.
  */
 
 import { describe, expect, it } from 'vitest';
 
-import { formatDateFi } from '../src/format.js';
+import { formatDateFi, formatDateTimeFi, formatFileSize } from '../src/format.js';
 
 describe('formatDateFi', () => {
   it('formats an ISO date as dd.MM.yyyy', () => {
@@ -66,5 +69,66 @@ describe('formatDateFi', () => {
 
   it('keeps a leap day', () => {
     expect(formatDateFi('2024-02-29')).toBe('29.02.2024');
+  });
+});
+
+describe('formatDateTimeFi', () => {
+  /** The expected local rendering of a timestamp, built the same way a viewer sees it */
+  function localExpectation(iso: string): string {
+    const d = new Date(iso);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()}`
+      + ` ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  it('formats an ISO timestamp as dd.MM.yyyy HH:mm in local time', () => {
+    expect(formatDateTimeFi('2026-09-09T10:12:33Z')).toBe(localExpectation('2026-09-09T10:12:33Z'));
+    expect(formatDateTimeFi('2026-01-01T23:45:00Z')).toBe(localExpectation('2026-01-01T23:45:00Z'));
+  });
+
+  it('formats a Date object', () => {
+    expect(formatDateTimeFi(new Date(2025, 0, 25, 9, 5))).toBe('25.01.2025 09:05');
+  });
+
+  it('degrades a date-only value to the plain date', () => {
+    // No clock in the input — inventing 00:00 would read like real data.
+    expect(formatDateTimeFi('2025-01-25')).toBe('25.01.2025');
+    expect(formatDateTimeFi('2025-01-25')).toBe(formatDateFi('2025-01-25'));
+  });
+
+  it('renders empty input as an empty string', () => {
+    expect(formatDateTimeFi('')).toBe('');
+    expect(formatDateTimeFi('   ')).toBe('');
+    expect(formatDateTimeFi(null)).toBe('');
+    expect(formatDateTimeFi(undefined)).toBe('');
+  });
+
+  it('returns an invalid Date as an empty string', () => {
+    expect(formatDateTimeFi(new Date('nope'))).toBe('');
+  });
+
+  it('returns unparsable input unchanged', () => {
+    expect(formatDateTimeFi('TBA')).toBe('TBA');
+    expect(formatDateTimeFi('yesterday')).toBe('yesterday');
+    expect(formatDateTimeFi('2025/01/25 10:00')).toBe('2025/01/25 10:00');
+  });
+});
+
+describe('formatFileSize', () => {
+  it('renders an unknown or zero size as an empty string', () => {
+    // The callers join their meta line with filter(Boolean) — '' drops the
+    // whole segment rather than leaving a dangling separator.
+    expect(formatFileSize(0)).toBe('');
+  });
+
+  it('rounds small files up to a whole kilobyte', () => {
+    expect(formatFileSize(1)).toBe('1 kB');
+    expect(formatFileSize(511)).toBe('1 kB');
+    expect(formatFileSize(1536)).toBe('2 kB');
+  });
+
+  it('switches to megabytes with one decimal at a full MiB', () => {
+    expect(formatFileSize(1048576)).toBe('1.0 MB');
+    expect(formatFileSize(1468006)).toBe('1.4 MB');
   });
 });

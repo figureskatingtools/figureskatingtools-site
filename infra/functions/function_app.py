@@ -27,6 +27,14 @@ literal URLs the router proxies to — and the URLs
     GET    /api/competitions/{id}/files/{name}   -> 200 bytes  (?source=upload|fsm)
     DELETE /api/competitions/{id}/files/{name}   -> 200 {"status": "deleted", ...}
 
+    GET    /api/competitions/{id}/hovtp/sources              -> 200 {"sources": [Source, ...]}
+    POST   /api/competitions/{id}/hovtp/sources/{ip}/accept  -> 200 {"source": Source,
+                                                                     "attached": n, "failed": m}
+                                                                {"days": 1|2|3|7}
+    POST   /api/competitions/{id}/hovtp/sources/{ip}/reject  -> 200 {"source": Source,
+                                                                     "deleted": n}
+    DELETE /api/competitions/{id}/hovtp/sources/{ip}         -> 200 (revoke; same shape)
+
 Competition JSON (both directions; server-owned fields are ignored on input):
 
     {
@@ -54,29 +62,60 @@ FileInfo JSON (the shared competition file pool):
       "sourceTool":  "protocolgenerator"
     }
 
+HOVTP source JSON (one FSM sender, identified by its client IP):
+
+    {
+      "ip":            "20.31.4.7",
+      "origin":        "FSM1",          from the HOVTP headers, may be ""
+      "venue":         "HTL",
+      "discipline":    "FSK",
+      "environment":   "Test" | "Production",
+      "status":        "pending" | "accepted" | "rejected" | "expired",
+      "firstSeenUtc":  "2026-01-02T10:00:00Z",
+      "lastSeenUtc":   "2026-01-02T10:05:00Z",
+      "messageCount":  42,
+      "pendingCount":  3,               files waiting in quarantine
+      "pendingBytes":  120034,
+      "acceptedUntilUtc": "2026-01-09T10:00:00Z",   omitted when never accepted
+      "acceptedBy":    "user@example.com"           omitted when never accepted
+    }
+
+"expired" is computed, never stored: an accepted source whose AcceptedUntilUtc
+has passed reads back as expired so the UI re-prompts for it.
+
 Every non-2xx body is {"error": "<machine_code>", "message": "<human text>"}.
 
-Storage layout — one `competitions` table, two row kinds:
+Storage layout — one `competitions` table, four row kinds:
 
-    PartitionKey="COMPETITION", RowKey=<guid>            the competition itself
-    PartitionKey="CODE",        RowKey=<normalized code> -> CompetitionId
+    PartitionKey="COMPETITION",  RowKey=<guid>              the competition itself
+    PartitionKey="CODE",         RowKey=<normalized code>   -> CompetitionId
+    PartitionKey="HOVTPSOURCE",  RowKey=<guid>_<ip>         one sender's trust row
+    PartitionKey="HOVTPSESSION", RowKey=<session uuid>      LastSerial, Ip, UpdatedUtc
 
 The CODE row is both the uniqueness constraint (inserted first, so a duplicate
-fails atomically with 409) and the O(1) code->GUID lookup the future FSM ingest
-needs. Blob data lives in the shared `competition-data` container keyed by GUID:
+fails atomically with 409) and the O(1) code->GUID lookup the HOVTP listener
+uses. The HOVTPSOURCE and HOVTPSESSION rows belong to that listener (a separate
+Function App, `infra/hovtp/`); this app only reads a source and flips it between
+pending / accepted / rejected on the operator's behalf. Blob data lives in the
+shared `competition-data` container keyed by GUID:
 
-    <guid>/uploads/...   cross-tool data reuse (tool Function Apps get read-only
-                         RBAC here — see infra/modules/shared-data-access.bicep)
-    <guid>/fsm/...       RESERVED for the FSM ingest (not built)
+    <guid>/uploads/...           cross-tool data reuse (tool Function Apps get
+                                 read-only RBAC here — see
+                                 infra/modules/shared-data-access.bicep)
+    <guid>/fsm/...               files delivered by the HOVTP listener, flat
+    <guid>/fsm-pending/<ip>/...  quarantine for a source that is not accepted
+                                 (yet); invisible to the file pool until an
+                                 accept attaches it into <guid>/fsm/
 """
 
 import base64
+import ipaddress
 import json
 import logging
 import os
 import re
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from urllib.parse import quote
@@ -92,6 +131,10 @@ app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 COMPETITIONS_TABLE = "competitions"
 PK_COMPETITION = "COMPETITION"
 PK_CODE = "CODE"
+# Written by the HOVTP listener (infra/hovtp/); read — and, for the status
+# field, written — here. Keep the column names in sync with that app.
+PK_HOVTP_SOURCE = "HOVTPSOURCE"
+PK_HOVTP_SESSION = "HOVTPSESSION"
 
 STATUS_ACTIVE = "active"
 STATUS_DELETED = "deleted"
@@ -104,6 +147,14 @@ DATA_CONTAINER = os.environ.get("COMPETITION_DATA_CONTAINER", "competition-data"
 
 SOURCE_UPLOAD = "upload"
 SOURCE_FSM = "fsm"
+SOURCE_TOOL_HOVTP = "hovtp"
+
+HOVTP_STATUS_PENDING = "pending"
+HOVTP_STATUS_ACCEPTED = "accepted"
+HOVTP_STATUS_REJECTED = "rejected"
+HOVTP_STATUS_EXPIRED = "expired"
+# The only trust windows the UI offers, and therefore the only ones accepted.
+HOVTP_ACCEPT_DAYS = (1, 2, 3, 7)
 
 POOL_MAX_FILE_SIZE = 50 * 1024 * 1024
 MAX_FILENAME_LENGTH = 200
@@ -173,8 +224,18 @@ def competition_upload_prefix(competition_id: str) -> str:
 
 
 def competition_fsm_prefix(competition_id: str) -> str:
-    """RESERVED blob prefix for the future FSM datafeed/PDF ingest."""
+    """Blob prefix the HOVTP listener writes accepted FSM files into (flat)."""
     return f"{competition_id}/fsm/"
+
+
+def competition_pending_prefix(competition_id: str, ip: str) -> str:
+    """Quarantine prefix for one not-yet-accepted HOVTP source."""
+    return f"{competition_id}/fsm-pending/{ip}/"
+
+
+def hovtp_source_row_key(competition_id: str, ip: str) -> str:
+    """RowKey of a HOVTPSOURCE row — one competition + one sender IP."""
+    return f"{competition_id}_{ip}"
 
 
 # ── auth (verbatim contract from the tool Function Apps) ──────────────────────
@@ -497,6 +558,207 @@ def _route_file_name(req: func.HttpRequest) -> str:
     return name
 
 
+# ── HOVTP source helpers ──────────────────────────────────────────────────────
+# A "source" is one FSM sender, identified only by its client IP: FSM sends no
+# credentials, so trust is granted per IP for a fixed window. The listener app
+# creates and touches these rows; the routes below are the operator's side of
+# that contract — accept (attach the quarantined files), reject, revoke.
+
+def _canonical_ip(text) -> str:
+    """One canonical spelling of an IP, or '' when it isn't one at all.
+
+    The IP is both a RowKey suffix and a blob path segment, so it must be
+    normalized the same way here and in the listener: an address that reads
+    back differently would strand its own quarantine.
+    """
+    try:
+        address = ipaddress.ip_address(str(text or "").strip())
+    except ValueError:
+        return ""
+    if isinstance(address, ipaddress.IPv6Address):
+        # Drop any scope id ('fe80::1%eth0'): it is local to the sender's host.
+        address = ipaddress.IPv6Address(address.packed)
+    return str(address)
+
+
+def _route_ip(req: func.HttpRequest) -> str:
+    """The {ip} route param, canonicalised. '' => the caller answers 400."""
+    return _canonical_ip(req.route_params.get("ip"))
+
+
+def _int_column(entity, column: str) -> int:
+    try:
+        return int(entity.get(column) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _source_status(entity, now: str) -> str:
+    """Stored status, except that an elapsed acceptance reads back as expired.
+
+    Both timestamps are the same fixed-width UTC format, so comparing them as
+    strings is the same as comparing the instants.
+    """
+    status = entity.get("Status") or HOVTP_STATUS_PENDING
+    if status == HOVTP_STATUS_ACCEPTED:
+        accepted_until = entity.get("AcceptedUntilUtc") or ""
+        if not accepted_until or accepted_until <= now:
+            return HOVTP_STATUS_EXPIRED
+    return status
+
+
+def _source_to_json(entity, now: str) -> dict:
+    """HOVTPSOURCE row -> the wire shape documented at the top of this module."""
+    source = {
+        "ip": entity.get("Ip", ""),
+        "origin": entity.get("Origin", ""),
+        "venue": entity.get("Venue", ""),
+        "discipline": entity.get("Discipline", ""),
+        "environment": entity.get("Environment", ""),
+        "status": _source_status(entity, now),
+        "firstSeenUtc": entity.get("FirstSeenUtc", ""),
+        "lastSeenUtc": entity.get("LastSeenUtc", ""),
+        "messageCount": _int_column(entity, "MessageCount"),
+        "pendingCount": _int_column(entity, "PendingCount"),
+        "pendingBytes": _int_column(entity, "PendingBytes"),
+    }
+    accepted_until = entity.get("AcceptedUntilUtc") or ""
+    if accepted_until:
+        source["acceptedUntilUtc"] = accepted_until
+    accepted_by = entity.get("AcceptedBy") or ""
+    if accepted_by:
+        source["acceptedBy"] = accepted_by
+    return source
+
+
+def _list_hovtp_source_entities(table_client, competition_id: str):
+    """Every source row of one competition, via a RowKey range scan.
+
+    RowKey is '<guid>_<ip>', so the competition's rows are exactly the range
+    from '<guid>_' up to '<guid>`' — '`' is the character right after '_'.
+    """
+    low = hovtp_source_row_key(competition_id, "")
+    high = f"{competition_id}`"
+    return table_client.query_entities(
+        f"PartitionKey eq '{PK_HOVTP_SOURCE}'"
+        f" and RowKey ge '{low}' and RowKey lt '{high}'"
+    )
+
+
+def _load_hovtp_source(table_client, competition_id: str, ip: str):
+    try:
+        return table_client.get_entity(
+            partition_key=PK_HOVTP_SOURCE,
+            row_key=hovtp_source_row_key(competition_id, ip),
+        )
+    except ResourceNotFoundError:
+        return None
+
+
+def _pending_blob_names(container, competition_id: str, ip: str):
+    """(full name, bare name) for every flat blob in one source's quarantine."""
+    prefix = competition_pending_prefix(competition_id, ip)
+    for blob in container.list_blobs(name_starts_with=prefix, include=["metadata"]):
+        name = blob.name[len(prefix):]
+        if not name or "/" in name:
+            continue
+        yield blob, name
+
+
+def _pending_totals(container, competition_id: str, ip: str) -> tuple[int, int]:
+    """(file count, total bytes) currently quarantined for one source."""
+    count = 0
+    total = 0
+    for blob, _name in _pending_blob_names(container, competition_id, ip):
+        count += 1
+        total += getattr(blob, "size", 0) or 0
+    return count, total
+
+
+def _attach_pending(container, competition_id: str, ip: str, email: str) -> tuple[int, int]:
+    """Move a source's quarantined files into the pool. -> (attached, failed).
+
+    Download + upload rather than start_copy_from_url: server-side copy from a
+    private container needs a SAS or bearer token on the source URL, which the
+    managed identity here cannot mint. The files are small (PDFs and ODF XML).
+
+    A per-file failure is tolerated and counted: the source blob is deleted only
+    after its copy landed, so a retried accept re-attaches whatever failed.
+    """
+    attached = 0
+    failed = 0
+    for blob, name in list(_pending_blob_names(container, competition_id, ip)):
+        try:
+            source_blob = container.get_blob_client(blob.name)
+            data = source_blob.download_blob().readall()
+            content_settings = getattr(blob, "content_settings", None)
+            content_type = (getattr(content_settings, "content_type", None)
+                            or _pool_content_type(name))
+            container.upload_blob(
+                name=competition_fsm_prefix(competition_id) + name,
+                data=data,
+                overwrite=True,
+                metadata={
+                    **(getattr(blob, "metadata", None) or {}),
+                    "attachedBy": _ascii_metadata(email),
+                    "attachedUtc": _now_utc(),
+                },
+                content_settings=ContentSettings(content_type=content_type),
+            )
+            source_blob.delete_blob()
+            attached += 1
+        except Exception as e:
+            logging.error(f"Could not attach '{blob.name}' for competition "
+                          f"'{competition_id}': {e}")
+            failed += 1
+    return attached, failed
+
+
+def _delete_pending(container, competition_id: str, ip: str) -> int:
+    """Drop a source's quarantine. -> number of files deleted."""
+    deleted = 0
+    for blob, _name in list(_pending_blob_names(container, competition_id, ip)):
+        try:
+            container.get_blob_client(blob.name).delete_blob()
+            deleted += 1
+        except ResourceNotFoundError:
+            pass
+        except Exception as e:
+            logging.error(f"Could not delete quarantined '{blob.name}': {e}")
+    return deleted
+
+
+def _merge_hovtp_source(table_client, competition_id: str, ip: str, updates: dict) -> None:
+    table_client.update_entity(
+        {
+            "PartitionKey": PK_HOVTP_SOURCE,
+            "RowKey": hovtp_source_row_key(competition_id, ip),
+            **updates,
+        },
+        mode=UpdateMode.MERGE,
+    )
+
+
+def _hovtp_request(req: func.HttpRequest):
+    """Gate + route params shared by the per-source routes.
+
+    -> ((competition_id, ip, email), None) or (None, error response).
+    """
+    email = get_user_email_from_header(req)
+    if not email:
+        return None, _error("unauthorized", "Sign-in required.", 401)
+
+    competition_id = req.route_params.get("id")
+    if not competition_id:
+        return None, _error("invalid_id", "A competition id is required.", 400)
+
+    ip = _route_ip(req)
+    if not ip:
+        return None, _error("invalid_ip", "A valid source IP address is required.", 400)
+
+    return (competition_id, ip, email), None
+
+
 # ── request handlers ──────────────────────────────────────────────────────────
 # The @app.route entry points below are thin adapters; all logic lives in these
 # plain functions so the test suite can drive them without the Functions host.
@@ -781,8 +1043,9 @@ def _delete_competition(req: func.HttpRequest) -> func.HttpResponse:
 # ── file pool handlers ────────────────────────────────────────────────────────
 # competition-data/<guid>/uploads/<name> is name-keyed and overwritten in place:
 # the same filename is the same logical file, which is what an FSM re-export of
-# an already-uploaded PDF means. <guid>/fsm/ is written only by the (unbuilt)
-# ingest, so it is readable but never writable through these routes.
+# an already-uploaded PDF means. <guid>/fsm/ is written by the HOVTP listener
+# (infra/hovtp/) and, on accept, by _attach_pending — never by these routes, so
+# it is readable but not writable or deletable through them.
 
 def _list_competition_files(req: func.HttpRequest) -> func.HttpResponse:
     email = get_user_email_from_header(req)
@@ -984,6 +1247,174 @@ def _delete_competition_file(req: func.HttpRequest) -> func.HttpResponse:
     return _json({"status": "deleted", "name": name, "source": SOURCE_UPLOAD})
 
 
+# ── HOVTP source handlers ─────────────────────────────────────────────────────
+
+def _list_hovtp_sources(req: func.HttpRequest) -> func.HttpResponse:
+    email = get_user_email_from_header(req)
+    if not email:
+        return _error("unauthorized", "Sign-in required.", 401)
+
+    competition_id = req.route_params.get("id")
+    if not competition_id:
+        return _error("invalid_id", "A competition id is required.", 400)
+
+    _entity, error = _load_competition(competition_id)
+    if error is not None:
+        return error
+
+    table_client = get_table_client()
+    if not table_client:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    now = _now_utc()
+    try:
+        sources = [
+            _source_to_json(entity, now)
+            for entity in _list_hovtp_source_entities(table_client, competition_id)
+        ]
+    except Exception as e:
+        logging.error(f"Error listing HOVTP sources for '{competition_id}': {e}")
+        return _error("internal_error", "Could not list the data sources.", 500)
+
+    # Newest first, but anything waiting for a decision floats to the top —
+    # that is the one thing the operator has to act on.
+    sources.sort(key=lambda source: source["lastSeenUtc"], reverse=True)
+    sources.sort(key=lambda source: 0 if source["status"] in
+                 (HOVTP_STATUS_PENDING, HOVTP_STATUS_EXPIRED) else 1)
+    return _json({"sources": sources})
+
+
+def _accept_hovtp_source(req: func.HttpRequest) -> func.HttpResponse:
+    """Trust one sender for N days and attach everything it already sent."""
+    target, error = _hovtp_request(req)
+    if error is not None:
+        return error
+    competition_id, ip, email = target
+
+    body = _read_body(req)
+    if body is None:
+        return _error("invalid_body", "Expected a JSON object body.", 400)
+    days = body.get("days")
+    # `True` and `1.0` both compare equal to 1 in Python; neither is a window.
+    if not isinstance(days, int) or isinstance(days, bool) or days not in HOVTP_ACCEPT_DAYS:
+        return _error("invalid_days",
+                      "Accept a data source for 1, 2, 3 or 7 days.", 400)
+
+    entity, error = _load_competition(competition_id)
+    if error is not None:
+        return error
+    if entity.get("Status") == STATUS_DELETED:
+        return _error("competition_deleted", "This competition has been deleted.", 409)
+
+    table_client = get_table_client()
+    if not table_client:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    source = _load_hovtp_source(table_client, competition_id, ip)
+    if source is None:
+        return _error("source_not_found", "Unknown data source.", 404)
+
+    now = _now_utc()
+    accepted_until = (datetime.now(timezone.utc) + timedelta(days=days)) \
+        .strftime("%Y-%m-%dT%H:%M:%SZ")
+    updates = {
+        "Status": HOVTP_STATUS_ACCEPTED,
+        "AcceptedUntilUtc": accepted_until,
+        "AcceptedBy": email,
+        "AcceptedUtc": now,
+        "UpdatedUtc": now,
+        # A re-accept must not keep looking rejected in the audit columns.
+        "RejectedBy": "",
+        "RejectedUtc": "",
+    }
+    try:
+        _merge_hovtp_source(table_client, competition_id, ip, updates)
+    except ResourceNotFoundError:
+        return _error("source_not_found", "Unknown data source.", 404)
+    except Exception as e:
+        logging.error(f"Error accepting HOVTP source '{ip}' for '{competition_id}': {e}")
+        return _error("internal_error", "Could not accept the data source.", 500)
+
+    container = _get_container_client()
+    if container is None:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    # The trust row is written first on purpose: from here on the listener puts
+    # new files straight into the pool, and this pass only drains the backlog.
+    attached, failed = _attach_pending(container, competition_id, ip, email)
+    pending_count, pending_bytes = _pending_totals(container, competition_id, ip)
+    counters = {"PendingCount": pending_count, "PendingBytes": pending_bytes,
+                "UpdatedUtc": _now_utc()}
+    try:
+        _merge_hovtp_source(table_client, competition_id, ip, counters)
+    except Exception as e:
+        logging.warning(f"Could not update pending counters for '{ip}': {e}")
+
+    merged = dict(source)
+    merged.update(updates)
+    merged.update(counters)
+    return _json({
+        "source": _source_to_json(merged, _now_utc()),
+        "attached": attached,
+        "failed": failed,
+    })
+
+
+def _deny_hovtp_source(req: func.HttpRequest) -> func.HttpResponse:
+    """Reject (POST …/reject) and revoke (DELETE …/{ip}) are the same write.
+
+    Both mean "stop trusting this IP and throw away what it is holding". They
+    differ only in what came before: revoke follows an accept, so files that
+    were already attached into the pool stay — only the quarantine is dropped.
+    """
+    target, error = _hovtp_request(req)
+    if error is not None:
+        return error
+    competition_id, ip, email = target
+
+    entity, error = _load_competition(competition_id)
+    if error is not None:
+        return error
+    if entity.get("Status") == STATUS_DELETED:
+        return _error("competition_deleted", "This competition has been deleted.", 409)
+
+    table_client = get_table_client()
+    if not table_client:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    source = _load_hovtp_source(table_client, competition_id, ip)
+    if source is None:
+        return _error("source_not_found", "Unknown data source.", 404)
+
+    container = _get_container_client()
+    if container is None:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    now = _now_utc()
+    updates = {
+        "Status": HOVTP_STATUS_REJECTED,
+        "RejectedBy": email,
+        "RejectedUtc": now,
+        "UpdatedUtc": now,
+        "AcceptedUntilUtc": "",
+        "PendingCount": 0,
+        "PendingBytes": 0,
+    }
+    try:
+        _merge_hovtp_source(table_client, competition_id, ip, updates)
+    except ResourceNotFoundError:
+        return _error("source_not_found", "Unknown data source.", 404)
+    except Exception as e:
+        logging.error(f"Error rejecting HOVTP source '{ip}' for '{competition_id}': {e}")
+        return _error("internal_error", "Could not reject the data source.", 500)
+
+    deleted = _delete_pending(container, competition_id, ip)
+
+    merged = dict(source)
+    merged.update(updates)
+    return _json({"source": _source_to_json(merged, _now_utc()), "deleted": deleted})
+
+
 # ── HTTP routes ───────────────────────────────────────────────────────────────
 # The Functions host prepends the default `api` route prefix, so these register
 # as /api/competitions and /api/competitions/{id}.
@@ -1021,29 +1452,36 @@ def competition_file_by_name(req: func.HttpRequest) -> func.HttpResponse:
     return _download_competition_file(req)
 
 
+@app.route(route="competitions/{id}/hovtp/sources", auth_level=func.AuthLevel.ANONYMOUS,
+           methods=["GET"])
+def competition_hovtp_sources(req: func.HttpRequest) -> func.HttpResponse:
+    return _list_hovtp_sources(req)
+
+
+@app.route(route="competitions/{id}/hovtp/sources/{ip}/accept",
+           auth_level=func.AuthLevel.ANONYMOUS, methods=["POST"])
+def competition_hovtp_source_accept(req: func.HttpRequest) -> func.HttpResponse:
+    return _accept_hovtp_source(req)
+
+
+@app.route(route="competitions/{id}/hovtp/sources/{ip}/reject",
+           auth_level=func.AuthLevel.ANONYMOUS, methods=["POST"])
+def competition_hovtp_source_reject(req: func.HttpRequest) -> func.HttpResponse:
+    return _deny_hovtp_source(req)
+
+
+@app.route(route="competitions/{id}/hovtp/sources/{ip}", auth_level=func.AuthLevel.ANONYMOUS,
+           methods=["DELETE"])
+def competition_hovtp_source_by_ip(req: func.HttpRequest) -> func.HttpResponse:
+    """Revoke: same write as reject, but the already-attached files stay."""
+    return _deny_hovtp_source(req)
+
+
 @app.route(route="health", auth_level=func.AuthLevel.ANONYMOUS, methods=["GET"])
 def health(req: func.HttpRequest) -> func.HttpResponse:
     """Liveness probe. Deliberately touches no storage and needs no identity."""
     return _json({"status": "ok", "service": "fs-platform"})
 
 
-# ── RESERVED: FSM ingest seams (workstream 5 — do not build yet) ──────────────
-#
-# The FSM (figure skating management system) will POST datafeeds and PDFs keyed
-# by the competition CODE, not the GUID; the CODE row above is the O(1) lookup.
-# Ingest is machine-to-machine, so it is NOT gated by the user-email header —
-# it gets its own pre-shared key, checked here rather than via Easy Auth:
-#
-# def _ingest_key_ok(req: func.HttpRequest) -> bool:
-#     expected = os.environ.get("INGEST_API_KEY")
-#     if not expected:
-#         return False           # closed by default, unlike PROXY_SHARED_SECRET
-#     return (req.headers.get("x-ingest-key") or "") == expected
-#
-# @app.route(route="ingest/datafeed", auth_level=func.AuthLevel.ANONYMOUS, methods=["POST"])
-# def ingest_datafeed(req):      # ?code=<competition code>
-#     ...  # resolve CODE row -> guid, write competition_fsm_prefix(guid) + 'datafeed/...'
-#
-# @app.route(route="ingest/pdf", auth_level=func.AuthLevel.ANONYMOUS, methods=["POST"])
-# def ingest_pdf(req):           # ?code=<competition code>
-#     ...  # write competition_fsm_prefix(guid) + 'pdf/...'
+# The FSM ingest is NOT here: FSM pushes over HOVTP to its own Function App,
+# `infra/hovtp/`, which writes <guid>/fsm[-pending]/ that these routes manage.

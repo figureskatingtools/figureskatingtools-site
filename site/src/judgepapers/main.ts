@@ -8,10 +8,12 @@ import {
     subscribeActiveCompetition,
     competitionLabel,
     formatDateFi,
+    formatDateTimeFi,
     listCompetitionFiles,
     uploadCompetitionFile,
     type CategoryInfo,
     type PoolFile,
+    SUFFIX_SLOTS,
 } from '@figureskatingtools/shared-ui';
 import {
     escapeHtml,
@@ -211,6 +213,10 @@ appElement.innerHTML = `
       </div>
     </div>
   </main>
+
+  <footer class="site-footer">
+    <p>Supporting the figure skating community — created with a pinch of AI ❤️</p>
+  </footer>
 `;
 
 // Helper to switch views
@@ -389,6 +395,44 @@ async function bindActiveCompetition(force = false): Promise<void> {
     }
 }
 
+/**
+ * The right-hand timestamp on a file row: when the file itself was uploaded
+ * or pushed by FS Manager (`uploadedUtc`), so the operator can tell "50 min
+ * ago" from "yesterday". Not the time the backend copied it — that changes on
+ * every pool refresh. Older backends only send `lastModified`, so fall back to
+ * it. Rendered as an empty span when there is no time — a missing stamp must
+ * not shift the delete button out of its column.
+ */
+function fileMetaHtml(file: any): string {
+    const stamp = formatDateTimeFi(file?.uploadedUtc || file?.lastModified);
+    return `<span class="file-meta">${escapeHtml(stamp)}</span>`;
+}
+
+/** How many refreshed filenames to spell out before falling back to a count */
+const REFRESH_NAMES_SHOWN = 3;
+
+/**
+ * Announce the files the backend just re-pulled from the competition file
+ * pool, in the same status line the upload and import flows use.
+ *
+ * Only ever written when there is something to report, so an error message
+ * already standing in that line survives a details reload that changed
+ * nothing; a real refresh does take precedence over it, because a file
+ * changing underneath the operator is the more important news.
+ */
+function reportPoolRefresh(refreshed: unknown): void {
+    if (!Array.isArray(refreshed) || !refreshed.length) return;
+    const statusEl = document.getElementById('upload-status');
+    if (!statusEl) return;
+
+    const names = refreshed.map(String);
+    const shown = names.slice(0, REFRESH_NAMES_SHOWN).map(escapeHtml).join(', ');
+    const rest = names.length - REFRESH_NAMES_SHOWN;
+    const list = rest > 0 ? `${shown} +${rest} more` : shown;
+    statusEl.innerHTML =
+        `<span style="color: var(--success-color);">Updated ${names.length} file(s) from competition files: ${list}</span>`;
+}
+
 /* ── retention ── */
 
 /** `dd.MM.yyyy`, or the `-` sentinel this UI uses for "no usable date". */
@@ -551,7 +595,8 @@ async function init() {
                         <div class="file-list">
                             ${competitionFiles.map((file: any) => `
                                 <div class="file-row">
-                                    <span title="${escapeHtml(file.suffix)}">${escapeHtml(file.filename)}</span>
+                                    <span class="file-name" title="${escapeHtml(file.suffix)}">${escapeHtml(file.filename)}</span>
+                                    ${fileMetaHtml(file)}
                                     <button class="file-delete-btn delete-file-btn" data-filename="${escapeHtml(file.filename)}" title="Delete File">×</button>
                                 </div>
                             `).join('')}
@@ -668,7 +713,8 @@ async function init() {
                 (files as any[]).forEach((file: any) => {
                     html += `
                         <div class="file-row">
-                            <span title="${escapeHtml(file.suffix)}">${escapeHtml(file.filename)}</span>
+                            <span class="file-name" title="${escapeHtml(file.suffix)}">${escapeHtml(file.filename)}</span>
+                            ${fileMetaHtml(file)}
                             <button class="file-delete-btn delete-file-btn" data-filename="${escapeHtml(file.filename)}" title="Delete File">×</button>
                         </div>
                     `;
@@ -805,6 +851,11 @@ async function init() {
             
             const data = await resp.json();
             currentCompetitionData = data;
+
+            // The backend re-copies its own files from the competition file
+            // pool whenever the pool's copy is newer, and names what it took.
+            // Say so — otherwise a file silently changes under the operator.
+            reportPoolRefresh(data.refreshedFromPool);
 
             // Retention line — only when the backend reports a deletion date
             renderRetention(id, data.deletionDate);
@@ -1091,36 +1142,85 @@ async function init() {
      * yet. Renders nothing at all when there is no pool, no binding or nothing
      * left to import, so the view is unchanged for standalone use.
      */
+    /**
+     * "Show all files" in the import list. Off by default: the pool also holds
+     * the Protocol Generator pages FS Manager pushes for every segment (results,
+     * head pages…), which this tool never uses. Remembered per browser.
+     */
+    const POOL_SHOW_ALL_KEY = 'jp:pool-show-all:v1';
+    let showAllPoolFiles = (() => {
+        try { return localStorage.getItem(POOL_SHOW_ALL_KEY) === '1'; } catch { return false; }
+    })();
+    function writePoolShowAll(value: boolean): void {
+        showAllPoolFiles = value;
+        try { localStorage.setItem(POOL_SHOW_ALL_KEY, value ? '1' : '0'); } catch { /* private mode etc. */ }
+    }
+
+    /** The FSM sheet suffixes Judge Papers works from (what `parse_competition_file` looks for). */
+    const JUDGE_PAPERS_SUFFIXES = new Set([
+        'StartListwithTimes.pdf',
+        'ISUPanelofJudgesandTechnicalPanel.pdf',
+        'JudgesSheetAll.pdf',
+        'JudgesDetailsAll.pdf',
+        'RefereeSheet.pdf',
+        'PlannedProgramContent.pdf',
+        'TechnicalControllerSheet.pdf',
+        'TechnicalSpecialistSheet.pdf',
+        'TechnicalSpecialistSheet1.pdf',
+        'TechnicalSpecialistSheet2.pdf',
+        'CalculationSetupVerificationforReferee.pdf',
+    ]);
+
+    /**
+     * Does Judge Papers have any use for this pool file? Judged by the FSM suffix
+     * (everything after the last underscore). A suffix another tool's recognizer
+     * knows (SegmentResults, Results, ProtocolHeadPage…) is hidden by default;
+     * unknown suffixes stay visible — they may be anything a user uploaded by hand.
+     */
+    function isJudgePapersFile(name: string): boolean {
+        const suffix = name.slice(name.lastIndexOf('_') + 1);
+        if (JUDGE_PAPERS_SUFFIXES.has(suffix)) return true;
+        return !(suffix in SUFFIX_SLOTS);
+    }
+
     async function renderPoolImport(competitionId: string) {
         const host = document.getElementById('pool-import-container');
         if (!host) return;
-        host.innerHTML = '';
-        if (!boundPlatformId || poolDisabled) return;
+        if (!boundPlatformId || poolDisabled) { host.innerHTML = ''; return; }
 
         let files: PoolFile[];
         try {
             files = await listCompetitionFiles(boundPlatformId);
         } catch (_e) {
+            host.innerHTML = '';
             return;   // pool unavailable — degrade to no section
         }
 
         const have = existingFilenames();
-        const pending = files.filter(f => f.name.toLowerCase().endsWith('.pdf') && !have.has(f.name));
-        if (!pending.length) return;
+        const all = files.filter(f => f.name.toLowerCase().endsWith('.pdf') && !have.has(f.name));
+        const pending = showAllPoolFiles ? all : all.filter(f => isJudgePapersFile(f.name));
+        if (!all.length) { host.innerHTML = ''; return; }
+        // A re-render (toggle, import) keeps the section open.
+        const wasOpen = host.querySelector('details.pool-import')?.hasAttribute('open') ?? false;
 
         host.innerHTML = `
-            <details class="pool-import">
+            <details class="pool-import"${wasOpen ? ' open' : ''}>
                 <summary class="pool-import-head">
                     <span class="pool-import-title">Competition files</span>
                     <span class="pool-import-count">${pending.length} available</span>
                 </summary>
                 <p class="pool-import-sub">Uploaded for this competition in another tool — select the files you need and press Import.</p>
+                <label class="pool-import-toggle">
+                    <input type="checkbox" id="pool-show-all"${showAllPoolFiles ? ' checked' : ''}>
+                    Show all files
+                </label>
                 <div class="pool-file-list">
                     ${pending.map(f => `
                         <label class="pool-file">
-                            <input type="checkbox" class="pool-file-check" value="${escapeHtml(f.name)}">
+                            <input type="checkbox" class="pool-file-check" value="${escapeHtml(f.name)}" data-source="${escapeHtml(f.source)}">
                             <span class="pool-file-name">${escapeHtml(f.name)}</span>
-                            ${f.sourceTool ? `<span class="pool-file-src">${escapeHtml(f.sourceTool)}</span>` : ''}
+                            <span class="pool-file-src">${escapeHtml(f.sourceTool || f.source)}</span>
+                            <span class="pool-file-date">${escapeHtml(formatDateTimeFi(f.uploadedUtc))}</span>
                         </label>`).join('')}
                 </div>
                 <div class="pool-import-actions">
@@ -1130,6 +1230,10 @@ async function init() {
             </details>`;
 
         const importBtn = document.getElementById('btn-pool-import') as HTMLButtonElement;
+        document.getElementById('pool-show-all')?.addEventListener('change', (e) => {
+            writePoolShowAll((e.currentTarget as HTMLInputElement).checked);
+            void renderPoolImport(competitionId);
+        });
         const checks = () => Array.from(document.querySelectorAll<HTMLInputElement>('.pool-file-check'));
         const syncImportButton = () => {
             const n = checks().filter(c => c.checked).length;
@@ -1147,17 +1251,20 @@ async function init() {
 
         importBtn.addEventListener('click', async () => {
             const btn = importBtn;
-            const chosen = checks().filter(c => c.checked).map(c => c.value);
+            // The pool has two folders (uploads/, fsm/); the checkbox carries
+            // which one this row came from, so the import reads the right one.
+            const chosen = checks().filter(c => c.checked)
+                .map(c => ({ name: c.value, source: c.dataset.source || 'upload' }));
             if (!chosen.length) return;
             btn.disabled = true;
             btn.textContent = 'Importing…';
 
             let failed = 0;
-            for (const name of chosen) {
+            for (const { name, source } of chosen) {
                 try {
                     const resp = await fetch(
                         `${API_BASE}/import_platform_file?competition=${encodeURIComponent(competitionId)}`
-                        + `&name=${encodeURIComponent(name)}`,
+                        + `&name=${encodeURIComponent(name)}&source=${encodeURIComponent(source)}`,
                         { method: 'POST' });
                     if (!resp.ok) {
                         failed++;

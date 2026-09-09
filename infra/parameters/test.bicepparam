@@ -37,3 +37,11 @@ param toolFunctionPrincipalIds = [
   readEnvironmentVariable('TOOL_PRINCIPAL_ID_SCOREMODIFIER', '')
   readEnvironmentVariable('TOOL_PRINCIPAL_ID_PROTOCOLGENERATOR', '')
 ]
+
+// HOVTP listener (FS Manager push endpoint). Enabled in test by default; set the
+// GitHub environment variable HOVTP_ENABLED=false to kill it without a code change
+// (the app stays deployed and answers 503).
+// The workflow always exports the variable, so an unset GitHub var arrives as ''
+// — anything but the literal 'false' keeps the listener on.
+param hovtpEnabled = readEnvironmentVariable('HOVTP_ENABLED', 'true') != 'false'
+param hovtpEnvironment = 'Test'

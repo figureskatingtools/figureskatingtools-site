@@ -1,0 +1,1755 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.44.1.10279",
+      "templateHash": "9948455835984518952"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "swedencentral"
+    },
+    "resourceGroupName": {
+      "type": "string",
+      "defaultValue": ""
+    },
+    "customDomain": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Custom domain for this environment. Empty = deploy on the default *.azurewebsites.net hostname only (used during migration, before the DNS cutover)."
+      }
+    },
+    "dnsResourceGroupName": {
+      "type": "string",
+      "defaultValue": "rg-fs-dns",
+      "metadata": {
+        "description": "Resource group that holds the single shared DNS zone. Persistent + shared by every environment; not torn down with a test env."
+      }
+    },
+    "dnsZoneName": {
+      "type": "string",
+      "defaultValue": "figureskatingtools.com",
+      "metadata": {
+        "description": "The DNS zone / apex domain name."
+      }
+    },
+    "authClientId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Client id of the per-environment Entra app registration used by Easy Auth."
+      }
+    },
+    "tenantId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Entra tenant id. Defaults to the deployment subscription tenant."
+      }
+    },
+    "proxySharedSecretPlatform": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Shared secret the router sends to the platform Function App as X-Proxy-Secret. Also written to the Web App so the router and the backend agree."
+      }
+    },
+    "functionAppUrlJudgepapers": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Base URL of the judgepapers Function App (fs-judgepapers repo). Empty = that tool's API proxies 502 until it is set."
+      }
+    },
+    "functionAppUrlScoremodifier": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Base URL of the scoremodifier Function App (fs-scoremodifier repo)."
+      }
+    },
+    "functionAppUrlProtocolgenerator": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Base URL of the protocolgenerator Function App (fs-protocolgenerator repo)."
+      }
+    },
+    "proxySharedSecretJudgepapers": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Shared secret the router sends to the judgepapers Function App."
+      }
+    },
+    "proxySharedSecretScoremodifier": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Shared secret the router sends to the scoremodifier Function App."
+      }
+    },
+    "proxySharedSecretProtocolgenerator": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Shared secret the router sends to the protocolgenerator Function App."
+      }
+    },
+    "toolFunctionPrincipalIds": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "System-assigned principal ids of the tool Function Apps that need read access to competition-data. May be empty on a first deploy."
+      }
+    },
+    "hovtpEnabled": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Kill switch for the HOVTP listener. false = the app is still deployed but answers every request 503 (see modules/hovtp-function.bicep)."
+      }
+    },
+    "hovtpEnvironment": {
+      "type": "string",
+      "defaultValue": "Test",
+      "allowedValues": [
+        "Test",
+        "Production"
+      ],
+      "metadata": {
+        "description": "Environment the HOVTP listener reports to FS Manager."
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2021-04-01",
+      "name": "[parameters('resourceGroupName')]",
+      "location": "[parameters('location')]"
+    },
+    {
+      "type": "Microsoft.Resources/resourceGroups",
+      "apiVersion": "2021-04-01",
+      "name": "[parameters('dnsResourceGroupName')]",
+      "location": "[parameters('location')]"
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "authIdentityDeployment",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "managedIdentityName": {
+            "value": "[format('mi-fs-site-auth-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.44.1.10279",
+              "templateHash": "18192871658490529346"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "managedIdentityName": {
+              "type": "string"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "apiVersion": "2023-01-31",
+              "name": "[parameters('managedIdentityName')]",
+              "location": "[parameters('location')]"
+            }
+          ],
+          "outputs": {
+            "clientId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('managedIdentityName')), '2023-01-31').clientId]"
+            },
+            "principalId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('managedIdentityName')), '2023-01-31').principalId]"
+            },
+            "resourceId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('managedIdentityName'))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "webAppDeployment",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "webAppName": {
+            "value": "[format('app-fs-site-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))))]"
+          },
+          "appServicePlanName": {
+            "value": "asp-fs-site-web"
+          },
+          "authClientId": {
+            "value": "[parameters('authClientId')]"
+          },
+          "authManagedIdentityClientId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'authIdentityDeployment'), '2025-04-01').outputs.clientId.value]"
+          },
+          "authManagedIdentityResourceId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'authIdentityDeployment'), '2025-04-01').outputs.resourceId.value]"
+          },
+          "tenantId": "[if(not(empty(parameters('tenantId'))), createObject('value', parameters('tenantId')), createObject('value', subscription().tenantId))]",
+          "functionAppUrlPlatform": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformFunctionDeployment'), '2025-04-01').outputs.functionAppUrl.value]"
+          },
+          "functionAppUrlJudgepapers": {
+            "value": "[parameters('functionAppUrlJudgepapers')]"
+          },
+          "functionAppUrlScoremodifier": {
+            "value": "[parameters('functionAppUrlScoremodifier')]"
+          },
+          "functionAppUrlProtocolgenerator": {
+            "value": "[parameters('functionAppUrlProtocolgenerator')]"
+          },
+          "proxySharedSecretPlatform": {
+            "value": "[parameters('proxySharedSecretPlatform')]"
+          },
+          "proxySharedSecretJudgepapers": {
+            "value": "[parameters('proxySharedSecretJudgepapers')]"
+          },
+          "proxySharedSecretScoremodifier": {
+            "value": "[parameters('proxySharedSecretScoremodifier')]"
+          },
+          "proxySharedSecretProtocolgenerator": {
+            "value": "[parameters('proxySharedSecretProtocolgenerator')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.44.1.10279",
+              "templateHash": "12299156645940250561"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "webAppName": {
+              "type": "string"
+            },
+            "appServicePlanName": {
+              "type": "string"
+            },
+            "skuName": {
+              "type": "string",
+              "defaultValue": "B1"
+            },
+            "skuTier": {
+              "type": "string",
+              "defaultValue": "Basic"
+            },
+            "authClientId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "authManagedIdentityClientId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "authManagedIdentityResourceId": {
+              "type": "string",
+              "defaultValue": ""
+            },
+            "tenantId": {
+              "type": "string",
+              "defaultValue": "[subscription().tenantId]"
+            },
+            "functionAppUrlPlatform": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Base URL of the platform Function App (competitions registry) — the /api/* proxy target."
+              }
+            },
+            "functionAppUrlJudgepapers": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Base URL of the judgepapers Function App — the /judgepapers/api/* proxy target."
+              }
+            },
+            "functionAppUrlScoremodifier": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Base URL of the scoremodifier Function App — the /scoremodifier/api/* proxy target."
+              }
+            },
+            "functionAppUrlProtocolgenerator": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Base URL of the protocolgenerator Function App — the /protocolgenerator/api/* proxy target."
+              }
+            },
+            "proxySharedSecretPlatform": {
+              "type": "securestring",
+              "defaultValue": "",
+              "metadata": {
+                "description": "X-Proxy-Secret the router sends to the platform Function App. Intentionally empty by default — the backend fails open when its own secret is unset."
+              }
+            },
+            "proxySharedSecretJudgepapers": {
+              "type": "securestring",
+              "defaultValue": "",
+              "metadata": {
+                "description": "X-Proxy-Secret the router sends to the judgepapers Function App."
+              }
+            },
+            "proxySharedSecretScoremodifier": {
+              "type": "securestring",
+              "defaultValue": "",
+              "metadata": {
+                "description": "X-Proxy-Secret the router sends to the scoremodifier Function App."
+              }
+            },
+            "proxySharedSecretProtocolgenerator": {
+              "type": "securestring",
+              "defaultValue": "",
+              "metadata": {
+                "description": "X-Proxy-Secret the router sends to the protocolgenerator Function App."
+              }
+            },
+            "authExcludedPaths": {
+              "type": "array",
+              "defaultValue": [
+                "/health"
+              ],
+              "metadata": {
+                "description": "Paths served without an Easy Auth login redirect. /health must stay open so Azure/uptime probes get a 200 instead of a 302."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Web/serverfarms",
+              "apiVersion": "2023-12-01",
+              "name": "[parameters('appServicePlanName')]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "[parameters('skuName')]",
+                "tier": "[parameters('skuTier')]"
+              },
+              "properties": {
+                "reserved": true
+              }
+            },
+            {
+              "type": "Microsoft.Web/sites",
+              "apiVersion": "2023-12-01",
+              "name": "[parameters('webAppName')]",
+              "location": "[parameters('location')]",
+              "kind": "app,linux",
+              "identity": {
+                "type": "UserAssigned",
+                "userAssignedIdentities": {
+                  "[format('{0}', parameters('authManagedIdentityResourceId'))]": {}
+                }
+              },
+              "properties": {
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]",
+                "siteConfig": {
+                  "linuxFxVersion": "NODE|22-lts",
+                  "appCommandLine": "node server.js",
+                  "alwaysOn": true,
+                  "http20Enabled": true,
+                  "minTlsVersion": "1.2",
+                  "ftpsState": "Disabled"
+                },
+                "httpsOnly": true
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]"
+              ]
+            },
+            {
+              "condition": "[not(empty(parameters('authClientId')))]",
+              "type": "Microsoft.Web/sites/config",
+              "apiVersion": "2022-09-01",
+              "name": "[format('{0}/{1}', parameters('webAppName'), 'authsettingsV2')]",
+              "properties": {
+                "globalValidation": {
+                  "requireAuthentication": true,
+                  "unauthenticatedClientAction": "RedirectToLoginPage",
+                  "redirectToProvider": "azureactivedirectory",
+                  "excludedPaths": "[parameters('authExcludedPaths')]"
+                },
+                "identityProviders": {
+                  "azureActiveDirectory": {
+                    "enabled": true,
+                    "registration": {
+                      "clientId": "[parameters('authClientId')]",
+                      "clientSecretSettingName": "OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID",
+                      "openIdIssuer": "[format('{0}{1}/v2.0', environment().authentication.loginEndpoint, parameters('tenantId'))]"
+                    },
+                    "validation": {
+                      "allowedAudiences": [
+                        "[parameters('authClientId')]"
+                      ]
+                    }
+                  }
+                },
+                "login": {
+                  "tokenStore": {
+                    "enabled": false
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Web/sites/config",
+              "apiVersion": "2022-09-01",
+              "name": "[format('{0}/{1}', parameters('webAppName'), 'appsettings')]",
+              "properties": "[union(createObject('FUNCTION_APP_URL_PLATFORM', parameters('functionAppUrlPlatform'), 'FUNCTION_APP_URL_JUDGEPAPERS', parameters('functionAppUrlJudgepapers'), 'FUNCTION_APP_URL_SCOREMODIFIER', parameters('functionAppUrlScoremodifier'), 'FUNCTION_APP_URL_PROTOCOLGENERATOR', parameters('functionAppUrlProtocolgenerator'), 'PROXY_SHARED_SECRET_PLATFORM', parameters('proxySharedSecretPlatform'), 'PROXY_SHARED_SECRET_JUDGEPAPERS', parameters('proxySharedSecretJudgepapers'), 'PROXY_SHARED_SECRET_SCOREMODIFIER', parameters('proxySharedSecretScoremodifier'), 'PROXY_SHARED_SECRET_PROTOCOLGENERATOR', parameters('proxySharedSecretProtocolgenerator'), 'SCM_DO_BUILD_DURING_DEPLOYMENT', 'false'), if(empty(parameters('authClientId')), createObject(), createObject('OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID', parameters('authManagedIdentityClientId'))))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "webAppName": {
+              "type": "string",
+              "value": "[parameters('webAppName')]"
+            },
+            "webAppDefaultHostName": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Web/sites', parameters('webAppName')), '2023-12-01').defaultHostName]"
+            },
+            "customDomainVerificationId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Web/sites', parameters('webAppName')), '2023-12-01').customDomainVerificationId]"
+            },
+            "inboundIpAddress": {
+              "type": "string",
+              "metadata": {
+                "description": "Inbound VIP of the App Service. The apex A record points at this literal IP (Azure DNS alias records cannot target App Service)."
+              },
+              "value": "[split(reference(resourceId('Microsoft.Web/sites', parameters('webAppName')), '2023-12-01').inboundIpAddress, ',')[0]]"
+            },
+            "appServicePlanId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'authIdentityDeployment')]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformFunctionDeployment')]",
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "platformStorageDeployment",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "storageAccountName": {
+            "value": "[format('stfsplat{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.44.1.10279",
+              "templateHash": "9204266741201873098"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "storageAccountName": {
+              "type": "string"
+            },
+            "dataContainerName": {
+              "type": "string",
+              "defaultValue": "competition-data",
+              "metadata": {
+                "description": "Shared, cross-tool readable blob container keyed by competition GUID."
+              }
+            },
+            "competitionsTableName": {
+              "type": "string",
+              "defaultValue": "competitions",
+              "metadata": {
+                "description": "Table holding both the COMPETITION rows and the CODE uniqueness rows."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Storage/storageAccounts",
+              "apiVersion": "2023-01-01",
+              "name": "[parameters('storageAccountName')]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "Standard_LRS"
+              },
+              "kind": "StorageV2",
+              "properties": {
+                "accessTier": "Hot",
+                "minimumTlsVersion": "TLS1_2",
+                "supportsHttpsTrafficOnly": true,
+                "allowBlobPublicAccess": false
+              }
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/blobServices",
+              "apiVersion": "2023-01-01",
+              "name": "[format('{0}/{1}', parameters('storageAccountName'), 'default')]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+              "apiVersion": "2023-01-01",
+              "name": "[format('{0}/{1}/{2}', parameters('storageAccountName'), 'default', parameters('dataContainerName'))]",
+              "properties": {
+                "publicAccess": "None"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('storageAccountName'), 'default')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+              "apiVersion": "2023-01-01",
+              "name": "[format('{0}/{1}/{2}', parameters('storageAccountName'), 'default', 'app-package')]",
+              "properties": {
+                "publicAccess": "None"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('storageAccountName'), 'default')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+              "apiVersion": "2023-01-01",
+              "name": "[format('{0}/{1}/{2}', parameters('storageAccountName'), 'default', 'app-package-hovtp')]",
+              "properties": {
+                "publicAccess": "None"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('storageAccountName'), 'default')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/tableServices",
+              "apiVersion": "2023-01-01",
+              "name": "[format('{0}/{1}', parameters('storageAccountName'), 'default')]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/tableServices/tables",
+              "apiVersion": "2023-01-01",
+              "name": "[format('{0}/{1}/{2}', parameters('storageAccountName'), 'default', parameters('competitionsTableName'))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/tableServices', parameters('storageAccountName'), 'default')]"
+              ]
+            }
+          ],
+          "outputs": {
+            "storageAccountName": {
+              "type": "string",
+              "value": "[parameters('storageAccountName')]"
+            },
+            "storageAccountId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+            },
+            "deploymentContainerUrl": {
+              "type": "string",
+              "value": "[format('{0}app-package', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), '2023-01-01').primaryEndpoints.blob)]"
+            },
+            "hovtpDeploymentContainerUrl": {
+              "type": "string",
+              "value": "[format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), '2023-01-01').primaryEndpoints.blob, 'app-package-hovtp')]"
+            },
+            "blobEndpoint": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), '2023-01-01').primaryEndpoints.blob]"
+            },
+            "dataContainerName": {
+              "type": "string",
+              "value": "[parameters('dataContainerName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "platformFunctionDeployment",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "functionAppName": {
+            "value": "[format('func-fs-platform-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))))]"
+          },
+          "appServicePlanName": {
+            "value": "asp-fs-platform"
+          },
+          "appInsightsName": {
+            "value": "ai-fs-platform"
+          },
+          "storageAccountName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.storageAccountName.value]"
+          },
+          "deploymentContainerUrl": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.deploymentContainerUrl.value]"
+          },
+          "dataContainerName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.dataContainerName.value]"
+          },
+          "proxySharedSecret": {
+            "value": "[parameters('proxySharedSecretPlatform')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.44.1.10279",
+              "templateHash": "15165352887109794720"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "functionAppName": {
+              "type": "string"
+            },
+            "appServicePlanName": {
+              "type": "string"
+            },
+            "appInsightsName": {
+              "type": "string"
+            },
+            "storageAccountName": {
+              "type": "string"
+            },
+            "deploymentContainerUrl": {
+              "type": "string"
+            },
+            "dataContainerName": {
+              "type": "string",
+              "defaultValue": "competition-data",
+              "metadata": {
+                "description": "Shared blob container the registry writes competition data into."
+              }
+            },
+            "proxySharedSecret": {
+              "type": "securestring",
+              "defaultValue": ""
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Web/serverfarms",
+              "apiVersion": "2023-12-01",
+              "name": "[parameters('appServicePlanName')]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "FC1",
+                "tier": "FlexConsumption"
+              },
+              "properties": {
+                "reserved": true
+              }
+            },
+            {
+              "type": "Microsoft.Insights/components",
+              "apiVersion": "2020-02-02",
+              "name": "[parameters('appInsightsName')]",
+              "location": "[parameters('location')]",
+              "kind": "web",
+              "properties": {
+                "Application_Type": "web"
+              }
+            },
+            {
+              "type": "Microsoft.Web/sites",
+              "apiVersion": "2023-12-01",
+              "name": "[parameters('functionAppName')]",
+              "location": "[parameters('location')]",
+              "kind": "functionapp,linux",
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "properties": {
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]",
+                "siteConfig": {
+                  "cors": {
+                    "allowedOrigins": []
+                  },
+                  "ipSecurityRestrictions": [],
+                  "ipSecurityRestrictionsDefaultAction": "Allow",
+                  "appSettings": [
+                    {
+                      "name": "AzureWebJobsStorage__accountName",
+                      "value": "[parameters('storageAccountName')]"
+                    },
+                    {
+                      "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+                      "value": "[reference(resourceId('Microsoft.Insights/components', parameters('appInsightsName')), '2020-02-02').ConnectionString]"
+                    },
+                    {
+                      "name": "PROXY_SHARED_SECRET",
+                      "value": "[parameters('proxySharedSecret')]"
+                    },
+                    {
+                      "name": "COMPETITION_DATA_CONTAINER",
+                      "value": "[parameters('dataContainerName')]"
+                    }
+                  ]
+                },
+                "functionAppConfig": {
+                  "deployment": {
+                    "storage": {
+                      "type": "blobContainer",
+                      "value": "[parameters('deploymentContainerUrl')]",
+                      "authentication": {
+                        "type": "SystemAssignedIdentity"
+                      }
+                    }
+                  },
+                  "runtime": {
+                    "name": "python",
+                    "version": "3.13"
+                  },
+                  "scaleAndConcurrency": {
+                    "maximumInstanceCount": 100,
+                    "instanceMemoryMB": 2048
+                  }
+                },
+                "httpsOnly": true
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Insights/components', parameters('appInsightsName'))]",
+                "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Web/sites/config",
+              "apiVersion": "2022-03-01",
+              "name": "[format('{0}/{1}', parameters('functionAppName'), 'authsettingsV2')]",
+              "properties": {
+                "globalValidation": {
+                  "requireAuthentication": false,
+                  "unauthenticatedClientAction": "AllowAnonymous"
+                },
+                "login": {
+                  "tokenStore": {
+                    "enabled": false
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', parameters('functionAppName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "functionAppName": {
+              "type": "string",
+              "value": "[parameters('functionAppName')]"
+            },
+            "functionAppId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Web/sites', parameters('functionAppName'))]"
+            },
+            "functionAppUrl": {
+              "type": "string",
+              "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', parameters('functionAppName')), '2023-12-01').defaultHostName)]"
+            },
+            "functionPrincipalId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Web/sites', parameters('functionAppName')), '2023-12-01', 'full').identity.principalId]"
+            },
+            "appInsightsConnectionString": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Insights/components', parameters('appInsightsName')), '2020-02-02').ConnectionString]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment')]",
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "platformRoleAssignmentDeployment",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "storageAccountName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.storageAccountName.value]"
+          },
+          "functionPrincipalId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformFunctionDeployment'), '2025-04-01').outputs.functionPrincipalId.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.44.1.10279",
+              "templateHash": "13203193144560708498"
+            }
+          },
+          "parameters": {
+            "storageAccountName": {
+              "type": "string"
+            },
+            "functionPrincipalId": {
+              "type": "string"
+            },
+            "grantBlobDelegator": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "Grant Storage Blob Delegator (user-delegation SAS for downloads). The HOVTP listener only writes, so it does not need it."
+              }
+            }
+          },
+          "variables": {
+            "storageTableDataContributorId": "0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3",
+            "storageBlobDataContributorId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
+            "storageBlobDelegatorId": "db58b8e5-c6ad-4a2a-8342-4190687cbf4a"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('functionPrincipalId'), variables('storageTableDataContributorId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageTableDataContributorId'))]",
+                "principalId": "[parameters('functionPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('functionPrincipalId'), variables('storageBlobDataContributorId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContributorId'))]",
+                "principalId": "[parameters('functionPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            },
+            {
+              "condition": "[parameters('grantBlobDelegator')]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('functionPrincipalId'), variables('storageBlobDelegatorId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDelegatorId'))]",
+                "principalId": "[parameters('functionPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformFunctionDeployment')]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment')]",
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "hovtpFunctionDeployment",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "functionAppName": {
+            "value": "[format('func-fs-hovtp-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))))]"
+          },
+          "appServicePlanName": {
+            "value": "asp-fs-hovtp"
+          },
+          "storageAccountName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.storageAccountName.value]"
+          },
+          "deploymentContainerUrl": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.hovtpDeploymentContainerUrl.value]"
+          },
+          "appInsightsConnectionString": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformFunctionDeployment'), '2025-04-01').outputs.appInsightsConnectionString.value]"
+          },
+          "dataContainerName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.dataContainerName.value]"
+          },
+          "hovtpEnabled": {
+            "value": "[parameters('hovtpEnabled')]"
+          },
+          "hovtpEnvironment": {
+            "value": "[parameters('hovtpEnvironment')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.44.1.10279",
+              "templateHash": "3663621727086518085"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "functionAppName": {
+              "type": "string"
+            },
+            "appServicePlanName": {
+              "type": "string"
+            },
+            "storageAccountName": {
+              "type": "string"
+            },
+            "deploymentContainerUrl": {
+              "type": "string"
+            },
+            "appInsightsConnectionString": {
+              "type": "string",
+              "metadata": {
+                "description": "Connection string of the shared ai-fs-platform Application Insights component."
+              }
+            },
+            "dataContainerName": {
+              "type": "string",
+              "defaultValue": "competition-data",
+              "metadata": {
+                "description": "Shared blob container the listener writes competition data into."
+              }
+            },
+            "hovtpEnabled": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "Kill switch. false = every HOVTP request is answered 503 without touching storage. Bicep-owned, so it survives a redeploy."
+              }
+            },
+            "hovtpEnvironment": {
+              "type": "string",
+              "allowedValues": [
+                "Test",
+                "Production"
+              ],
+              "metadata": {
+                "description": "Environment echoed in X-HOVTP-Environment and matched against the sender."
+              }
+            },
+            "hovtpStrictSerial": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "true = a serial-number gap is refused with 450 Out Of Synchro instead of accepted with a warning."
+              }
+            },
+            "hovtpKeepAliveSeconds": {
+              "type": "int",
+              "defaultValue": 60,
+              "metadata": {
+                "description": "Value advertised in X-HOVTP-Keep-Alive-Interval (seconds)."
+              }
+            },
+            "hovtpTrustedProxyHops": {
+              "type": "int",
+              "defaultValue": 0,
+              "metadata": {
+                "description": "Number of trusted proxy hops in front of the app; the client IP is taken that many entries back from the end of X-Forwarded-For. 0 = App Service only."
+              }
+            },
+            "hovtpAllowedDocumentTypes": {
+              "type": "string",
+              "defaultValue": "DT_PDF,DT_PARTIC,DT_PARTIC_TEAMS,DT_SCHEDULE,DT_SCHEDULE_UPDATE",
+              "metadata": {
+                "description": "Comma-separated ODF DocumentTypes that are stored. Everything else is logged and dropped with a 200."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Web/serverfarms",
+              "apiVersion": "2023-12-01",
+              "name": "[parameters('appServicePlanName')]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "FC1",
+                "tier": "FlexConsumption"
+              },
+              "properties": {
+                "reserved": true
+              }
+            },
+            {
+              "type": "Microsoft.Web/sites",
+              "apiVersion": "2023-12-01",
+              "name": "[parameters('functionAppName')]",
+              "location": "[parameters('location')]",
+              "kind": "functionapp,linux",
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "properties": {
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]",
+                "siteConfig": {
+                  "cors": {
+                    "allowedOrigins": []
+                  },
+                  "ipSecurityRestrictions": [],
+                  "ipSecurityRestrictionsDefaultAction": "Allow",
+                  "appSettings": [
+                    {
+                      "name": "AzureWebJobsStorage__accountName",
+                      "value": "[parameters('storageAccountName')]"
+                    },
+                    {
+                      "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+                      "value": "[parameters('appInsightsConnectionString')]"
+                    },
+                    {
+                      "name": "COMPETITION_DATA_CONTAINER",
+                      "value": "[parameters('dataContainerName')]"
+                    },
+                    {
+                      "name": "HOVTP_ENABLED",
+                      "value": "[string(parameters('hovtpEnabled'))]"
+                    },
+                    {
+                      "name": "HOVTP_ENVIRONMENT",
+                      "value": "[parameters('hovtpEnvironment')]"
+                    },
+                    {
+                      "name": "HOVTP_STRICT_SERIAL",
+                      "value": "[string(parameters('hovtpStrictSerial'))]"
+                    },
+                    {
+                      "name": "HOVTP_KEEP_ALIVE_SECONDS",
+                      "value": "[string(parameters('hovtpKeepAliveSeconds'))]"
+                    },
+                    {
+                      "name": "HOVTP_TRUSTED_PROXY_HOPS",
+                      "value": "[string(parameters('hovtpTrustedProxyHops'))]"
+                    },
+                    {
+                      "name": "HOVTP_ALLOWED_DOCUMENT_TYPES",
+                      "value": "[parameters('hovtpAllowedDocumentTypes')]"
+                    }
+                  ]
+                },
+                "functionAppConfig": {
+                  "deployment": {
+                    "storage": {
+                      "type": "blobContainer",
+                      "value": "[parameters('deploymentContainerUrl')]",
+                      "authentication": {
+                        "type": "SystemAssignedIdentity"
+                      }
+                    }
+                  },
+                  "runtime": {
+                    "name": "python",
+                    "version": "3.13"
+                  },
+                  "scaleAndConcurrency": {
+                    "maximumInstanceCount": 20,
+                    "instanceMemoryMB": 2048
+                  }
+                },
+                "httpsOnly": true
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Web/sites/config",
+              "apiVersion": "2022-03-01",
+              "name": "[format('{0}/{1}', parameters('functionAppName'), 'authsettingsV2')]",
+              "properties": {
+                "globalValidation": {
+                  "requireAuthentication": false,
+                  "unauthenticatedClientAction": "AllowAnonymous"
+                },
+                "login": {
+                  "tokenStore": {
+                    "enabled": false
+                  }
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', parameters('functionAppName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "functionAppName": {
+              "type": "string",
+              "value": "[parameters('functionAppName')]"
+            },
+            "functionAppUrl": {
+              "type": "string",
+              "value": "[format('https://{0}', reference(resourceId('Microsoft.Web/sites', parameters('functionAppName')), '2023-12-01').defaultHostName)]"
+            },
+            "functionPrincipalId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Web/sites', parameters('functionAppName')), '2023-12-01', 'full').identity.principalId]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformFunctionDeployment')]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment')]",
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "hovtpRoleAssignmentDeployment",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "storageAccountName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.storageAccountName.value]"
+          },
+          "functionPrincipalId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'hovtpFunctionDeployment'), '2025-04-01').outputs.functionPrincipalId.value]"
+          },
+          "grantBlobDelegator": {
+            "value": false
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.44.1.10279",
+              "templateHash": "13203193144560708498"
+            }
+          },
+          "parameters": {
+            "storageAccountName": {
+              "type": "string"
+            },
+            "functionPrincipalId": {
+              "type": "string"
+            },
+            "grantBlobDelegator": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "Grant Storage Blob Delegator (user-delegation SAS for downloads). The HOVTP listener only writes, so it does not need it."
+              }
+            }
+          },
+          "variables": {
+            "storageTableDataContributorId": "0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3",
+            "storageBlobDataContributorId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
+            "storageBlobDelegatorId": "db58b8e5-c6ad-4a2a-8342-4190687cbf4a"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('functionPrincipalId'), variables('storageTableDataContributorId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageTableDataContributorId'))]",
+                "principalId": "[parameters('functionPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('functionPrincipalId'), variables('storageBlobDataContributorId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContributorId'))]",
+                "principalId": "[parameters('functionPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            },
+            {
+              "condition": "[parameters('grantBlobDelegator')]",
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('functionPrincipalId'), variables('storageBlobDelegatorId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDelegatorId'))]",
+                "principalId": "[parameters('functionPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'hovtpFunctionDeployment')]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment')]",
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "sharedDataAccessDeployment",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "storageAccountName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.storageAccountName.value]"
+          },
+          "toolPrincipalIds": {
+            "value": "[parameters('toolFunctionPrincipalIds')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.44.1.10279",
+              "templateHash": "8340835106389023107"
+            }
+          },
+          "parameters": {
+            "storageAccountName": {
+              "type": "string"
+            },
+            "toolPrincipalIds": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "System-assigned principal ids of the tool Function Apps. Empty strings are ignored."
+              }
+            }
+          },
+          "variables": {
+            "storageBlobDataReaderId": "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1",
+            "validPrincipalIds": "[filter(parameters('toolPrincipalIds'), lambda('id', not(empty(trim(string(lambdaVariables('id')))))))]"
+          },
+          "resources": [
+            {
+              "copy": {
+                "name": "toolBlobReader",
+                "count": "[length(variables('validPrincipalIds'))]"
+              },
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), string(variables('validPrincipalIds')[copyIndex()]), variables('storageBlobDataReaderId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataReaderId'))]",
+                "principalId": "[string(variables('validPrincipalIds')[copyIndex()])]",
+                "principalType": "ServicePrincipal"
+              }
+            }
+          ],
+          "outputs": {
+            "grantedCount": {
+              "type": "int",
+              "metadata": {
+                "description": "Number of tool principals actually granted read access (0 on a first deploy)."
+              },
+              "value": "[length(variables('validPrincipalIds'))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment')]",
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "dnsDeployment",
+      "resourceGroup": "[parameters('dnsResourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "zoneName": {
+            "value": "[parameters('dnsZoneName')]"
+          },
+          "customDomain": {
+            "value": "[parameters('customDomain')]"
+          },
+          "webAppInboundIpAddress": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'webAppDeployment'), '2025-04-01').outputs.inboundIpAddress.value]"
+          },
+          "webAppDefaultHostname": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'webAppDeployment'), '2025-04-01').outputs.webAppDefaultHostName.value]"
+          },
+          "domainVerificationId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'webAppDeployment'), '2025-04-01').outputs.customDomainVerificationId.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.44.1.10279",
+              "templateHash": "5919595783719410208"
+            }
+          },
+          "parameters": {
+            "zoneName": {
+              "type": "string",
+              "metadata": {
+                "description": "The DNS zone / apex domain name, e.g. figureskatingtools.com"
+              }
+            },
+            "customDomain": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "The custom domain for this environment (apex for prod, test.<zone> for test). Empty = create/keep the zone only, no records."
+              }
+            },
+            "webAppInboundIpAddress": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Inbound IP address of the site Web App. Used for the apex A record."
+              }
+            },
+            "webAppDefaultHostname": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Default *.azurewebsites.net hostname of the site Web App (CNAME target for subdomains)."
+              }
+            },
+            "domainVerificationId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "App Service customDomainVerificationId, published as the `asuid` TXT record so the hostname binding can verify ownership."
+              }
+            }
+          },
+          "variables": {
+            "isApex": "[and(not(empty(parameters('customDomain'))), equals(length(split(parameters('customDomain'), '.')), 2))]",
+            "subdomainLabel": "[replace(parameters('customDomain'), format('.{0}', parameters('zoneName')), '')]",
+            "asuidRecordName": "[if(variables('isApex'), 'asuid', format('asuid.{0}', variables('subdomainLabel')))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/dnsZones",
+              "apiVersion": "2018-05-01",
+              "name": "[parameters('zoneName')]",
+              "location": "global"
+            },
+            {
+              "condition": "[and(variables('isApex'), not(empty(parameters('webAppInboundIpAddress'))))]",
+              "type": "Microsoft.Network/dnsZones/A",
+              "apiVersion": "2018-05-01",
+              "name": "[format('{0}/{1}', parameters('zoneName'), '@')]",
+              "properties": {
+                "TTL": 300,
+                "ARecords": [
+                  {
+                    "ipv4Address": "[parameters('webAppInboundIpAddress')]"
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/dnsZones', parameters('zoneName'))]"
+              ]
+            },
+            {
+              "condition": "[and(and(not(variables('isApex')), not(empty(parameters('customDomain')))), not(empty(parameters('webAppDefaultHostname'))))]",
+              "type": "Microsoft.Network/dnsZones/CNAME",
+              "apiVersion": "2018-05-01",
+              "name": "[format('{0}/{1}', parameters('zoneName'), variables('subdomainLabel'))]",
+              "properties": {
+                "TTL": 300,
+                "CNAMERecord": {
+                  "cname": "[parameters('webAppDefaultHostname')]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/dnsZones', parameters('zoneName'))]"
+              ]
+            },
+            {
+              "condition": "[and(not(empty(parameters('customDomain'))), not(empty(parameters('domainVerificationId'))))]",
+              "type": "Microsoft.Network/dnsZones/TXT",
+              "apiVersion": "2018-05-01",
+              "name": "[format('{0}/{1}', parameters('zoneName'), variables('asuidRecordName'))]",
+              "properties": {
+                "TTL": 3600,
+                "TXTRecords": [
+                  {
+                    "value": [
+                      "[parameters('domainVerificationId')]"
+                    ]
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/dnsZones', parameters('zoneName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "nameServers": {
+              "type": "array",
+              "metadata": {
+                "description": "Azure-assigned name servers for the zone. Delegate these at the registrar."
+              },
+              "value": "[reference(resourceId('Microsoft.Network/dnsZones', parameters('zoneName')), '2018-05-01').nameServers]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('dnsResourceGroupName'))]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'webAppDeployment')]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('customDomain')))]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "customDomainDeployment",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "webAppName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'webAppDeployment'), '2025-04-01').outputs.webAppName.value]"
+          },
+          "customDomain": {
+            "value": "[parameters('customDomain')]"
+          },
+          "appServicePlanId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'webAppDeployment'), '2025-04-01').outputs.appServicePlanId.value]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.44.1.10279",
+              "templateHash": "5879125814402653143"
+            }
+          },
+          "parameters": {
+            "webAppName": {
+              "type": "string"
+            },
+            "customDomain": {
+              "type": "string"
+            },
+            "appServicePlanId": {
+              "type": "string"
+            },
+            "location": {
+              "type": "string"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Web/sites/hostNameBindings",
+              "apiVersion": "2023-12-01",
+              "name": "[format('{0}/{1}', parameters('webAppName'), parameters('customDomain'))]",
+              "properties": {
+                "siteName": "[parameters('webAppName')]",
+                "hostNameType": "Verified"
+              }
+            },
+            {
+              "type": "Microsoft.Web/certificates",
+              "apiVersion": "2023-12-01",
+              "name": "[format('cert-{0}', parameters('customDomain'))]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "serverFarmId": "[parameters('appServicePlanId')]",
+                "canonicalName": "[parameters('customDomain')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/sites/hostNameBindings', parameters('webAppName'), parameters('customDomain'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "[format('sniEnable-{0}', uniqueString(parameters('customDomain')))]",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "webAppName": {
+                    "value": "[parameters('webAppName')]"
+                  },
+                  "customDomain": {
+                    "value": "[parameters('customDomain')]"
+                  },
+                  "certificateThumbprint": {
+                    "value": "[reference(resourceId('Microsoft.Web/certificates', format('cert-{0}', parameters('customDomain'))), '2023-12-01').thumbprint]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.44.1.10279",
+                      "templateHash": "6198082379997488054"
+                    }
+                  },
+                  "parameters": {
+                    "webAppName": {
+                      "type": "string"
+                    },
+                    "customDomain": {
+                      "type": "string"
+                    },
+                    "certificateThumbprint": {
+                      "type": "string"
+                    }
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Web/sites/hostNameBindings",
+                      "apiVersion": "2023-12-01",
+                      "name": "[format('{0}/{1}', parameters('webAppName'), parameters('customDomain'))]",
+                      "properties": {
+                        "sslState": "SniEnabled",
+                        "thumbprint": "[parameters('certificateThumbprint')]"
+                      }
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/certificates', format('cert-{0}', parameters('customDomain')))]"
+              ]
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('dnsResourceGroupName')), 'Microsoft.Resources/deployments', 'dnsDeployment')]",
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'webAppDeployment')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "resourceGroupName": {
+      "type": "string",
+      "value": "[parameters('resourceGroupName')]"
+    },
+    "webAppName": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'webAppDeployment'), '2025-04-01').outputs.webAppName.value]"
+    },
+    "webAppDefaultHostName": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'webAppDeployment'), '2025-04-01').outputs.webAppDefaultHostName.value]"
+    },
+    "webAppInboundIpAddress": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'webAppDeployment'), '2025-04-01').outputs.inboundIpAddress.value]"
+    },
+    "authManagedIdentityClientId": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'authIdentityDeployment'), '2025-04-01').outputs.clientId.value]"
+    },
+    "authManagedIdentityObjectId": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'authIdentityDeployment'), '2025-04-01').outputs.principalId.value]"
+    },
+    "platformFunctionAppName": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformFunctionDeployment'), '2025-04-01').outputs.functionAppName.value]"
+    },
+    "platformFunctionAppUrl": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformFunctionDeployment'), '2025-04-01').outputs.functionAppUrl.value]"
+    },
+    "platformFunctionPrincipalId": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformFunctionDeployment'), '2025-04-01').outputs.functionPrincipalId.value]"
+    },
+    "platformStorageAccountName": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.storageAccountName.value]"
+    },
+    "hovtpFunctionAppName": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'hovtpFunctionDeployment'), '2025-04-01').outputs.functionAppName.value]"
+    },
+    "hovtpFunctionAppUrl": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'hovtpFunctionDeployment'), '2025-04-01').outputs.functionAppUrl.value]"
+    },
+    "hovtpFunctionPrincipalId": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'hovtpFunctionDeployment'), '2025-04-01').outputs.functionPrincipalId.value]"
+    },
+    "toolPrincipalsGranted": {
+      "type": "int",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'sharedDataAccessDeployment'), '2025-04-01').outputs.grantedCount.value]"
+    },
+    "customDomain": {
+      "type": "string",
+      "value": "[parameters('customDomain')]"
+    },
+    "dnsZoneName": {
+      "type": "string",
+      "value": "[parameters('dnsZoneName')]"
+    },
+    "dnsResourceGroupName": {
+      "type": "string",
+      "value": "[parameters('dnsResourceGroupName')]"
+    },
+    "dnsNameServers": {
+      "type": "array",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('dnsResourceGroupName')), 'Microsoft.Resources/deployments', 'dnsDeployment'), '2025-04-01').outputs.nameServers.value]"
+    }
+  }
+}
