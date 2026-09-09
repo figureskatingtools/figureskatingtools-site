@@ -8,6 +8,7 @@ import {
     subscribeActiveCompetition,
     competitionLabel,
     formatDateFi,
+    formatDateTimeFi,
     listCompetitionFiles,
     uploadCompetitionFile,
     type CategoryInfo,
@@ -394,6 +395,43 @@ async function bindActiveCompetition(force = false): Promise<void> {
     }
 }
 
+/**
+ * The right-hand timestamp on a file row: when the backend last wrote that
+ * copy. Files the backend re-pulled from the competition file pool get a fresh
+ * stamp, so the column doubles as "this one just changed". Rendered as an
+ * empty span when the backend reports no time — a missing stamp must not
+ * shift the delete button out of its column.
+ */
+function fileMetaHtml(file: any): string {
+    const stamp = formatDateTimeFi(file?.lastModified);
+    return `<span class="file-meta">${escapeHtml(stamp)}</span>`;
+}
+
+/** How many refreshed filenames to spell out before falling back to a count */
+const REFRESH_NAMES_SHOWN = 3;
+
+/**
+ * Announce the files the backend just re-pulled from the competition file
+ * pool, in the same status line the upload and import flows use.
+ *
+ * Only ever written when there is something to report, so an error message
+ * already standing in that line survives a details reload that changed
+ * nothing; a real refresh does take precedence over it, because a file
+ * changing underneath the operator is the more important news.
+ */
+function reportPoolRefresh(refreshed: unknown): void {
+    if (!Array.isArray(refreshed) || !refreshed.length) return;
+    const statusEl = document.getElementById('upload-status');
+    if (!statusEl) return;
+
+    const names = refreshed.map(String);
+    const shown = names.slice(0, REFRESH_NAMES_SHOWN).map(escapeHtml).join(', ');
+    const rest = names.length - REFRESH_NAMES_SHOWN;
+    const list = rest > 0 ? `${shown} +${rest} more` : shown;
+    statusEl.innerHTML =
+        `<span style="color: var(--success-color);">Updated ${names.length} file(s) from competition files: ${list}</span>`;
+}
+
 /* ── retention ── */
 
 /** `dd.MM.yyyy`, or the `-` sentinel this UI uses for "no usable date". */
@@ -556,7 +594,8 @@ async function init() {
                         <div class="file-list">
                             ${competitionFiles.map((file: any) => `
                                 <div class="file-row">
-                                    <span title="${escapeHtml(file.suffix)}">${escapeHtml(file.filename)}</span>
+                                    <span class="file-name" title="${escapeHtml(file.suffix)}">${escapeHtml(file.filename)}</span>
+                                    ${fileMetaHtml(file)}
                                     <button class="file-delete-btn delete-file-btn" data-filename="${escapeHtml(file.filename)}" title="Delete File">×</button>
                                 </div>
                             `).join('')}
@@ -673,7 +712,8 @@ async function init() {
                 (files as any[]).forEach((file: any) => {
                     html += `
                         <div class="file-row">
-                            <span title="${escapeHtml(file.suffix)}">${escapeHtml(file.filename)}</span>
+                            <span class="file-name" title="${escapeHtml(file.suffix)}">${escapeHtml(file.filename)}</span>
+                            ${fileMetaHtml(file)}
                             <button class="file-delete-btn delete-file-btn" data-filename="${escapeHtml(file.filename)}" title="Delete File">×</button>
                         </div>
                     `;
@@ -810,6 +850,11 @@ async function init() {
             
             const data = await resp.json();
             currentCompetitionData = data;
+
+            // The backend re-copies its own files from the competition file
+            // pool whenever the pool's copy is newer, and names what it took.
+            // Say so — otherwise a file silently changes under the operator.
+            reportPoolRefresh(data.refreshedFromPool);
 
             // Retention line — only when the backend reports a deletion date
             renderRetention(id, data.deletionDate);
@@ -1174,6 +1219,7 @@ async function init() {
                             <input type="checkbox" class="pool-file-check" value="${escapeHtml(f.name)}" data-source="${escapeHtml(f.source)}">
                             <span class="pool-file-name">${escapeHtml(f.name)}</span>
                             <span class="pool-file-src">${escapeHtml(f.sourceTool || f.source)}</span>
+                            <span class="pool-file-date">${escapeHtml(formatDateTimeFi(f.uploadedUtc))}</span>
                         </label>`).join('')}
                 </div>
                 <div class="pool-import-actions">
