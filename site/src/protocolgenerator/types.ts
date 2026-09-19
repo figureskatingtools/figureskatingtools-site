@@ -28,6 +28,26 @@ export interface Podium {
   names: string[];
 }
 
+/** How much of a roster a team page prints. 'none' keeps the page but drops the
+ * skater list. */
+export type NameMode = 'full' | 'firstNames' | 'none';
+
+/** One free-typed row printed on a team page ("Free Skating theme: Spies").
+ * `segmentId` null = the row belongs to the team rather than to a segment. */
+export interface TeamTextField {
+  id: string;
+  segmentId: string | null;
+  label: string;
+  value: string;
+}
+
+/** Competition-wide team-page defaults; absent on data written before the
+ * setting existed, which means pages on and full names. */
+export interface TeamPageSettings {
+  enabled: boolean;
+  nameMode: NameMode;
+}
+
 export interface Team {
   id: string;
   code: string;
@@ -39,6 +59,10 @@ export interface Team {
    * when the team has no competition (kiss'n'cry) photo. */
   photoFallback?: string | null;
   members: string[];
+  /** Team-page overrides; null/absent = inherit the competition-wide setting. */
+  pageEnabled?: boolean | null;
+  nameMode?: NameMode | null;
+  textFields?: TeamTextField[];
 }
 
 export interface Segment {
@@ -111,6 +135,7 @@ export interface Structure {
   header: PageRef;
   footer: PageRef;
   footerEnabled: boolean;
+  teamPages?: TeamPageSettings;
   scheduleParsed: boolean;
   files: Record<string, FileMeta>;
   categories: Category[];

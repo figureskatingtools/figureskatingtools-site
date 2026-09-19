@@ -836,6 +836,41 @@ input[type="checkbox"] { accent-color: var(--ink); }
 .roster-skaters li { margin-bottom: 0.05rem; break-inside: avoid; }
 .team-roster-empty { color: var(--ink-faint); font-size: 0.75rem; font-style: italic; }
 
+/* ── Team-page settings: the competition-wide bar and the per-team panel ── */
+.team-page-defaults {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 1.25rem;
+  margin: 0 0 0.85rem;
+}
+.team-page-names,
+.team-settings label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+/* A team left out of the protocol: quieter than the rest, and never flagged for a
+   missing picture it is not going to print anyway. */
+.team-row--skipped { opacity: 0.6; box-shadow: inset 3px 0 0 var(--line-strong); }
+
+.team-row-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  flex: 1 1 100%;
+  padding: 0.45rem 0 0.2rem 1.1rem;
+  border-top: 1px solid var(--line);
+}
+.team-settings { display: flex; flex-wrap: wrap; gap: 1rem; }
+.team-text-fields { display: flex; flex-direction: column; gap: 0.5rem; }
+.team-text-group { display: flex; flex-direction: column; gap: 0.25rem; align-items: flex-start; }
+.team-text-row { display: flex; align-items: center; gap: 0.4rem; width: 100%; }
+.team-text-label { flex: 1 1 10rem; min-width: 6rem; }
+.team-text-value { flex: 2 1 16rem; min-width: 8rem; }
+
 /* Inline "?" reference inside a section-sub sentence. */
 .help-hint { font-family: var(--font-mono); font-weight: 700; color: var(--rink-deep); }
 
@@ -843,6 +878,8 @@ input[type="checkbox"] { accent-color: var(--ink); }
   .roster-skaters { columns: 2; }
   .team-row-slots { flex: 1 1 100%; }
   .team-row-slots .slot { flex: 1 1 0; width: auto; }
+  .team-page-defaults { gap: 0.6rem; }
+  .team-text-row { flex-wrap: wrap; }
 }
 
 /* ── Roster import report (quiet status panel under "Team rosters") ── */

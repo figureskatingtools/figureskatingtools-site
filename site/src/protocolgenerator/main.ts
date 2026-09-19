@@ -23,7 +23,8 @@ import {
   type TrayReason,
   type PoolFile,
 } from '@figureskatingtools/shared-ui';
-import type { CompetitionDetails, Structure, Category, Segment, SlotTarget, FileMeta } from './types';
+import type { CompetitionDetails, Structure, Category, Segment, SlotTarget, FileMeta,
+  NameMode, TeamPageSettings, TeamTextField } from './types';
 import { attachPreview } from './preview';
 import { escapeHtml, fetchUser, renderSignInView, setupUserMenu, type UserInfo } from '../shell.js';
 
@@ -451,25 +452,120 @@ const STATUS_TITLE: Record<PhotoStatus, string> = {
   red: 'No picture at all — the team page falls back to a placeholder',
 };
 
+/** Matches `structure.MAX_TEAM_TEXT_FIELDS` — the backend caps the stored list. */
+const MAX_TEAM_TEXT_FIELDS = 12;
+
+const NAME_MODE_LABEL: Record<NameMode, string> = {
+  full: 'Family name + given name',
+  firstNames: 'Given names only',
+  none: 'No names',
+};
+
+/** The competition-wide team-page settings. Mirrors `structure.team_pages_defaults`:
+ * data written before the setting existed means pages on and full names. */
+function teamPageDefaults(s: Structure): TeamPageSettings {
+  return {
+    enabled: s.teamPages?.enabled !== false,
+    nameMode: s.teamPages?.nameMode ?? 'full',
+  };
+}
+
+/** A team's resolved settings — its own overrides, else the competition default
+ * (mirrors `structure.team_page_enabled` / `team_name_mode`). */
+function teamPageEnabled(s: Structure, team: TeamRow): boolean {
+  return team.pageEnabled ?? teamPageDefaults(s).enabled;
+}
+
+function teamNameMode(s: Structure, team: TeamRow): NameMode {
+  return team.nameMode ?? teamPageDefaults(s).nameMode;
+}
+
+/** The buckets a team's free-text rows are edited in: the team itself, then the
+ * category's segments in the order the protocol prints them. */
+function textFieldGroups(cat: Category, team: TeamRow) {
+  const rows = team.textFields || [];
+  const segments = (cat.segments || []).slice().sort((a, b) => a.order - b.order);
+  const known = new Set(segments.map(seg => seg.id));
+  const bucket = (id: string | null) =>
+    rows.filter(r => (known.has(r.segmentId as string) ? r.segmentId : null) === id);
+  return [{ id: null as string | null, title: 'Whole team' }, ...segments.map(
+    seg => ({ id: seg.id as string | null, title: seg.name }))]
+    .map(g => ({ ...g, rows: bucket(g.id) }));
+}
+
+/** One editable free-text row ("Free Skating theme" / "Spies"). */
+function textFieldRowHtml(team: TeamRow, row: TeamTextField): string {
+  return `<div class="team-text-row" data-text-row="${row.id}">
+      <input class="form-input form-input--compact team-text-label" placeholder="Label (e.g. Theme)"
+             value="${escapeHtml(row.label)}" data-text-field="${team.id}" data-text-part="label">
+      <input class="form-input form-input--compact team-text-value" placeholder="Value (e.g. Spies)"
+             value="${escapeHtml(row.value)}" data-text-field="${team.id}" data-text-part="value">
+      <button class="btn btn-xs btn-ghost btn-ghost--danger" data-rm-text="${row.id}"
+              data-team="${team.id}" title="Remove this row">×</button>
+    </div>`;
+}
+
+/** The per-team panel behind the skater-count toggle: what the team's page shows,
+ * and the free-text rows printed on it. */
+function teamPagePanelHtml(s: Structure, cat: Category, team: TeamRow): string {
+  const d = teamPageDefaults(s);
+  const opt = (value: string, label: string, selected: boolean) =>
+    `<option value="${value}"${selected ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+  const rowCount = (team.textFields || []).length;
+  const groups = textFieldGroups(cat, team).map(g => `
+      <div class="team-text-group" data-text-group="${g.id ?? ''}">
+        <span class="micro-label">${escapeHtml(g.title)}</span>
+        ${g.rows.map(r => textFieldRowHtml(team, r)).join('')}
+        ${rowCount < MAX_TEAM_TEXT_FIELDS ? `<button class="btn btn-xs btn-ghost" data-add-text="${team.id}"
+           data-cat="${cat.id}" data-seg="${g.id ?? ''}">Add row</button>` : ''}
+      </div>`).join('');
+  return `<div class="team-row-detail">
+      <div class="team-settings">
+        <label>Team page
+          <select class="discipline-select" data-team-page="${team.id}" data-cat="${cat.id}">
+            ${opt('', `Default (${d.enabled ? 'created' : 'skipped'})`, team.pageEnabled == null)}
+            ${opt('true', 'Create the page', team.pageEnabled === true)}
+            ${opt('false', 'Skip this team', team.pageEnabled === false)}
+          </select>
+        </label>
+        <label>Skater names
+          <select class="discipline-select" data-team-names="${team.id}" data-cat="${cat.id}"
+                  ${teamPageEnabled(s, team) ? '' : 'disabled'}>
+            ${opt('', `Default (${NAME_MODE_LABEL[d.nameMode]})`, team.nameMode == null)}
+            ${(['full', 'firstNames', 'none'] as NameMode[])
+              .map(m => opt(m, NAME_MODE_LABEL[m], team.nameMode === m)).join('')}
+          </select>
+        </label>
+      </div>
+      <div class="team-text-fields">${groups}</div>
+    </div>`;
+}
+
 /** One compact team line: status dot, inline name/org edits, skater toggle,
  * Remove, and both photo slots (same SlotTarget objects the backend expects,
  * so drag/drop, chips and one-file-one-slot behave exactly as before). */
-function teamRowHtml(cat: Category, team: TeamRow): string {
+function teamRowHtml(cat: Category, team: TeamRow, s: Structure): string {
   const status = teamPhotoStatus(team);
   const count = team.members?.length || 0;
   const isOpen = openRosterTeams.has(team.id);
+  const skipped = !teamPageEnabled(s, team);
+  const nameMode = teamNameMode(s, team);
   const roster = count
     ? `<ul class="roster-skaters">${team.members.map(m => `<li>${escapeHtml(m)}</li>`).join('')}</ul>`
     : '<span class="team-roster-empty">No roster yet — import the DT_PARTIC XML pair.</span>';
-  return `<div class="team-row ${status === 'red' ? 'team-row--alert' : ''}">
+  return `<div class="team-row ${status === 'red' && !skipped ? 'team-row--alert' : ''} ${skipped ? 'team-row--skipped' : ''}"
+         data-team-row="${team.id}" data-cat="${cat.id}">
       <div class="team-row-main">
         <span class="status-dot is-${status}" title="${escapeHtml(STATUS_TITLE[status])}"></span>
         <input class="form-input form-input--compact team-row-name" placeholder="Team name" value="${escapeHtml(team.name)}"
                data-edit="set_team" data-cat="${cat.id}" data-team="${team.id}" data-field="name">
         <input class="form-input form-input--compact team-row-org" placeholder="Club" value="${escapeHtml(team.org)}"
                data-edit="set_team" data-cat="${cat.id}" data-team="${team.id}" data-field="org">
+        ${skipped ? '<span class="tag-synchro" title="This team gets no page in the protocol">no page</span>'
+          : nameMode !== 'full' ? `<span class="tag-synchro" title="${escapeHtml(NAME_MODE_LABEL[nameMode])}">${
+              nameMode === 'none' ? 'no names' : 'given names'}</span>` : ''}
         <button class="roster-skaters-toggle" data-toggle-roster-team="${team.id}"
-                title="Show or hide the skater names">${count} skater${count === 1 ? '' : 's'}
+                title="Show or hide the team page settings and the skater names">${count} skater${count === 1 ? '' : 's'}
           <span class="toggle-icon">${isOpen ? '▴' : '▾'}</span>
         </button>
         <button class="btn btn-xs btn-ghost btn-ghost--danger" data-rm-team="${team.id}" data-cat="${cat.id}">Remove</button>
@@ -478,13 +574,14 @@ function teamRowHtml(cat: Category, team: TeamRow): string {
         ${slotHtml('Competition photo', { kind: 'teamPhoto', categoryId: cat.id, teamId: team.id }, team.photo)}
         ${slotHtml('Fallback picture', { kind: 'teamPhotoFallback', categoryId: cat.id, teamId: team.id }, team.photoFallback ?? null)}
       </div>
-      ${isOpen ? `<div class="team-row-roster">${roster}</div>` : ''}
+      ${isOpen ? `${teamPagePanelHtml(s, cat, team)}
+      <div class="team-row-roster">${roster}</div>` : ''}
     </div>`;
 }
 
 /** One collapsible per-category roster group. Zero-team synchro categories are
  * included too, so "Add team" is reachable everywhere. */
-function rosterGroupHtml(cat: Category): string {
+function rosterGroupHtml(cat: Category, s: Structure): string {
   const isOpen = openRosterCats.has(cat.id);
   const teams = cat.teams || [];
   const tally: Record<PhotoStatus, number> = { green: 0, yellow: 0, red: 0 };
@@ -506,15 +603,16 @@ function rosterGroupHtml(cat: Category): string {
         </div>
       </div>
       <div class="roster-group-body" style="display:${isOpen ? 'block' : 'none'};">
-        ${teams.map(t => teamRowHtml(cat, t)).join('')
+        ${teams.map(t => teamRowHtml(cat, t, s)).join('')
           || '<p class="section-sub roster-group-empty">No teams here yet — import the rosters or add one manually.</p>'}
       </div>
     </div>`;
 }
 
-/** The whole "Team rosters" body: synchro categories only, in schedule order. */
-function rosterGroupsHtml(cats: Category[]): string {
-  const groups = cats
+/** The whole "Team rosters" body: the competition-wide team-page defaults, then
+ * the synchro categories in schedule order. */
+function rosterGroupsHtml(s: Structure): string {
+  const groups = (s.categories || [])
     .filter(c => c.discipline === 'synchro')
     .slice()
     .sort((a, b) => a.order - b.order);
@@ -522,7 +620,20 @@ function rosterGroupsHtml(cats: Category[]): string {
     return `<p class="section-sub">No synchronized skating categories — team pages, rosters and
       team photos only apply to synchro.</p>`;
   }
-  return `<div class="roster-groups">${groups.map(rosterGroupHtml).join('')}</div>`;
+  const d = teamPageDefaults(s);
+  return `<div class="team-page-defaults">
+      <label class="footer-toggle">
+        <input type="checkbox" id="team-pages-enabled" ${d.enabled ? 'checked' : ''}>
+        Create a presentation page for every team
+      </label>
+      <label class="team-page-names">Skater names
+        <select class="discipline-select" id="team-name-mode" ${d.enabled ? '' : 'disabled'}>
+          ${(['full', 'firstNames', 'none'] as NameMode[]).map(m =>
+            `<option value="${m}"${d.nameMode === m ? ' selected' : ''}>${NAME_MODE_LABEL[m]}</option>`).join('')}
+        </select>
+      </label>
+    </div>
+    <div class="roster-groups">${groups.map(c => rosterGroupHtml(c, s)).join('')}</div>`;
 }
 
 /** Persistent status panel for the last roster import (or automatic re-match).
@@ -793,6 +904,17 @@ function renderDetails() {
             <li><span class="status-dot is-red"></span> <strong>Red</strong> — no picture at all, so
               the team page shows a placeholder; the whole row is highlighted.</li>
           </ul>
+          <strong>What the team pages show</strong>
+          <ul>
+            <li>The two controls above set the whole competition; open a team to override either
+              for that team alone, or to add the free-text rows its page prints
+              ("Free Skating theme: Spies").</li>
+            <li>A team marked <strong>no page</strong> is left out of the protocol entirely — no
+              photo, no names, no text rows. It still counts towards the information page's
+              competition units.</li>
+            <li><strong>No names</strong> keeps the page but drops the skater list, for when a
+              roster cannot be published.</li>
+          </ul>
         </span></span></h3>
         <div class="section-head-actions">
           <button class="btn btn-xs btn-ghost" id="btn-import-rosters">Import teams (DT_PARTIC)…</button>
@@ -802,7 +924,7 @@ function renderDetails() {
       <p class="section-sub">Everything team-related lives here: names, rosters and both pictures.
         Assign the <strong>Total Results</strong> PDFs first, then import the DT_PARTIC XML pair —
         see <span class="help-hint">?</span> for the full flow and the colour codes.</p>
-      ${rosterGroupsHtml(s.categories || [])}
+      ${rosterGroupsHtml(s)}
       ${rosterReportHtml(s)}
     </div>` : ''}
 
@@ -897,6 +1019,62 @@ function wireDetail() {
       if (inp.dataset.team) payload.teamId = inp.dataset.team;
       payload[inp.dataset.field!] = inp.value;
       editStructure(payload, false);
+    }));
+
+  // Competition-wide team-page defaults (same optimistic pattern as the footer
+  // band toggle; the re-render refreshes every team's "Default (…)" label).
+  document.getElementById('team-pages-enabled')?.addEventListener('change', e => {
+    const enabled = (e.target as HTMLInputElement).checked;
+    if (details) details.structure.teamPages = { ...teamPageDefaults(details.structure), enabled };
+    editStructure({ op: 'set_team_pages', enabled }, false);
+    renderDetails();
+  });
+  document.getElementById('team-name-mode')?.addEventListener('change', e => {
+    const nameMode = (e.target as HTMLSelectElement).value as NameMode;
+    if (details) details.structure.teamPages = { ...teamPageDefaults(details.structure), nameMode };
+    editStructure({ op: 'set_team_pages', nameMode }, false);
+    renderDetails();
+  });
+
+  // Per-team overrides. '' is the tri-state's "inherit", which the backend stores
+  // as null — hence the explicit null rather than an omitted key.
+  body.querySelectorAll<HTMLSelectElement>('[data-team-page]').forEach(sel =>
+    sel.addEventListener('change', () => {
+      const teamId = sel.dataset.teamPage!;
+      const pageEnabled = sel.value === '' ? null : sel.value === 'true';
+      const team = findTeam(sel.dataset.cat!, teamId);
+      if (team) team.pageEnabled = pageEnabled;
+      editStructure({ op: 'set_team', categoryId: sel.dataset.cat, teamId, pageEnabled }, false);
+      renderDetails();
+    }));
+  body.querySelectorAll<HTMLSelectElement>('[data-team-names]').forEach(sel =>
+    sel.addEventListener('change', () => {
+      const teamId = sel.dataset.teamNames!;
+      const nameMode = sel.value === '' ? null : (sel.value as NameMode);
+      const team = findTeam(sel.dataset.cat!, teamId);
+      if (team) team.nameMode = nameMode;
+      editStructure({ op: 'set_team', categoryId: sel.dataset.cat, teamId, nameMode }, false);
+    }));
+
+  // Free-text rows. The generic [data-edit] handler above sends one scalar field
+  // and cannot express a list, so these send the whole array — the same wholesale
+  // replace `members` uses.
+  body.querySelectorAll<HTMLInputElement>('[data-text-field]').forEach(inp =>
+    inp.addEventListener('change', () => saveTextFields(inp.closest('.team-row')!)));
+  body.querySelectorAll<HTMLElement>('[data-add-text]').forEach(b =>
+    b.addEventListener('click', () => {
+      const team = findTeam(b.dataset.cat!, b.dataset.addText!);
+      if (!team) return;
+      const rows = team.textFields || (team.textFields = []);
+      if (rows.length >= MAX_TEAM_TEXT_FIELDS) return;
+      rows.push({ id: `new-${Date.now()}`, segmentId: b.dataset.seg || null, label: '', value: '' });
+      renderDetails();
+    }));
+  body.querySelectorAll<HTMLElement>('[data-rm-text]').forEach(b =>
+    b.addEventListener('click', () => {
+      const row = b.closest('.team-row') as HTMLElement | null;
+      b.closest('.team-text-row')?.remove();
+      if (row) saveTextFields(row);
     }));
 
   // Discipline change (re-render to toggle synchro team UI).
@@ -1497,6 +1675,39 @@ async function deleteFile(fileId: string) {
     await fetch(apiUrl(`/delete_file?competition=${encodeURIComponent(currentId)}&fileId=${encodeURIComponent(fileId)}`), { method: 'DELETE' });
     await loadDetails();
   } catch { alert('Could not delete file.'); }
+}
+
+/** A team in the loaded structure, or null once a re-render has moved on. */
+function findTeam(catId: string, teamId: string): TeamRow | null {
+  const cat = (details?.structure.categories || []).find(c => c.id === catId);
+  return (cat?.teams || []).find(t => t.id === teamId) || null;
+}
+
+/**
+ * Persist one team's free-text rows, read back out of the DOM.
+ *
+ * The rows are stored as a single list and replaced wholesale (like `members`),
+ * so the array is rebuilt from the groups in DOM order — which is the order the
+ * team page prints them in. A row added in the browser carries a temporary id;
+ * sending it empty lets the backend mint the real one, which is also why this
+ * reloads rather than mutating local state: the reply carries the minted ids, the
+ * trimmed values, and the removal of anything left blank on both sides.
+ */
+function saveTextFields(row: HTMLElement) {
+  const teamId = row.dataset.teamRow!;
+  const categoryId = row.dataset.cat!;
+  const textFields: TeamTextField[] = [];
+  row.querySelectorAll<HTMLElement>('.team-text-group').forEach(group => {
+    const segmentId = group.dataset.textGroup || null;
+    group.querySelectorAll<HTMLElement>('.team-text-row').forEach(el => {
+      const part = (name: string) =>
+        (el.querySelector(`[data-text-part="${name}"]`) as HTMLInputElement).value;
+      const id = el.dataset.textRow!;
+      textFields.push({ id: id.startsWith('new-') ? '' : id, segmentId,
+                       label: part('label'), value: part('value') });
+    });
+  });
+  editStructure({ op: 'set_team', categoryId, teamId, textFields }, true);
 }
 
 async function editStructure(payload: any, reload: boolean) {
