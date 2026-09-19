@@ -47,12 +47,25 @@ param toolFunctionPrincipalIds = [
 param hovtpEnabled = readEnvironmentVariable('HOVTP_ENABLED', 'false') == 'true'
 param hovtpEnvironment = 'Production'
 
-// Prod has no publishing layer yet: FS Manager would post straight at
-// func-fs-hovtp-<suffix>.azurewebsites.net, so the socket peer App Service
-// appends is the last and only trusted entry (0 hops) and there is no APIM to
-// inject X-Proxy-Secret (empty = the gate stays off; a set secret with nothing
-// sending the header would 403 every message).
-// Both switch — 3 and readEnvironmentVariable('PROXY_SHARED_SECRET_HOVTP', '')
-// — when api.figureskatingtools.com is published the way test already is.
-param hovtpTrustedProxyHops = 0
-param hovtpProxySharedSecret = ''
+// Prod is published as https://api.figureskatingtools.com — Front Door Premium
+// + WAF -> API Management -> the listener, live and verified (OPTIONS answers
+// 200), with FS Manager repointed at it. Measured X-Forwarded-For at the
+// function:
+//   <FS Manager IP>, <Front Door IP>:<port>, <Front Door IP>, <APIM outbound IP>:<port>
+// Front Door appends the client, APIM v2 appends two and App Service appends
+// the socket peer, so the sender is the 4th entry from the right: 3 hops. At 0
+// every message was attributed to APIM's outbound IP and accepting one source
+// would have trusted all of them.
+param hovtpTrustedProxyHops = 3
+
+// The value APIM injects as X-Proxy-Secret, so the raw *.azurewebsites.net
+// hostname stops being a way around the proxy chain. Owned by the publishing
+// layer:
+//   terraform -chdir=infra output -raw fs_hovtp_proxy_secret   (../azure-publishing)
+// copied into this environment's GitHub secret PROXY_SHARED_SECRET_HOVTP.
+// That secret is NOT set yet, so this resolves to '' and the listener's gate
+// keeps failing open exactly as it does today — wiring it up here enforces
+// nothing on its own. Adding the GitHub secret is the one step that turns
+// enforcement on, and the `proxyHeader` field in the listener's log record is
+// how to see beforehand who would be refused.
+param hovtpProxySharedSecret = readEnvironmentVariable('PROXY_SHARED_SECRET_HOVTP', '')

@@ -103,10 +103,12 @@ jobs:
           PROXY_SHARED_SECRET_PROTOCOLGENERATOR: ${{ secrets.PROXY_SHARED_SECRET_PROTOCOLGENERATOR }}
           # Not a router->tool secret like the three above: this is the value
           # API Management injects as X-Proxy-Secret when it forwards FS Manager
-          # traffic to the HOVTP listener (test.bicepparam reads it; prod leaves
-          # it empty, which keeps the listener's gate open). Owned by the
+          # traffic to the HOVTP listener. Both environments' bicepparams read
+          # it, and an unset secret arrives as '' — which leaves the listener's
+          # gate failing open rather than locking FS Manager out. Owned by the
           # publishing layer — ../azure-publishing, `terraform -chdir=infra
-          # output -raw fs_test_hovtp_proxy_secret`.
+          # output -raw fs_test_hovtp_proxy_secret` (test) /
+          # `... -raw fs_hovtp_proxy_secret` (prod).
           PROXY_SHARED_SECRET_HOVTP: ${{ secrets.PROXY_SHARED_SECRET_HOVTP }}
           TOOL_PRINCIPAL_ID_JUDGEPAPERS: ${{ vars.TOOL_PRINCIPAL_ID_JUDGEPAPERS }}
           TOOL_PRINCIPAL_ID_SCOREMODIFIER: ${{ vars.TOOL_PRINCIPAL_ID_SCOREMODIFIER }}
