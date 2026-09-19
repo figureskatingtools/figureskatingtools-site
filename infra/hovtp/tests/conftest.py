@@ -303,10 +303,15 @@ class FakeBlobServiceClient:
 
 @pytest.fixture(autouse=True)
 def clean_settings(monkeypatch):
-    """Every HOVTP_* setting back to its documented default for each test."""
+    """Every setting the app reads back to its documented default per test.
+
+    PROXY_SHARED_SECRET is in here as well: it is not an HOVTP_* name, but a
+    value inherited from the developer's shell would turn every request in this
+    suite into a 403.
+    """
     for name in ("HOVTP_ENABLED", "HOVTP_ENVIRONMENT", "HOVTP_STRICT_SERIAL",
                  "HOVTP_KEEP_ALIVE_SECONDS", "HOVTP_TRUSTED_PROXY_HOPS",
-                 "HOVTP_ALLOWED_DOCUMENT_TYPES"):
+                 "HOVTP_ALLOWED_DOCUMENT_TYPES", "PROXY_SHARED_SECRET"):
         monkeypatch.delenv(name, raising=False)
 
 

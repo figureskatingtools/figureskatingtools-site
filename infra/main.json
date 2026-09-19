@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "5255930192292714267"
+      "templateHash": "6538232666392944578"
     }
   },
   "parameters": {
@@ -124,6 +124,20 @@
       ],
       "metadata": {
         "description": "Environment the HOVTP listener reports to FS Manager."
+      }
+    },
+    "hovtpTrustedProxyHops": {
+      "type": "int",
+      "defaultValue": 0,
+      "metadata": {
+        "description": "Reverse proxies we own in front of the HOVTP listener. 3 when it is published through Front Door + WAF -> API Management (test), 0 when FS Manager posts straight at the Function App (prod, for now). See modules/hovtp-function.bicep."
+      }
+    },
+    "hovtpProxySharedSecret": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Shared secret API Management injects as X-Proxy-Secret on forwarded HOVTP requests. Empty = the listener accepts direct callers (gate off)."
       }
     }
   },
@@ -1070,6 +1084,12 @@
           },
           "hovtpEnvironment": {
             "value": "[parameters('hovtpEnvironment')]"
+          },
+          "hovtpTrustedProxyHops": {
+            "value": "[parameters('hovtpTrustedProxyHops')]"
+          },
+          "hovtpProxySharedSecret": {
+            "value": "[parameters('hovtpProxySharedSecret')]"
           }
         },
         "template": {
@@ -1079,7 +1099,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "3708748775375750719"
+              "templateHash": "5915982136487267663"
             }
           },
           "parameters": {
@@ -1155,7 +1175,14 @@
               "type": "int",
               "defaultValue": 0,
               "metadata": {
-                "description": "Number of trusted proxy hops in front of the app; the client IP is taken that many entries back from the end of X-Forwarded-For. 0 = App Service only."
+                "description": "Number of trusted proxy hops in front of the app; the client IP is taken that many entries back from the end of X-Forwarded-For. 0 = App Service only (direct *.azurewebsites.net). 3 = behind Front Door + WAF -> API Management, which add three entries in front of the socket peer."
+              }
+            },
+            "hovtpProxySharedSecret": {
+              "type": "securestring",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Value API Management injects as X-Proxy-Secret on every forwarded request. Empty = the gate is OFF and the app accepts direct callers (local dev, and any environment not published through Front Door/APIM yet). Set it and POST/OPTIONS without the header are 403 — this, not an IP allow-list, is what makes hop counting trustworthy, because APIM Basic v2 outbound IPs are not guaranteed static."
               }
             },
             "hovtpAllowedDocumentTypes": {
@@ -1237,6 +1264,10 @@
                     {
                       "name": "HOVTP_ALLOWED_DOCUMENT_TYPES",
                       "value": "[parameters('hovtpAllowedDocumentTypes')]"
+                    },
+                    {
+                      "name": "PROXY_SHARED_SECRET",
+                      "value": "[parameters('hovtpProxySharedSecret')]"
                     }
                   ]
                 },

@@ -11,11 +11,27 @@ are quarantined (never dropped) and the site prompts an operator to accept the
 source for 1/2/3/7 days. Accepting attaches the quarantined files to the
 competition's file pool.
 
+In test FSM no longer posts here directly: it posts to
+`https://test-api.figureskatingtools.com/api/v1/hovtp`, which is Azure Front
+Door Premium + WAF -> API Management -> this app (the publishing layer lives in
+the separate `azure-publishing` repo). Two settings follow from that:
+
+  * `HOVTP_TRUSTED_PROXY_HOPS=3` — the extra proxies each append to
+    X-Forwarded-For, so FSM's own address is the 4th entry from the right (see
+    `client_ip`). Left at 0, every message is attributed to APIM's outbound IP
+    and the per-(competition, IP) trust model collapses onto that one address.
+  * `PROXY_SHARED_SECRET` — hop counting is only as trustworthy as the chain it
+    counts, and the raw `func-fs-hovtp-*.azurewebsites.net` hostname stays
+    internet-reachable, so a direct caller could forge X-Forwarded-For. APIM
+    injects `X-Proxy-Secret` on every forwarded request and POST/OPTIONS answer
+    403 without it. Unset — local dev, the pre-rollout window — the gate fails
+    open rather than locking FSM out.
+
 HTTP contract (the Functions host prepends the default `api` route prefix):
 
-    POST    /api/v1/hovtp              -> 200 | 400 | 413 | 450 | 451 | 500 | 503
+    POST    /api/v1/hovtp              -> 200 | 400 | 403 | 413 | 450 | 451 | 500 | 503
     OPTIONS /api/v1/hovtp              -> 200, status/keep-alive, NO side effects
-    GET     /api/health                -> 200 {"status": "ok"}
+    GET     /api/health                -> 200 {"status": "ok"}, never gated
 
 The competition is recognised from the message itself (`OdfBody/@CompetitionCode`,
 with an `X-*-Competition*` header as a fallback) — the URL carries no code, so
@@ -49,6 +65,7 @@ See README.md for the operator-facing contract and the FSM settings to enter.
 
 import base64
 import binascii
+import hmac
 import io
 import ipaddress
 import json
@@ -137,6 +154,7 @@ _METADATA_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # the blob metadata.
 _INFRA_HEADER_PREFIXES = (
     "x-hovtp-",
+    "x-proxy-secret",   # our own publishing layer's credential — never store it
     "x-forwarded-",
     "x-client-",
     "x-arr-",
@@ -183,6 +201,33 @@ def _trusted_hops() -> int:
         return max(0, int(_setting("HOVTP_TRUSTED_PROXY_HOPS", "0")))
     except ValueError:
         return 0
+
+
+def _proxy_secret_ok(req: func.HttpRequest) -> bool:
+    """
+    Verify the request came through our own publishing layer (Front Door + WAF
+    -> API Management), which injects `X-Proxy-Secret` on every forwarded call.
+
+    Counting proxy hops is not on its own a control: the app stays reachable on
+    its raw `func-fs-hovtp-*.azurewebsites.net` hostname, so anyone who finds it
+    could forge X-Forwarded-For and pose as an accepted FSM address. The header
+    is what makes the hop count mean anything. APIM's outbound IPs are not
+    static on Basic v2, so this is deliberately a header check and not an
+    `ipSecurityRestrictions` entry.
+
+    Enforced only when PROXY_SHARED_SECRET is set, so local dev and the window
+    between deploying this code and setting the secret fail OPEN rather than
+    locking the sender out — same semantics as `_proxy_secret_ok` in
+    infra/functions/function_app.py. The comparison, unlike that one, is
+    constant time: this endpoint is anonymous and internet-facing, so it will
+    answer a stranger's guesses at whatever rate they are asked.
+    """
+    expected = _setting("PROXY_SHARED_SECRET")
+    if not expected:
+        return True
+    # req.headers is already case-insensitive (see parse_hovtp_headers).
+    provided = (req.headers.get("X-Proxy-Secret") or "").strip()
+    return hmac.compare_digest(provided, expected)
 
 
 def _allowed_document_types() -> set[str]:
@@ -342,6 +387,7 @@ def _ascii_metadata(value) -> str:
 
 _OUTCOME_BY_STATUS = {
     400: "bad_request",
+    403: "forbidden",
     413: "bad_request",
     450: "out_of_sync",
     451: "rejected",
@@ -491,8 +537,20 @@ def client_ip(headers, hops: int = 0) -> str:
     """
     The source identity. App Service *appends* the socket peer to
     X-Forwarded-For, so the trustworthy entry is the LAST one; each additional
-    reverse proxy we own (APIM, Front Door — see the plan) shifts that one step
-    left, which is what HOVTP_TRUSTED_PROXY_HOPS counts.
+    reverse proxy we own (APIM, Front Door) shifts that one step left, which is
+    what HOVTP_TRUSTED_PROXY_HOPS counts.
+
+    Behind the publishing layer (Front Door Premium + WAF -> API Management ->
+    this app) the header reaches the function with four entries:
+
+        <FS Manager IP>, <Front Door IP>:<port>, <Front Door IP>, <APIM outbound IP>:<port>
+
+    Front Door appends the client address, APIM v2 appends two entries and App
+    Service appends the socket peer — so FSM's own address is the 4th from the
+    right and HOVTP_TRUSTED_PROXY_HOPS must be 3 (it was 0 while FSM posted
+    straight to the *.azurewebsites.net hostname). `:port` suffixes are stripped
+    by `_canonical_ip`, and a chain shorter than the configured hop count falls
+    back to the first entry instead of raising.
     """
     forwarded = headers.get("X-Forwarded-For") or ""
     entries = [part.strip() for part in forwarded.split(",") if part.strip()]
@@ -1180,6 +1238,11 @@ def _handle_hovtp(req: func.HttpRequest) -> func.HttpResponse:
     }
 
     try:
+        # Before anything else, and for POST and OPTIONS alike: a request that
+        # did not come through our publishing layer may not be trusted about
+        # who sent it, and OPTIONS leaks the session cursor.
+        if not _proxy_secret_ok(req):
+            raise HovtpError(403, "forbidden")
         if req.method == "OPTIONS":
             response = _hovtp_options(req, record)
         else:

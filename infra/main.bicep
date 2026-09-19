@@ -70,6 +70,13 @@ param hovtpEnabled bool = true
 ])
 param hovtpEnvironment string = 'Test'
 
+@description('Reverse proxies we own in front of the HOVTP listener. 3 when it is published through Front Door + WAF -> API Management (test), 0 when FS Manager posts straight at the Function App (prod, for now). See modules/hovtp-function.bicep.')
+param hovtpTrustedProxyHops int = 0
+
+@description('Shared secret API Management injects as X-Proxy-Secret on forwarded HOVTP requests. Empty = the listener accepts direct callers (gate off).')
+@secure()
+param hovtpProxySharedSecret string = ''
+
 // Per-environment site resource group.
 resource rg 'Microsoft.Resources/resourceGroups@2021-04-01' = {
   name: resourceGroupName
@@ -188,6 +195,8 @@ module hovtpFunction 'modules/hovtp-function.bicep' = {
     dataContainerName: platformStorage.outputs.dataContainerName
     hovtpEnabled: hovtpEnabled
     hovtpEnvironment: hovtpEnvironment
+    hovtpTrustedProxyHops: hovtpTrustedProxyHops
+    hovtpProxySharedSecret: hovtpProxySharedSecret
   }
 }
 

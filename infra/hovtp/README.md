@@ -22,9 +22,16 @@ connection per licence, five with TV/SCB Control).
 | Field        | Value                                       |
 | ------------ | ------------------------------------------- |
 | Name         | anything, e.g. `figureskatingtools`         |
-| IP-Address   | `func-fs-hovtp-<suffix>.azurewebsites.net`  |
+| IP-Address   | `test-api.figureskatingtools.com`           |
 | Port         | `443`                                       |
 | Endpoint     | `/api/v1/hovtp`                             |
+
+That hostname is **Azure Front Door Premium + WAF -> API Management -> this
+Function App** (the publishing layer lives in its own repo, `azure-publishing`;
+prod's `api.figureskatingtools.com` is not published yet). The raw
+`func-fs-hovtp-<suffix>.azurewebsites.net` hostname still resolves, but once
+`PROXY_SHARED_SECRET` is set it answers `403` to anything but a request APIM
+forwarded — see **Publishing layer** below. Point FSM at the public hostname.
 
 The endpoint carries no competition code: the listener takes it from the
 message itself (`OdfBody/@CompetitionCode`), so one connection setting serves
@@ -39,6 +46,39 @@ POST    /api/v1/hovtp              receive a message
 OPTIONS /api/v1/hovtp              status / keep-alive probe — no side effects
 GET     /api/health                {"status":"ok","service":"fs-hovtp"}
 ```
+
+### Publishing layer
+
+Two things change once the listener is behind Front Door and APIM.
+
+**The client IP moves.** `X-Forwarded-For` arrives as four entries — Front Door
+appends the client address, APIM v2 appends two and App Service appends the
+socket peer:
+
+```
+<FS Manager IP>, <Front Door IP>:<port>, <Front Door IP>, <APIM outbound IP>:<port>
+```
+
+FSM's own address is therefore the **4th from the right**:
+`HOVTP_TRUSTED_PROXY_HOPS=3` (it is `0` for a direct App Service deployment,
+which is still what prod runs). Left at `0`, every message is attributed to
+APIM's outbound address and the per-(competition, IP) trust model collapses
+onto that one IP — one acceptance would trust every sender.
+
+**Hop counting alone is spoofable**, because the `*.azurewebsites.net` hostname
+stays internet-reachable and `X-Forwarded-For` is just a request header. APIM
+therefore injects `X-Proxy-Secret` on every forwarded request and the listener
+compares it (constant time) against `PROXY_SHARED_SECRET`; `POST` and `OPTIONS`
+answer `403 forbidden` on a mismatch, before the body is read or any storage is
+touched. `GET /api/health` is never gated. When `PROXY_SHARED_SECRET` is unset
+the gate is **off** — local `func start`, the pre-rollout window and prod all
+keep working, so setting the secret is what turns enforcement on.
+
+APIM Basic v2 outbound IPs are not guaranteed static, so this is deliberately a
+header check and **not** an `ipSecurityRestrictions` allow-list; the app keeps
+`ipSecurityRestrictionsDefaultAction: Allow` (see `modules/hovtp-function.bicep`).
+The secret header is listed in `_INFRA_HEADER_PREFIXES`, so it is never copied
+into blob metadata with the other `X-*` data-layer headers.
 
 ### Request headers
 
@@ -77,6 +117,7 @@ X-HOVTP-Error-Reason:        human text, on failures only
 | ----- | --------------------------------------------------------------------------- |
 | `200` | stored, quarantined, or deliberately dropped (document type off the allowlist) |
 | `400` | body empty / not XML / root is not `OdfBody`; malformed session or serial     |
+| `403` | `X-Proxy-Secret` missing or wrong while `PROXY_SHARED_SECRET` is set          |
 | `413` | over 50 MiB (checked from `Content-Length` first, then from the bytes)        |
 | `450` | out of synchro: duplicate serial, or a gap while `HOVTP_STRICT_SERIAL=true`   |
 | `451` | data-layer error: unknown/deleted competition, rejected source, quarantine full, unusable PDF payload or filename |
@@ -136,8 +177,9 @@ survives it as nothing usable is `451`.
 ## Trust model
 
 Source identity is the client IP (`X-Forwarded-For`, last entry minus
-`HOVTP_TRUSTED_PROXY_HOPS` — App Service *appends* the socket peer — then
-`X-Client-IP`, then `X-Azure-ClientIP`). FSM sends no credentials, so:
+`HOVTP_TRUSTED_PROXY_HOPS` — App Service *appends* the socket peer, and Front
+Door + APIM add three more entries in front of it: see **Publishing layer** —
+then `X-Client-IP`, then `X-Azure-ClientIP`). FSM sends no credentials, so:
 
 | Source state                        | What happens                                             |
 | ----------------------------------- | -------------------------------------------------------- |
@@ -230,7 +272,8 @@ Read on every call, so an app-setting change takes effect without a restart.
 | `HOVTP_ENVIRONMENT`            | `Test`                                                 | echoed in `X-HOVTP-Environment` |
 | `HOVTP_STRICT_SERIAL`          | `false`                                                | `true` ⇒ a serial gap is `450` instead of a warning |
 | `HOVTP_KEEP_ALIVE_SECONDS`     | `60`                                                   | `0` omits `X-HOVTP-Keep-Alive-Interval` |
-| `HOVTP_TRUSTED_PROXY_HOPS`     | `0`                                                    | reverse proxies we own in front of App Service |
+| `HOVTP_TRUSTED_PROXY_HOPS`     | `0`                                                    | reverse proxies we own in front of App Service; **3** behind Front Door + APIM (test), `0` direct (prod) |
+| `PROXY_SHARED_SECRET`          | *(unset)*                                              | the value APIM sends as `X-Proxy-Secret`. Unset ⇒ the gate is off (fails open); set ⇒ `POST`/`OPTIONS` without it are `403` |
 | `HOVTP_ALLOWED_DOCUMENT_TYPES` | `DT_PDF,DT_PARTIC,DT_PARTIC_TEAMS,DT_SCHEDULE,DT_SCHEDULE_UPDATE` | comma list |
 | `COMPETITION_DATA_CONTAINER`   | `competition-data`                                     | read at import, like the platform app |
 | `COMPETITION_DATA_ACCOUNT`     | `AzureWebJobsStorage__accountName`                     | the **platform** account holding `competition-data` + `competitions`; deployed it is *not* this app's host account |
@@ -274,10 +317,13 @@ Insights right after the first real FSM session:
 2. **`450` and `451` pass through unchanged.** They are non-standard codes; if
    the host or any proxy in front of it rewrites them (to `500`, say), FSM's
    out-of-synchro recovery never triggers.
-3. **The `X-Forwarded-For` format is what we assume** — the FSM VM's public IP
-   as the *last* entry. If a proxy is added later (APIM, Front Door), raise
-   `HOVTP_TRUSTED_PROXY_HOPS` to match, or every message will be attributed to
-   the proxy instead of to FSM.
+3. ~~**The `X-Forwarded-For` format is what we assume**~~ — **answered, and the
+   answer changed.** Direct to App Service the FSM VM's public IP is the last
+   entry (`HOVTP_TRUSTED_PROXY_HOPS=0`). Behind the test publishing layer the
+   chain is four entries long and FSM is the *first* of them, which is why test
+   runs `HOVTP_TRUSTED_PROXY_HOPS=3`; App Insights traces showed every message
+   attributed to APIM's outbound address (`135.116.112.179`) until it was
+   raised. Re-check the logged `ip` after any change to Front Door or APIM.
 
 The logged `ip` field answers 3 directly; the workflow's post-deploy smoke step
 (`OPTIONS` expecting `200` and `x-hovtp-last-serial-number: 0`) answers 1.

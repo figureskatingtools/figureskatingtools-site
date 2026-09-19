@@ -129,6 +129,34 @@ def test_trusted_proxy_hops_step_left():
     assert fa.client_ip(headers, 2) == "1.2.3.4"
 
 
+def test_the_publishing_layer_chain_resolves_to_fs_manager():
+    """The measured shape behind Front Door + WAF -> API Management.
+
+    Front Door appends the client address, APIM v2 appends two entries and App
+    Service appends the socket peer, so FS Manager's own address is the 4th
+    from the right — HOVTP_TRUSTED_PROXY_HOPS=3. At the old value of 0 every
+    message is attributed to APIM's outbound IP instead, and the whole
+    per-(competition, IP) trust model collapses onto that single address.
+    """
+    headers = _headers(client_ip=(
+        "198.51.100.4, 147.243.0.7:41354, 147.243.0.7, 135.116.112.179:39218"))
+
+    assert fa.client_ip(headers, 3) == "198.51.100.4"
+    assert fa.client_ip(headers, 0) == "135.116.112.179"
+
+
+def test_hops_are_tolerated_on_a_shorter_chain():
+    """A direct call, a probe or a request that skipped a proxy still answers.
+
+    The setting is fixed per environment but the chain is not, so hops=3 has to
+    survive a header with fewer entries rather than raising — the request is
+    then attributed to the first (least trusted) entry, which the shared-secret
+    gate is what actually guards against.
+    """
+    assert fa.client_ip(_headers(client_ip="203.0.113.10"), 3) == "203.0.113.10"
+    assert fa.client_ip(_headers(client_ip="1.2.3.4, 203.0.113.10"), 3) == "1.2.3.4"
+
+
 def test_too_many_hops_falls_back_to_the_first_entry():
     headers = _headers(client_ip="1.2.3.4, 203.0.113.10")
     assert fa.client_ip(headers, 9) == "1.2.3.4"

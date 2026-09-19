@@ -47,8 +47,12 @@ param hovtpStrictSerial bool = false
 @description('Value advertised in X-HOVTP-Keep-Alive-Interval (seconds).')
 param hovtpKeepAliveSeconds int = 60
 
-@description('Number of trusted proxy hops in front of the app; the client IP is taken that many entries back from the end of X-Forwarded-For. 0 = App Service only.')
+@description('Number of trusted proxy hops in front of the app; the client IP is taken that many entries back from the end of X-Forwarded-For. 0 = App Service only (direct *.azurewebsites.net). 3 = behind Front Door + WAF -> API Management, which add three entries in front of the socket peer.')
 param hovtpTrustedProxyHops int = 0
+
+@description('Value API Management injects as X-Proxy-Secret on every forwarded request. Empty = the gate is OFF and the app accepts direct callers (local dev, and any environment not published through Front Door/APIM yet). Set it and POST/OPTIONS without the header are 403 — this, not an IP allow-list, is what makes hop counting trustworthy, because APIM Basic v2 outbound IPs are not guaranteed static.')
+@secure()
+param hovtpProxySharedSecret string = ''
 
 @description('Comma-separated ODF DocumentTypes that are stored. Everything else is logged and dropped with a 200.')
 param hovtpAllowedDocumentTypes string = 'DT_PDF,DT_PARTIC,DT_PARTIC_TEAMS,DT_SCHEDULE,DT_SCHEDULE_UPDATE'
@@ -83,8 +87,11 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
       // Explicitly no inbound IP restrictions. FS Manager's public IP changes
       // (that is the whole reason for the per-competition source acceptance in
       // code), and the CI deploy's sync-triggers call must reach the app too —
-      // a Deny lock 403s the GitHub runner and hangs the pipeline. The trust
-      // boundary is the per-(competition, IP) acceptance, not the network.
+      // a Deny lock 403s the GitHub runner and hangs the pipeline. Nor is APIM
+      // pinned here: Basic v2 outbound IPs are not guaranteed static, so the
+      // publishing layer is authenticated with hovtpProxySharedSecret instead.
+      // The trust boundary is the per-(competition, IP) acceptance plus that
+      // header, not the network.
       ipSecurityRestrictions: []
       ipSecurityRestrictionsDefaultAction: 'Allow'
       appSettings: [
@@ -131,6 +138,13 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'HOVTP_ALLOWED_DOCUMENT_TYPES'
           value: hovtpAllowedDocumentTypes
+        }
+        {
+          // See _proxy_secret_ok() in infra/hovtp/function_app.py: empty fails
+          // open on purpose, so deploying this before the secret exists cannot
+          // lock FS Manager out.
+          name: 'PROXY_SHARED_SECRET'
+          value: hovtpProxySharedSecret
         }
       ]
     }

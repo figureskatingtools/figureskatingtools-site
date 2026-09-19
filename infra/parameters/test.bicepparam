@@ -45,3 +45,19 @@ param toolFunctionPrincipalIds = [
 // — anything but the literal 'false' keeps the listener on.
 param hovtpEnabled = readEnvironmentVariable('HOVTP_ENABLED', 'true') != 'false'
 param hovtpEnvironment = 'Test'
+
+// Test is published as https://test-api.figureskatingtools.com — Front Door
+// Premium + WAF -> API Management (Basic v2) -> the listener. Measured
+// X-Forwarded-For at the function:
+//   <FS Manager>, <Front Door>:<port>, <Front Door>, <APIM outbound>:<port>
+// so FS Manager is the 4th entry from the right. At 0 every message is
+// attributed to APIM's outbound IP and one accepted source would trust all.
+param hovtpTrustedProxyHops = 3
+
+// The value APIM injects as X-Proxy-Secret, so the raw *.azurewebsites.net
+// hostname stops being a way around the proxy chain. It is owned by the
+// publishing layer:
+//   terraform -chdir=infra output -raw fs_test_hovtp_proxy_secret   (../azure-publishing)
+// copied into this environment's GitHub secret PROXY_SHARED_SECRET_HOVTP.
+// Empty (unset) leaves the gate off rather than locking FS Manager out.
+param hovtpProxySharedSecret = readEnvironmentVariable('PROXY_SHARED_SECRET_HOVTP', '')

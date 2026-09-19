@@ -27,6 +27,7 @@ degrades quietly, so check the names carefully.
 | `PROXY_SHARED_SECRET_JUDGEPAPERS` | copy of that tool's existing `PROXY_SHARED_SECRET` | **new here**, same value as in the tool repo |
 | `PROXY_SHARED_SECRET_SCOREMODIFIER` | ditto | **new here** |
 | `PROXY_SHARED_SECRET_PROTOCOLGENERATOR` | ditto | **new here** |
+| `PROXY_SHARED_SECRET_HOVTP` | the secret API Management injects as `X-Proxy-Secret` on forwarded HOVTP calls | **new** — owned by the publishing layer, see below. Test only; leave unset in prod |
 | `AUTH_CLIENT_SECRET` | SWA-era client secret | **delete after cutover** — the FIC replaces it |
 
 Reusing each tool's *existing* proxy secret is deliberate: the old tool Web Apps
@@ -65,13 +66,42 @@ in `infra/parameters/<env>.bicepparam`.
 
 `func-fs-hovtp-<suffix>` is deployed by the same Bicep run as everything else and
 is the endpoint FS Manager pushes to. In FSM: **Settings / HOVTP Settings** —
-hostname `func-fs-hovtp-<suffix>.azurewebsites.net`, port `443`, endpoint
-`/api/v1/hovtp` — no competition code in the path: the listener reads
+hostname `test-api.figureskatingtools.com` (test — see **Publishing layer**
+below; without it, `func-fs-hovtp-<suffix>.azurewebsites.net`), port `443`,
+endpoint `/api/v1/hovtp` — no competition code in the path: the listener reads
 `OdfBody/@CompetitionCode` from the message body.
 
 ```bash
 az deployment sub show -n <deployment> --query 'properties.outputs.hovtpFunctionAppUrl.value' -o tsv
 ```
+
+#### Publishing layer (test)
+
+Test's listener is published as **`https://test-api.figureskatingtools.com/api/v1/hovtp`**
+— Azure Front Door Premium + WAF -> API Management (Basic v2) -> the Function
+App — and that is the hostname in FSM's **IP-Address** field. The Front
+Door/APIM/DNS side lives in a **different repo**, `../azure-publishing`
+(Terraform); nothing in this repo creates or configures it. Two knobs here
+follow from it, both in `infra/parameters/test.bicepparam`:
+
+| Param | Test | Prod | Why |
+| --- | --- | --- | --- |
+| `hovtpTrustedProxyHops` | `3` | `0` | The proxies each append to `X-Forwarded-For`: `<FS Manager>, <Front Door>:<port>, <Front Door>, <APIM outbound>:<port>`. FS Manager is the 4th entry from the right. At `0` every message is attributed to APIM's outbound IP and the per-(competition, IP) trust model collapses onto it. |
+| `hovtpProxySharedSecret` | `PROXY_SHARED_SECRET_HOVTP` | `''` | Hop counting is spoofable while `func-fs-hovtp-<suffix>.azurewebsites.net` stays internet-reachable, so APIM injects `X-Proxy-Secret` and the listener 403s `POST`/`OPTIONS` without it. **Not** an `ipSecurityRestrictions` entry: APIM Basic v2 outbound IPs are not guaranteed static. |
+
+Get the secret's value from the publishing-layer repo and paste it into this
+environment's GitHub secret `PROXY_SHARED_SECRET_HOVTP`:
+
+```bash
+cd ../azure-publishing && terraform -chdir=infra output -raw fs_test_hovtp_proxy_secret
+```
+
+Unset, the listener's gate **fails open** (it accepts direct callers) — so the
+order of operations is safe either way, and prod, which has no publishing layer
+yet, keeps working untouched. Once it is set, the raw `*.azurewebsites.net`
+hostname stops accepting FS Manager traffic; the deploy workflow's smoke check
+sends the header from the same secret. Both params switch for prod when
+`api.figureskatingtools.com` is published the same way.
 
 It is a **separate Function App** precisely so it can be taken out alone:
 `HOVTP_ENABLED=false` (the GitHub variable above — Bicep-owned, so it survives a
