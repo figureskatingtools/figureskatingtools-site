@@ -126,3 +126,6 @@ output functionAppName string = functionApp.name
 output functionAppId string = functionApp.id
 output functionAppUrl string = 'https://${functionApp.properties.defaultHostName}'
 output functionPrincipalId string = functionApp.identity.principalId
+// The HOVTP listener Function App shares this Application Insights component so
+// both halves of an ingest land in one trace stream.
+output appInsightsConnectionString string = appInsights.properties.ConnectionString

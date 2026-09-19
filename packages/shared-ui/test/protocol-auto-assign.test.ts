@@ -14,6 +14,7 @@ import {
   matchNameTokens,
   normalizeMatchName,
   planAutoAssignment,
+  rscTokens,
   slotOccupant,
   stripTrailingDashes,
   type CategoryLike,
@@ -1037,5 +1038,229 @@ describe('name matching never widens into a guess', () => {
         structure
       )
     ).toEqual({ action: 'tray', reason: 'ambiguous-category' });
+  });
+});
+
+/* ── RSC codes the categories table has never heard of ─────────────────── */
+
+/**
+ * YL110926HTL, the field report. FS Manager pushed its DT_SCHEDULE over HOVTP
+ * and `parse_schedule_xml` built the categories from the units' ISU RSC codes
+ * (`code = unit_code[:22]`), verified against the real parser:
+ *
+ *     <Unit Code="FSKWSINGLES-DEBYTW----FNL-000100--">
+ *       <ItemName Value="DEBYTANTTI Tytöt" />
+ *     → { name: 'DEBYTANTTI Tytöt', code: 'FSKWSINGLES-DEBYTW----',
+ *         segments: [{ name: 'Free Skating' }] }
+ *
+ * The Judge Papers `categories` table has no `FSKWSINGLES-DEBYTW` row, so
+ * `matchCategory` fell back to the generic `FSKWSINGLES` one: every DEBYTW file
+ * was recognized as plain "Naiset" with the segment portion `DEBYTW----FNL-000100`,
+ * which matched no category code and no segment. Every sheet stayed in the tray.
+ */
+describe('categories the Judge Papers table does not know', () => {
+  function fsmStructure(): StructureLike {
+    return {
+      files: {},
+      categories: [
+        category('adv', 'SM-NOVIISI Tytöt', 'FSKWSINGLES-ADVNOV----', [
+          segment('adv-sp', 'Lyhytohjelma', 0),
+          segment('adv-fs', 'Vapaaohjelma', 1),
+        ]),
+        category('deb', 'DEBYTANTTI Tytöt', 'FSKWSINGLES-DEBYTW----', [
+          segment('deb-fs', 'Free Skating', 0),
+        ]),
+      ],
+    };
+  }
+
+  it('splits an RSC into its dash-delimited tokens', () => {
+    expect(rscTokens('FSKWSINGLES-DEBYTW----FNL-000100--')).toEqual([
+      'FSKWSINGLES', 'DEBYTW', 'FNL', '000100',
+    ]);
+    expect(rscTokens('FSKWSINGLES-DEBYTW----')).toEqual(['FSKWSINGLES', 'DEBYTW']);
+    expect(rscTokens('fskwsingles-debytw----')).toEqual(['FSKWSINGLES', 'DEBYTW']);
+    expect(rscTokens('-------------------------')).toEqual([]);
+    expect(rscTokens(undefined)).toEqual([]);
+  });
+
+  it('places the segment results sheet in the DEBYTANTTI free-skating slot', () => {
+    expect(
+      planAutoAssignment(
+        'FSKWSINGLES-DEBYTW----FNL-000100--_SegmentResults.pdf',
+        CATEGORIES,
+        fsmStructure()
+      )
+    ).toEqual({
+      action: 'assign',
+      target: {
+        kind: 'segment',
+        categoryId: 'deb',
+        segmentId: 'deb-fs',
+        role: 'results',
+        categoryCode: 'FSKWSINGLES',
+        matchedBy: 'code',
+      },
+    });
+  });
+
+  it('places the panel and judges-details sheets in the same segment', () => {
+    expect(
+      planAutoAssignment(
+        'FSKWSINGLES-DEBYTW----FNL-000100--_ISUPanelofJudgesandTechnicalPanel.pdf',
+        CATEGORIES,
+        fsmStructure()
+      )
+    ).toMatchObject({
+      action: 'assign',
+      target: { categoryId: 'deb', segmentId: 'deb-fs', role: 'panel' },
+    });
+    expect(
+      planAutoAssignment(
+        'FSKWSINGLES-DEBYTW----FNL-000100--_JudgesDetailsperSkater.pdf',
+        CATEGORIES,
+        fsmStructure()
+      )
+    ).toMatchObject({
+      action: 'assign',
+      target: { categoryId: 'deb', segmentId: 'deb-fs', role: 'judgesDetails' },
+    });
+  });
+
+  it('reads the category-level sheets as category-level', () => {
+    expect(
+      planAutoAssignment(
+        'FSKWSINGLES-DEBYTW----------------_Results.pdf',
+        CATEGORIES,
+        fsmStructure()
+      )
+    ).toMatchObject({
+      action: 'assign',
+      target: { kind: 'totalResults', categoryId: 'deb' },
+    });
+    expect(
+      planAutoAssignment(
+        'FSKWSINGLES-DEBYTW----------------_ProtocolHeadPage.pdf',
+        CATEGORIES,
+        fsmStructure()
+      )
+    ).toMatchObject({
+      action: 'assign',
+      target: { kind: 'categoryTitle', categoryId: 'deb' },
+    });
+  });
+
+  it('still tells the two unknown categories apart by phase', () => {
+    const structure = fsmStructure();
+    expect(
+      planAutoAssignment(
+        'FSKWSINGLES-ADVNOV----QUAL000100--_SegmentResults.pdf',
+        CATEGORIES,
+        structure
+      )
+    ).toMatchObject({ action: 'assign', target: { categoryId: 'adv', segmentId: 'adv-sp' } });
+    expect(
+      planAutoAssignment(
+        'FSKWSINGLES-ADVNOV----FNL-000100--_SegmentResults.pdf',
+        CATEGORIES,
+        structure
+      )
+    ).toMatchObject({ action: 'assign', target: { categoryId: 'adv', segmentId: 'adv-fs' } });
+  });
+
+  it('takes the underscore-less protocol head page too', () => {
+    expect(
+      planAutoAssignment(
+        'FSKWSINGLES-DEBYTW----------------.pdf',
+        CATEGORIES,
+        fsmStructure()
+      )
+    ).toMatchObject({
+      action: 'assign',
+      target: { kind: 'categoryTitle', categoryId: 'deb' },
+    });
+  });
+
+  it('ignores dash padding and letter case on either side', () => {
+    const structure: StructureLike = {
+      files: {},
+      categories: [
+        category('deb', 'DEBYTANTTI Tytöt', 'fskwsingles-debytw--', [
+          segment('deb-fs', 'Free Skating', 0),
+        ]),
+      ],
+    };
+    expect(
+      planAutoAssignment(
+        'FSKWSINGLES-DEBYTW--------FNL-000100--_SegmentResults.pdf',
+        CATEGORIES,
+        structure
+      )
+    ).toMatchObject({ action: 'assign', target: { categoryId: 'deb', segmentId: 'deb-fs' } });
+  });
+
+  it('prefers the category whose code names the file, not the bare discipline', () => {
+    const structure = fsmStructure();
+    structure.categories!.push(
+      category('gen', 'Naiset', 'FSKWSINGLES-----------', [segment('gen-fs', 'Free Skating', 0)])
+    );
+    expect(
+      planAutoAssignment(
+        'FSKWSINGLES-DEBYTW----FNL-000100--_SegmentResults.pdf',
+        CATEGORIES,
+        structure
+      )
+    ).toMatchObject({ action: 'assign', target: { categoryId: 'deb' } });
+  });
+
+  it('reads the phase past a category token no code accounted for', () => {
+    // A schedule whose unit codes carry no category token at all merges every
+    // women's event into one category; the files still name their own phase.
+    const structure: StructureLike = {
+      files: {},
+      categories: [
+        category('gen', 'Naiset', 'FSKWSINGLES-----------', [
+          segment('gen-sp', 'Lyhytohjelma', 0),
+          segment('gen-fs', 'Vapaaohjelma', 1),
+        ]),
+      ],
+    };
+    expect(
+      planAutoAssignment(
+        'FSKWSINGLES-DEBYTW----FNL-000100--_SegmentResults.pdf',
+        CATEGORIES,
+        structure
+      )
+    ).toMatchObject({ action: 'assign', target: { categoryId: 'gen', segmentId: 'gen-fs' } });
+  });
+
+  it('reports two equally specific codes as ambiguous rather than guessing', () => {
+    const structure: StructureLike = {
+      files: {},
+      categories: [
+        category('a', 'DEBYTANTTI Tytöt', 'FSKWSINGLES-DEBYTW----', [segment('a1', 'Free Skating', 0)]),
+        category('b', 'DEBYTANTTI Tytöt (II)', 'FSKWSINGLES-DEBYTW--', [segment('b1', 'Free Skating', 0)]),
+      ],
+    };
+    expect(
+      planAutoAssignment(
+        'FSKWSINGLES-DEBYTW----FNL-000100--_SegmentResults.pdf',
+        CATEGORIES,
+        structure
+      )
+    ).toEqual({ action: 'tray', reason: 'ambiguous-category' });
+  });
+
+  it('leaves an unrelated PDF alone', () => {
+    expect(
+      planAutoAssignment('kilpailun_kutsu.pdf', CATEGORIES, fsmStructure())
+    ).toEqual({ action: 'tray', reason: 'unrecognized' });
+    expect(
+      planAutoAssignment(
+        'FSKXSYNCHRONMLAIKU----FNL0001--_SegmentResults.pdf',
+        CATEGORIES,
+        fsmStructure()
+      )
+    ).toEqual({ action: 'tray', reason: 'unrecognized' });
   });
 });

@@ -26,6 +26,7 @@
   --rink-tint: #e9f1f8;
   --gold: #b08d2f;
   --gold-bright: #d4af4f;
+  --gold-tint: #faf5e6;
   --success: #1f7a4d;
   --success-tint: #e8f4ee;
   --error: #c03434;
@@ -519,6 +520,121 @@ a {
 .comp-file-row:hover .comp-file-delete,
 .comp-file-delete:focus-visible {
   opacity: 1;
+}
+
+/* ── HOVTP data sources — who is allowed to push FSM data here ──
+   The prompts sit under the file pool because that is where the files land.
+   Gold is the "needs your decision" accent; an expired source drops to ink so
+   it reads as a lapsed permission rather than a fresh arrival. */
+.comp-sources:not(:empty) {
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--line);
+}
+
+.comp-source-notice {
+  border-left: 2px solid var(--gold);
+  background-color: var(--gold-tint);
+  border-radius: 0.25rem;
+  padding: 0.65rem 0.85rem;
+  font-size: 0.8125rem;
+}
+
+.comp-source-notice + .comp-source-notice {
+  margin-top: 0.6rem;
+}
+
+.comp-source-notice--expired {
+  border-left-color: var(--ink-faint);
+  background-color: var(--paper-tint);
+}
+
+.comp-source-notice-title {
+  margin: 0;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.comp-source-ip {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+.comp-source-meta {
+  margin: 0.2rem 0 0;
+  font-size: 0.68rem;
+  color: var(--ink-faint);
+}
+
+.comp-source-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.55rem;
+}
+
+.comp-source-actions-label {
+  font-size: 0.7rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+.comp-source-actions .btn:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+/* Declining is the quiet option — it only turns red once you reach for it */
+.comp-source-reject {
+  margin-left: auto;
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+
+.comp-source-reject:hover {
+  color: var(--error);
+}
+
+.comp-sources-details + .comp-sources-details,
+.comp-source-notice + .comp-sources-details {
+  margin-top: 0.9rem;
+}
+
+.comp-sources-details[open] > .comp-files-summary::before { transform: rotate(90deg); }
+
+.comp-source-list {
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+}
+
+.comp-source-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin: 0 -0.6rem;
+  padding: 0.28rem 0.35rem 0.28rem 0.6rem;
+  border-radius: 0.4rem;
+  transition: background-color 0.15s;
+}
+
+.comp-source-row:hover {
+  background-color: var(--rink-tint);
+}
+
+/* Inside a row the meta line is inline, not a stacked paragraph */
+.comp-source-row .comp-source-meta {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+
+.comp-source-row .comp-source-actions {
+  margin-top: 0;
 }
 
 .comp-recent-list {

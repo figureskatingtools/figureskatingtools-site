@@ -41,3 +41,18 @@ param toolFunctionPrincipalIds = [
   readEnvironmentVariable('TOOL_PRINCIPAL_ID_SCOREMODIFIER', '')
   readEnvironmentVariable('TOOL_PRINCIPAL_ID_PROTOCOLGENERATOR', '')
 ]
+
+// HOVTP listener (FS Manager push endpoint). Off in prod until it has been proven
+// in test — set the GitHub environment variable HOVTP_ENABLED=true to turn it on.
+param hovtpEnabled = readEnvironmentVariable('HOVTP_ENABLED', 'false') == 'true'
+param hovtpEnvironment = 'Production'
+
+// Prod has no publishing layer yet: FS Manager would post straight at
+// func-fs-hovtp-<suffix>.azurewebsites.net, so the socket peer App Service
+// appends is the last and only trusted entry (0 hops) and there is no APIM to
+// inject X-Proxy-Secret (empty = the gate stays off; a set secret with nothing
+// sending the header would 403 every message).
+// Both switch — 3 and readEnvironmentVariable('PROXY_SHARED_SECRET_HOVTP', '')
+// — when api.figureskatingtools.com is published the way test already is.
+param hovtpTrustedProxyHops = 0
+param hovtpProxySharedSecret = ''

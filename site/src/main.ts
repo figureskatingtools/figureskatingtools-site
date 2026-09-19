@@ -15,9 +15,17 @@ import {
   subscribeActiveCompetition,
   competitionLabel,
   formatDateFi,
+  formatFileSize,
   listCompetitionFiles,
   deleteCompetitionFile,
   competitionFileUrl,
+  ACCEPT_DAYS,
+  listHovtpSources,
+  acceptHovtpSource,
+  rejectHovtpSource,
+  revokeHovtpSource,
+  type AcceptDays,
+  type HovtpSource,
   type PlatformCompetition,
   type PoolFile,
 } from '@figureskatingtools/shared-ui'
@@ -82,7 +90,7 @@ function renderAuthenticatedView(userInfo: UserInfo) {
     </main>
 
     <footer class="site-footer">
-      <p>&copy; ${new Date().getFullYear()} Figure Skating Tools</p>
+      <p>Supporting the figure skating community — created with a pinch of AI ❤️</p>
     </footer>
   `;
 
@@ -100,7 +108,10 @@ function renderAuthenticatedView(userInfo: UserInfo) {
     void initCompetitionSelector(competitionSlot);
   }
   void loadCompetitionPanel();
-  subscribeActiveCompetition(() => renderCompetitionPanel(knownCompetitions));
+  subscribeActiveCompetition((active) => {
+    renderCompetitionPanel(knownCompetitions);
+    syncHovtpPolling(active);
+  });
 
   // Load changelog
   loadChangelog();
@@ -140,6 +151,7 @@ async function loadCompetitionPanel(): Promise<void> {
     knownCompetitions = null;
   }
   renderCompetitionPanel(knownCompetitions);
+  syncHovtpPolling(getActiveCompetition());
 }
 
 function renderCompetitionPanel(competitions: PlatformCompetition[] | null): void {
@@ -216,7 +228,10 @@ function renderCompetitionPanel(competitions: PlatformCompetition[] | null): voi
     });
   });
 
-  if (active) void renderCompetitionFiles(active.id);
+  if (active) {
+    void renderCompetitionFiles(active.id);
+    void renderHovtpSources(active.id);
+  }
 }
 
 /* ── Competition files (the shared file pool) ───────────────────────────────
@@ -225,14 +240,6 @@ function renderCompetitionPanel(competitions: PlatformCompetition[] | null): voi
    selected competition. FSM-pushed files are read-only, hence upload-only
    deletion. The whole section is optional: a pool API that is missing, failing
    or empty renders nothing at all. */
-
-/** `1.4 MB` / `812 kB` — or `''` for an unknown size, so the caller's
- *  `filter(Boolean)` drops the segment instead of rendering a dangling dash. */
-function formatFileSize(bytes: number): string {
-  if (!bytes) return '';
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${Math.max(1, Math.round(bytes / 1024))} kB`;
-}
 
 async function renderCompetitionFiles(competitionId: string): Promise<void> {
   const host = document.getElementById('comp-files');
@@ -294,6 +301,291 @@ async function renderCompetitionFiles(competitionId: string): Promise<void> {
       await renderCompetitionFiles(competitionId);
     });
   });
+}
+
+/* ── HOVTP data sources ─────────────────────────────────────────────────────
+   FS Manager pushes straight at the HOVTP listener without credentials, so
+   trust is per source IP and the owner has to grant it: an unknown IP's files
+   are quarantined and surfaced here as a prompt. Accepting attaches them to
+   the file pool above; rejecting throws them away; revoking keeps what was
+   already attached. Like the pool, the whole section is optional — a sources
+   API that is missing, failing or empty renders nothing at all. */
+
+/** How often the panel re-checks for new sources while the tab is visible */
+const HOVTP_POLL_MS = 30_000;
+
+/** The single poll interval, and the competition it is polling for */
+let hovtpPollTimer: number | null = null;
+let hovtpPollCompetitionId: string | null = null;
+
+/**
+ * Keep exactly one poll interval alive for the active competition — and none
+ * at all when nothing is selected.
+ */
+function syncHovtpPolling(active: PlatformCompetition | null): void {
+  hovtpPollCompetitionId = active?.id ?? null;
+  if (!hovtpPollCompetitionId) {
+    if (hovtpPollTimer !== null) {
+      window.clearInterval(hovtpPollTimer);
+      hovtpPollTimer = null;
+    }
+    return;
+  }
+  if (hovtpPollTimer === null) {
+    hovtpPollTimer = window.setInterval(hovtpPollTick, HOVTP_POLL_MS);
+  }
+}
+
+/** One poll: skipped entirely for a hidden tab or a stale selection */
+function hovtpPollTick(): void {
+  const competitionId = hovtpPollCompetitionId;
+  if (!competitionId) return;
+  if (document.visibilityState !== 'visible') return;
+  if (getActiveCompetition()?.id !== competitionId) return;
+  void renderHovtpSources(competitionId);
+}
+
+// A tab that was hidden skipped its ticks, so catch up the moment it is back.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') hovtpPollTick();
+});
+
+/** The four acceptance windows, as one row of buttons plus their label */
+function hovtpDayButtonsHtml(ip: string, label: string): string {
+  return `
+    <span class="comp-source-actions-label">${escapeHtml(label)}</span>
+    ${ACCEPT_DAYS.map((days) => `
+      <button type="button" class="btn btn-secondary btn-sm"
+              data-accept-days="${days}" data-accept-ip="${escapeHtml(ip)}">${days} ${days === 1 ? 'day' : 'days'}</button>`
+    ).join('')}
+  `;
+}
+
+/** "20.31.44.5 · FSM1 · HTL/FSK · 3 file(s) · 12 kB waiting · first seen 05.09.2026" */
+function hovtpSourceMeta(source: HovtpSource): string {
+  const waiting = source.pendingCount
+    ? `${[`${source.pendingCount} file(s)`, formatFileSize(source.pendingBytes)]
+        .filter(Boolean).join(' · ')} waiting`
+    : '';
+  return [
+    source.ip,
+    source.origin,
+    [source.venue, source.discipline].filter(Boolean).join('/'),
+    waiting,
+    source.firstSeenUtc ? `first seen ${formatDateFi(source.firstSeenUtc)}` : '',
+  ].filter(Boolean).join(' · ');
+}
+
+/** A pending or expired source: the prompt that asks for a decision */
+function hovtpNoticeHtml(source: HovtpSource): string {
+  const expired = source.status === 'expired';
+  const ip = `<span class="comp-source-ip">${escapeHtml(source.ip)}</span>`;
+  const title = expired
+    ? `HOVTP source ${ip} expired${source.acceptedUntilUtc ? ` ${escapeHtml(formatDateFi(source.acceptedUntilUtc))}` : ''}${
+        source.pendingCount ? `; ${source.pendingCount} new files waiting` : ''}`
+    : `New HOVTP source ${ip}${source.origin ? ` (${escapeHtml(source.origin)})` : ''} is sending data for this competition`;
+
+  return `
+    <div class="comp-source-notice${expired ? ' comp-source-notice--expired' : ''}" role="status">
+      <p class="comp-source-notice-title">${title}</p>
+      <p class="comp-source-meta">${escapeHtml(hovtpSourceMeta(source))}</p>
+      <div class="comp-source-actions" data-actions-for="${escapeHtml(source.ip)}">
+        ${hovtpDayButtonsHtml(source.ip, 'Accept for')}
+        <button type="button" class="btn-link comp-source-reject" data-reject="${escapeHtml(source.ip)}">Reject</button>
+      </div>
+    </div>
+  `;
+}
+
+/** One row inside the "Data sources" / "Rejected sources" lists */
+function hovtpRowHtml(source: HovtpSource, meta: string, actions: string): string {
+  return `
+    <li class="comp-source-row">
+      <span class="comp-source-ip">${escapeHtml(source.ip)}</span>
+      <span class="comp-source-meta">${escapeHtml(meta)}</span>
+      <span class="comp-source-actions" data-actions-for="${escapeHtml(source.ip)}">${actions}</span>
+    </li>
+  `;
+}
+
+/** A collapsible list of sources, reusing the file pool's summary styling */
+function hovtpDetailsHtml(
+  cls: string,
+  title: string,
+  count: number,
+  open: boolean,
+  rows: string
+): string {
+  return `
+    <details class="comp-sources-details ${cls}"${open ? ' open' : ''}>
+      <summary class="comp-files-summary">
+        <span class="comp-files-title">${escapeHtml(title)}</span>
+        <span class="comp-files-count">${count}</span>
+      </summary>
+      <ul class="comp-source-list">${rows}</ul>
+    </details>
+  `;
+}
+
+async function renderHovtpSources(competitionId: string): Promise<void> {
+  const host = document.getElementById('comp-sources');
+  if (!host) return;
+
+  let sources: HovtpSource[];
+  try {
+    sources = await listHovtpSources(competitionId);
+  } catch (_e) {
+    host.innerHTML = '';
+    return;
+  }
+  // The selection may have changed while the listing was in flight
+  if (getActiveCompetition()?.id !== competitionId) return;
+  if (!sources.length) { host.innerHTML = ''; return; }
+
+  const prompting = sources.filter((s) => s.status === 'pending' || s.status === 'expired');
+  const accepted = sources.filter((s) => s.status === 'accepted');
+  const rejected = sources.filter((s) => s.status === 'rejected');
+
+  // Collapsed by default, but a re-render (e.g. after an accept) keeps them open.
+  const acceptedOpen = host.querySelector('.comp-sources-accepted')?.hasAttribute('open') ?? false;
+  const rejectedOpen = host.querySelector('.comp-sources-rejected')?.hasAttribute('open') ?? false;
+
+  const acceptedRows = accepted.map((s) => hovtpRowHtml(
+    s,
+    [
+      s.origin,
+      s.acceptedUntilUtc ? `accepted until ${formatDateFi(s.acceptedUntilUtc)}` : '',
+      s.messageCount ? `${s.messageCount} messages` : '',
+    ].filter(Boolean).join(' · '),
+    `<button type="button" class="btn-link" data-extend="${escapeHtml(s.ip)}">Extend</button>
+     <button type="button" class="btn-link comp-source-reject" data-revoke="${escapeHtml(s.ip)}">Revoke</button>`
+  )).join('');
+
+  const rejectedRows = rejected.map((s) => hovtpRowHtml(
+    s,
+    [s.origin, s.lastSeenUtc ? `last seen ${formatDateFi(s.lastSeenUtc)}` : '']
+      .filter(Boolean).join(' · '),
+    hovtpDayButtonsHtml(s.ip, 'Accept anyway for')
+  )).join('');
+
+  host.innerHTML = `
+    ${prompting.map(hovtpNoticeHtml).join('')}
+    ${accepted.length ? hovtpDetailsHtml('comp-sources-accepted', 'Data sources', accepted.length, acceptedOpen, acceptedRows) : ''}
+    ${rejected.length ? hovtpDetailsHtml('comp-sources-rejected', 'Rejected sources', rejected.length, rejectedOpen, rejectedRows) : ''}
+  `;
+
+  bindHovtpAcceptButtons(host, competitionId);
+
+  host.querySelectorAll<HTMLButtonElement>('[data-reject]').forEach((btn) => {
+    const ip = btn.getAttribute('data-reject')!;
+    btn.setAttribute('aria-label', `Reject ${ip}`);
+    btn.addEventListener('click', () => {
+      void handleHovtpDecline(competitionId, ip, 'reject', btn);
+    });
+  });
+
+  host.querySelectorAll<HTMLButtonElement>('[data-revoke]').forEach((btn) => {
+    const ip = btn.getAttribute('data-revoke')!;
+    btn.setAttribute('aria-label', `Stop accepting data from ${ip}`);
+    btn.addEventListener('click', () => {
+      void handleHovtpDecline(competitionId, ip, 'revoke', btn);
+    });
+  });
+
+  // "Extend" only swaps the row's controls for the day buttons — the choice
+  // itself is the accept call, so nothing is sent until a window is picked.
+  host.querySelectorAll<HTMLButtonElement>('[data-extend]').forEach((btn) => {
+    const ip = btn.getAttribute('data-extend')!;
+    btn.setAttribute('aria-label', `Extend ${ip}`);
+    btn.addEventListener('click', () => {
+      const group = btn.closest<HTMLElement>('[data-actions-for]');
+      if (!group) return;
+      group.innerHTML = hovtpDayButtonsHtml(ip, 'Extend by');
+      bindHovtpAcceptButtons(group, competitionId);
+    });
+  });
+}
+
+/** Wire every "N day(s)" button inside `root` to the accept call */
+function bindHovtpAcceptButtons(root: ParentNode, competitionId: string): void {
+  root.querySelectorAll<HTMLButtonElement>('[data-accept-days]').forEach((btn) => {
+    const ip = btn.getAttribute('data-accept-ip')!;
+    const days = Number(btn.getAttribute('data-accept-days')) as AcceptDays;
+    btn.setAttribute('aria-label', `Accept ${ip} for ${days} ${days === 1 ? 'day' : 'days'}`);
+    btn.addEventListener('click', () => {
+      void handleAcceptHovtpSource(competitionId, ip, days, btn);
+    });
+  });
+}
+
+/**
+ * Accept (or extend, or un-reject) a source for the chosen window.
+ * Everything quarantined from that IP lands in the pool, so the file list is
+ * refreshed alongside the sources.
+ */
+async function handleAcceptHovtpSource(
+  competitionId: string,
+  ip: string,
+  days: AcceptDays,
+  trigger: HTMLButtonElement
+): Promise<void> {
+  const group = trigger.closest<HTMLElement>('[data-actions-for]');
+  const buttons = [...(group?.querySelectorAll<HTMLButtonElement>('button') ?? [trigger])];
+  buttons.forEach((b) => { b.disabled = true; });
+
+  try {
+    await acceptHovtpSource(competitionId, ip, days);
+  } catch (err: unknown) {
+    buttons.forEach((b) => { b.disabled = false; });
+    panelError = err instanceof CompetitionApiError
+      ? `Could not accept ${ip}: ${err.message}`
+      : `Could not accept ${ip}. Please try again.`;
+    renderCompetitionPanel(knownCompetitions);
+    return;
+  }
+
+  panelError = null;
+  await renderCompetitionFiles(competitionId);
+  await renderHovtpSources(competitionId);
+}
+
+/**
+ * Reject a quarantined source or revoke an accepted one — both are
+ * destructive enough to confirm, and they lose different things.
+ */
+async function handleHovtpDecline(
+  competitionId: string,
+  ip: string,
+  action: 'reject' | 'revoke',
+  trigger: HTMLButtonElement
+): Promise<void> {
+  const confirmed = window.confirm(
+    action === 'reject'
+      ? `Reject HOVTP source ${ip}?\n\n`
+        + 'The files it has sent so far are deleted without being added to this '
+        + 'competition. You can still accept the source later from "Rejected sources".'
+      : `Stop accepting data from HOVTP source ${ip}?\n\n`
+        + 'Files it already added to this competition stay. New data from the '
+        + 'source is refused until you accept it again.'
+  );
+  if (!confirmed) return;
+
+  trigger.disabled = true;
+  try {
+    if (action === 'reject') await rejectHovtpSource(competitionId, ip);
+    else await revokeHovtpSource(competitionId, ip);
+  } catch (err: unknown) {
+    trigger.disabled = false;
+    const verb = action === 'reject' ? 'reject' : 'revoke';
+    panelError = err instanceof CompetitionApiError
+      ? `Could not ${verb} ${ip}: ${err.message}`
+      : `Could not ${verb} ${ip}. Please try again.`;
+    renderCompetitionPanel(knownCompetitions);
+    return;
+  }
+
+  panelError = null;
+  await renderHovtpSources(competitionId);
 }
 
 /**
@@ -367,6 +659,7 @@ function activeCompetitionHtml(active: PlatformCompetition): string {
       </div>
     </div>
     <div class="comp-files" id="comp-files"></div>
+    <div class="comp-sources" id="comp-sources"></div>
   `;
 }
 

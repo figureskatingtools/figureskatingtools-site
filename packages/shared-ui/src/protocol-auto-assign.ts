@@ -130,6 +130,9 @@ export const SUFFIX_SLOTS: Record<string, SuffixSlot> = {
   'StartListwithTimes.pdf': { kind: 'skip' },
   'RefereeSheet.pdf': { kind: 'skip' },
   'TechnicalControllerSheet.pdf': { kind: 'skip' },
+  'TechnicalSpecialistSheet.pdf': { kind: 'skip' },
+  'TechnicalSpecialistSheet1.pdf': { kind: 'skip' },
+  'TechnicalSpecialistSheet2.pdf': { kind: 'skip' },
   'PlannedProgramContent.pdf': { kind: 'skip' },
   'CompetitionSchedule.pdf': { kind: 'skip' },
   'CalculationSetupVerificationforReferee.pdf': { kind: 'skip' },
@@ -248,12 +251,91 @@ export function matchNameTokens(
   return true;
 }
 
+/* ════════════════════════════════════════════════════════════════
+   ISU RSC codes
+   ════════════════════════════════════════════════════════════════ */
+
 /**
- * `parseFilenameGeneric` reports a dash-only or missing segment portion as the
- * literal `Unknown` (Python parity) — that is the "category-level file" signal.
+ * The dash-delimited tokens of an ISU RSC code, uppercased, padding dropped:
+ *
+ *     FSKWSINGLES-DEBYTW----FNL-000100--  →  [FSKWSINGLES, DEBYTW, FNL, 000100]
+ *     FSKWSINGLES-DEBYTW----              →  [FSKWSINGLES, DEBYTW]
+ *
+ * FS Manager writes the **same** RSC into a DT_SCHEDULE unit's `Code` — which
+ * the schedule parser stores as the structure category's `code` — and into the
+ * name of every PDF it exports for that unit, so a category's tokens are always
+ * the leading tokens of its files'. Comparing token lists instead of raw strings
+ * makes the pairing independent of how wide each RSC field's dash padding is, of
+ * how long the discipline/gender lead-in happens to be (`FSKWSINGLES-`,
+ * `FSKXPAIRS-`, `FSKXICEDANCE-`), of letter case — and, above all, independent
+ * of the Judge Papers `categories` table knowing this category at all.
  */
-function isCategoryLevel(parsed: ParsedFilename): boolean {
-  return parsed.rawSegment === 'Unknown' || parsed.rawSegment === '';
+export function rscTokens(value: string | null | undefined): string[] {
+  return String(value ?? '').trim().toUpperCase().split('-').filter(Boolean);
+}
+
+/** A filename's RSC prefix (everything before the last underscore) + its suffix */
+interface RscName {
+  tokens: string[];
+  suffix: string;
+}
+
+/** An RSC prefix is letters, digits and dashes — anything else is not one */
+const RSC_PREFIX = /^[A-Za-z0-9-]+$/;
+
+/** Read `<RSC>_<Suffix>.pdf` as tokens + suffix; null when it is not that shape */
+function parseRscName(name: string): RscName | null {
+  const underscore = name.lastIndexOf('_');
+  if (underscore === -1) return null;
+  const prefix = name.slice(0, underscore);
+  if (!RSC_PREFIX.test(prefix)) return null;
+  const tokens = rscTokens(prefix);
+  return tokens.length ? { tokens, suffix: name.slice(underscore + 1) } : null;
+}
+
+/**
+ * A leftover RSC token that opens the *phase* field: a known phase code
+ * followed by digits or nothing (`FNL`, `QUAL000100`, `QUAL0001PK`, `SEG003`)
+ * — never a category token that merely starts with those letters (`FSTEAM`).
+ */
+const PHASE_TOKEN = /^(?:QUAL|FNL|SP|FS|RD|FD|SEG)(?![A-Z])/;
+
+/** What a filename says about its segment, once its category is known */
+interface SegmentHint {
+  /** The segment identifier; `Unknown` or empty means "category-level file" */
+  rawSegment: string;
+  /** Split/group number when the filename carries one */
+  splitNumber: number | null;
+}
+
+/**
+ * A dash-only or missing segment portion (`Unknown`, Python parity) is the
+ * "this file belongs to the category, not to one of its segments" signal.
+ */
+function isCategoryLevel(hint: SegmentHint): boolean {
+  return hint.rawSegment === 'Unknown' || hint.rawSegment === '';
+}
+
+/** The hint `parseFilenameGeneric` derived, relative to the table abbreviation */
+function hintFromParsed(parsed: ParsedFilename): SegmentHint {
+  return { rawSegment: parsed.rawSegment, splitNumber: parsed.splitNumber };
+}
+
+/**
+ * The hint left once a category's RSC code has eaten the filename's leading
+ * tokens: an optional split-block number, then the phase and unit tokens.
+ *
+ * A category token the structure's code did not cover (it matched on a shorter,
+ * less specific code) is skipped rather than mistaken for a phase, so the phase
+ * is still read correctly.
+ */
+function hintFromRsc(tokens: string[], consumed: number): SegmentHint {
+  const rest = tokens.slice(consumed);
+  let splitNumber: number | null = null;
+  if (rest.length && /^\d{1,2}$/.test(rest[0]!)) splitNumber = Number(rest.shift());
+  const phase = rest.findIndex((token) => PHASE_TOKEN.test(token));
+  if (phase > 0) rest.splice(0, phase);
+  return { rawSegment: rest.join('-'), splitNumber };
 }
 
 /** The leading alphabetic token of a raw segment: `QUAL000100` → `QUAL` */
@@ -302,6 +384,43 @@ function codeHits(categories: CategoryLike[], parsed: ParsedFilename): CategoryL
   return split.length ? split : plain;
 }
 
+/** One structure category the filename's own RSC points at */
+interface RscHit {
+  category: CategoryLike;
+  /** How many of the filename's tokens the category's code accounted for */
+  consumed: number;
+}
+
+/**
+ * Categories whose ISU code is a leading run of the filename's own RSC tokens.
+ *
+ * This is the table-independent half of category matching: the schedule and the
+ * PDFs come out of the same FS Manager, so `FSKWSINGLES-DEBYTW----` (the
+ * category) and `FSKWSINGLES-DEBYTW----FNL-000100--` (its free-skating results)
+ * agree token for token whether or not the Judge Papers `categories` table has
+ * ever heard of `DEBYTW`.
+ *
+ * The most specific code wins: a competition carrying both a bare
+ * `FSKWSINGLES-----------` category and a `FSKWSINGLES-DEBYTW----` one sends
+ * the DEBYTW files to the latter. Two categories tied on specificity are
+ * reported as ambiguous rather than guessed between.
+ */
+function rscCodeHits(categories: CategoryLike[], fileTokens: string[]): RscHit[] {
+  const hits: RscHit[] = [];
+  let best = 0;
+  for (const cat of categories) {
+    const codeTokens = rscTokens(cat.code);
+    if (!codeTokens.length || codeTokens.length > fileTokens.length) continue;
+    if (!codeTokens.every((token, i) => token === fileTokens[i])) continue;
+    if (codeTokens.length > best) {
+      best = codeTokens.length;
+      hits.length = 0;
+    }
+    if (codeTokens.length === best) hits.push({ category: cat, consumed: best });
+  }
+  return hits;
+}
+
 /**
  * Categories that carry no code (parsed from a schedule PDF) whose name pairs
  * token-for-token with the recognized display name, English or Finnish.
@@ -347,24 +466,75 @@ type Resolution<T> = { ok: T } | { fail: TrayReason };
 interface CategoryMatch {
   category: CategoryLike;
   matchedBy: 'code' | 'name';
+  /** The segment portion of the filename, relative to whatever matched */
+  hint: SegmentHint;
+  /** The ISU code the match proves, for a caller stamping it onto a category */
+  categoryCode: string;
 }
 
+/**
+ * Three passes, most trustworthy first:
+ *
+ *  1. the filename's own RSC tokens against the categories' codes — works for
+ *     any category FS Manager exports, known to the `categories` table or not;
+ *  2. the table abbreviation against the codes — keeps RSC spellings whose
+ *     fields are glued rather than dash-separated working;
+ *  3. the recognized display name against code-less (schedule-PDF) categories.
+ */
 function resolveCategory(
   structure: StructureLike,
-  parsed: ParsedFilename,
-  table: CategoryInfo[]
+  parsed: ParsedFilename | null,
+  table: CategoryInfo[],
+  rsc: RscName | null
 ): Resolution<CategoryMatch> {
   const categories = structure.categories ?? [];
+
+  if (rsc) {
+    const byRsc = rscCodeHits(categories, rsc.tokens);
+    if (byRsc.length > 1) return { fail: 'ambiguous-category' };
+    if (byRsc.length === 1) {
+      const hit = byRsc[0]!;
+      return {
+        ok: {
+          category: hit.category,
+          matchedBy: 'code',
+          hint: hintFromRsc(rsc.tokens, hit.consumed),
+          // Provenance stays "what the recognizer recognized"; when the table
+          // knew nothing, the category's own code stands in.
+          categoryCode: parsed?.categoryCode || stripTrailingDashes(hit.category.code),
+        },
+      };
+    }
+  }
+
+  if (!parsed) return { fail: 'unrecognized' };
+
   const byCode = codeHits(categories, parsed);
-  if (byCode.length === 1) return { ok: { category: byCode[0]!, matchedBy: 'code' } };
   if (byCode.length > 1) return { fail: 'ambiguous-category' };
+  if (byCode.length === 1) {
+    return {
+      ok: {
+        category: byCode[0]!,
+        matchedBy: 'code',
+        hint: hintFromParsed(parsed),
+        categoryCode: parsed.categoryCode,
+      },
+    };
+  }
 
   const byName = nameHits(categories, parsed);
   if (byName.length === 0) return { fail: 'unrecognized' };
   if (byName.length > 1) return { fail: 'ambiguous-category' };
   const hit = byName[0]!;
   if (nameClaimedByAnotherRow(hit, parsed, table)) return { fail: 'ambiguous-category' };
-  return { ok: { category: hit, matchedBy: 'name' } };
+  return {
+    ok: {
+      category: hit,
+      matchedBy: 'name',
+      hint: hintFromParsed(parsed),
+      categoryCode: parsed.categoryCode,
+    },
+  };
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -373,7 +543,7 @@ function resolveCategory(
 
 function resolveSegment(
   category: CategoryLike,
-  parsed: ParsedFilename
+  hint: SegmentHint
 ): Resolution<SegmentLike> {
   const segments = orderedSegments(category);
   if (!segments.length) return { fail: 'ambiguous-segment' };
@@ -381,19 +551,19 @@ function resolveSegment(
 
   // A category-level filename has no segment token at all: only a
   // single-segment category can take it.
-  if (isCategoryLevel(parsed)) {
+  if (isCategoryLevel(hint)) {
     return only ? { ok: only } : { fail: 'ambiguous-segment' };
   }
 
   // `SEG003` → the third segment in display order
-  const seg = /^SEG0*(\d+)$/i.exec(parsed.rawSegment.replace(/-/g, ''));
+  const seg = /^SEG0*(\d+)$/i.exec(hint.rawSegment.replace(/-/g, ''));
   if (seg) {
     const index = Number(seg[1]) - 1;
     const hit = segments[index];
     return hit ? { ok: hit } : { fail: 'ambiguous-segment' };
   }
 
-  const token = phaseToken(parsed.rawSegment);
+  const token = phaseToken(hint.rawSegment);
   if (!token) return only ? { ok: only } : { fail: 'ambiguous-segment' };
 
   // Phase-token synonyms; an unknown token is still tried against the segment
@@ -478,37 +648,49 @@ function planTitlePage(
 ): AutoAssignOutcome | null {
   const stem = filename.slice(0, -'.pdf'.length);
   const matched = matchCategory(stem, categories);
-  if (!matched) return null;
 
-  const remainder = stem.slice(matched.abbreviation.length);
-  const splitNumber = /^-*(\d{2})-*$/.exec(remainder);
-  if (!/^-*$/.test(remainder) && !splitNumber) return null;
+  let parsed: ParsedFilename | null = null;
+  if (matched) {
+    const remainder = stem.slice(matched.abbreviation.length);
+    const splitNumber = /^-*(\d{2})-*$/.exec(remainder);
+    if (/^-*$/.test(remainder) || splitNumber) {
+      parsed = {
+        filename,
+        type: matched.competitionType,
+        category: splitNumber
+          ? `${matched.displayName} #${Number(splitNumber[1])}`
+          : matched.displayName,
+        categoryFi: splitNumber
+          ? `${matched.displayNameFi || matched.displayName} #${Number(splitNumber[1])}`
+          : matched.displayNameFi || matched.displayName,
+        categoryCode: matched.abbreviation,
+        judgingMethod: matched.judgingMethod,
+        segment: 'Unknown',
+        rawSegment: 'Unknown',
+        suffix: '',
+        prefix: stem,
+        splitNumber: splitNumber ? Number(splitNumber[1]) : null,
+      };
+    }
+  }
 
-  const parsed: ParsedFilename = {
-    filename,
-    type: matched.competitionType,
-    category: splitNumber
-      ? `${matched.displayName} #${Number(splitNumber[1])}`
-      : matched.displayName,
-    categoryFi: splitNumber
-      ? `${matched.displayNameFi || matched.displayName} #${Number(splitNumber[1])}`
-      : matched.displayNameFi || matched.displayName,
-    categoryCode: matched.abbreviation,
-    judgingMethod: matched.judgingMethod,
-    segment: 'Unknown',
-    rawSegment: 'Unknown',
-    suffix: '',
-    prefix: stem,
-    splitNumber: splitNumber ? Number(splitNumber[1]) : null,
-  };
+  // The table may not know this category — the structure's own RSC codes do.
+  const stemTokens = categories.length && RSC_PREFIX.test(stem) ? rscTokens(stem) : [];
+  const rsc: RscName | null = stemTokens.length ? { tokens: stemTokens, suffix: '' } : null;
+  if (!parsed && !rsc) return null;
 
-  const category = resolveCategory(structure, parsed, categories);
-  if ('fail' in category) return { action: 'tray', reason: category.fail };
+  const category = resolveCategory(structure, parsed, categories, rsc);
+  if ('fail' in category) {
+    return parsed ? { action: 'tray', reason: category.fail } : null;
+  }
+  // A title page names a category and nothing else; a leftover segment token
+  // means this is some other export that merely lacks an underscore.
+  if (!isCategoryLevel(category.ok.hint)) return null;
 
   const target: AutoAssignTarget = {
     kind: 'categoryTitle',
     categoryId: category.ok.category.id,
-    categoryCode: parsed.categoryCode,
+    categoryCode: category.ok.categoryCode,
     matchedBy: category.ok.matchedBy,
   };
   if (!slotAccepts(structure, target, filename)) {
@@ -523,6 +705,10 @@ function planTitlePage(
  * `categories` is the Judge Papers category table (ordered longest
  * abbreviation first — `sortCategoriesForMatching`). An empty table means
  * recognition is unavailable, and every file goes to the tray.
+ *
+ * A *non-empty* table that simply lacks this category is not the same thing:
+ * the filename's own RSC still matches the structure's schedule-derived codes,
+ * so a category FS Manager exports but the table never learned still lands.
  */
 export function planAutoAssignment(
   filename: string,
@@ -537,27 +723,31 @@ export function planAutoAssignment(
   }
 
   const parsed = parseFilenameGeneric(name, categories);
-  if (!parsed) return { action: 'tray', reason: 'unrecognized' };
+  // An unknown category abbreviation is not the end of recognition: the
+  // structure's own RSC codes can still place the file. An empty table still
+  // means recognition is unavailable, so nothing is planned at all.
+  const rsc = categories.length ? parseRscName(name) : null;
+  if (!parsed && !rsc) return { action: 'tray', reason: 'unrecognized' };
 
-  const slot = SUFFIX_SLOTS[parsed.suffix];
+  const slot = SUFFIX_SLOTS[parsed ? parsed.suffix : rsc!.suffix];
   if (slot?.kind === 'skip') return { action: 'tray', reason: 'not-for-protocol' };
 
-  const category = resolveCategory(structure, parsed, categories);
+  const category = resolveCategory(structure, parsed, categories, rsc);
   if ('fail' in category) return { action: 'tray', reason: category.fail };
 
   if (!slot) return { action: 'tray', reason: 'unknown-suffix' };
-  if (slot.requiresCategoryLevel && !isCategoryLevel(parsed)) {
+  if (slot.requiresCategoryLevel && !isCategoryLevel(category.ok.hint)) {
     return { action: 'tray', reason: 'unknown-suffix' };
   }
 
   const provenance = {
-    categoryCode: parsed.categoryCode,
+    categoryCode: category.ok.categoryCode,
     matchedBy: category.ok.matchedBy,
   } as const;
 
   let target: AutoAssignTarget;
   if (slot.kind === 'segment') {
-    const segment = resolveSegment(category.ok.category, parsed);
+    const segment = resolveSegment(category.ok.category, category.ok.hint);
     if ('fail' in segment) return { action: 'tray', reason: segment.fail };
     target = {
       kind: 'segment',

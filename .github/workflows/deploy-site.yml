@@ -62,6 +62,13 @@ jobs:
       auth_mi_object_id: ${{ steps.deploy.outputs.authManagedIdentityObjectId }}
       platform_function_app_name: ${{ steps.deploy.outputs.platformFunctionAppName }}
       platform_function_app_url: ${{ steps.deploy.outputs.platformFunctionAppUrl }}
+      hovtp_function_app_name: ${{ steps.deploy.outputs.hovtpFunctionAppName }}
+      hovtp_function_app_url: ${{ steps.deploy.outputs.hovtpFunctionAppUrl }}
+      # What the deployment actually set on the listener ('true'/'false' and
+      # 'Test'/'Production') — the smoke check asserts against these rather than
+      # re-deriving the bicepparam defaults from vars.HOVTP_ENABLED.
+      hovtp_enabled: ${{ steps.deploy.outputs.hovtpEnabled }}
+      hovtp_environment: ${{ steps.deploy.outputs.hovtpEnvironment }}
       custom_domain: ${{ steps.deploy.outputs.customDomain }}
     steps:
       - name: Checkout code
@@ -94,12 +101,23 @@ jobs:
           PROXY_SHARED_SECRET_JUDGEPAPERS: ${{ secrets.PROXY_SHARED_SECRET_JUDGEPAPERS }}
           PROXY_SHARED_SECRET_SCOREMODIFIER: ${{ secrets.PROXY_SHARED_SECRET_SCOREMODIFIER }}
           PROXY_SHARED_SECRET_PROTOCOLGENERATOR: ${{ secrets.PROXY_SHARED_SECRET_PROTOCOLGENERATOR }}
+          # Not a router->tool secret like the three above: this is the value
+          # API Management injects as X-Proxy-Secret when it forwards FS Manager
+          # traffic to the HOVTP listener (test.bicepparam reads it; prod leaves
+          # it empty, which keeps the listener's gate open). Owned by the
+          # publishing layer — ../azure-publishing, `terraform -chdir=infra
+          # output -raw fs_test_hovtp_proxy_secret`.
+          PROXY_SHARED_SECRET_HOVTP: ${{ secrets.PROXY_SHARED_SECRET_HOVTP }}
           TOOL_PRINCIPAL_ID_JUDGEPAPERS: ${{ vars.TOOL_PRINCIPAL_ID_JUDGEPAPERS }}
           TOOL_PRINCIPAL_ID_SCOREMODIFIER: ${{ vars.TOOL_PRINCIPAL_ID_SCOREMODIFIER }}
           TOOL_PRINCIPAL_ID_PROTOCOLGENERATOR: ${{ vars.TOOL_PRINCIPAL_ID_PROTOCOLGENERATOR }}
           # Set to 'true' to deploy on the default *.azurewebsites.net hostname
           # only (migration step 1, before the DNS cutover).
           SKIP_CUSTOM_DOMAIN: ${{ vars.SKIP_CUSTOM_DOMAIN }}
+          # Kill switch for the HOVTP listener (FS Manager push endpoint):
+          # 'false' keeps the app deployed but makes it answer 503. Unset means
+          # the per-environment default in the bicepparam (test on, prod off).
+          HOVTP_ENABLED: ${{ vars.HOVTP_ENABLED }}
         run: |
           set -euo pipefail
           ENV_NAME="${{ needs.set-environment.outputs.env_name }}"
@@ -126,7 +144,9 @@ jobs:
           for key in webAppName webAppDefaultHostName webAppInboundIpAddress \
                      resourceGroupName authManagedIdentityClientId \
                      authManagedIdentityObjectId platformFunctionAppName \
-                     platformFunctionAppUrl customDomain; do
+                     platformFunctionAppUrl hovtpFunctionAppName \
+                     hovtpFunctionAppUrl hovtpEnabled hovtpEnvironment \
+                     customDomain; do
             echo "${key}=$(echo "$OUTPUT" | jq -r ".${key}.value")" >> "$GITHUB_OUTPUT"
           done
 
@@ -288,6 +308,144 @@ jobs:
             --src platform-backend.zip \
             --name "${{ needs.deploy-infra.outputs.platform_function_app_name }}" \
             --resource-group "${{ needs.deploy-infra.outputs.resource_group_name }}"
+
+  deploy-hovtp-backend:
+    name: Deploy HOVTP Listener (Functions)
+    needs: [set-environment, deploy-infra]
+    runs-on: ubuntu-latest
+    environment: ${{ needs.set-environment.outputs.env_name }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Run HOVTP listener tests
+        run: |
+          cd infra/hovtp
+          pip install -r requirements-dev.txt
+          python -m pytest -q
+
+      - name: Build HOVTP package
+        run: |
+          set -euo pipefail
+          BUILD_DIR=$(mktemp -d)
+          cp -r infra/hovtp/* "$BUILD_DIR/"
+
+          cd "$BUILD_DIR"
+          rm -rf .venv __pycache__ .git .vscode .pytest_cache tests local.settings.json
+          rm -f ./*.pyc requirements-dev.txt
+
+          mkdir -p .python_packages/lib/site-packages
+          pip install -r requirements.txt --target .python_packages/lib/site-packages
+
+          zip -r "$GITHUB_WORKSPACE/hovtp-backend.zip" .
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy to Azure Functions
+        # Retried on purpose. The listener has its own storage account, and a
+        # brand-new role assignment can take up to ~10 minutes to propagate; on
+        # Flex Consumption the platform copies the package into the app-package
+        # container using the app's OWN identity, so an unpropagated grant makes
+        # this step fail outright rather than degrade. Bounded (5 x 60s) so a
+        # genuinely broken deploy still fails the job.
+        run: |
+          set -uo pipefail
+          for attempt in $(seq 1 5); do
+            if az functionapp deployment source config-zip \
+                 --src hovtp-backend.zip \
+                 --name "${{ needs.deploy-infra.outputs.hovtp_function_app_name }}" \
+                 --resource-group "${{ needs.deploy-infra.outputs.resource_group_name }}"; then
+              echo "HOVTP package deployed (attempt ${attempt})."
+              exit 0
+            fi
+            echo "::warning::HOVTP zip deploy attempt ${attempt}/5 failed (role assignment may still be propagating); retrying in 60s."
+            sleep 60
+          done
+          echo "::error::HOVTP zip deploy failed after 5 attempts."
+          exit 1
+
+      - name: Smoke check (HOVTP OPTIONS)
+        # OPTIONS is the protocol's own status/keep-alive probe and is defined to
+        # have no side effects, so this is safe to run against a live listener.
+        # Warning-only: a cold Flex Consumption app can outlast the retries, and a
+        # slow first response is not a reason to fail an otherwise good deploy.
+        env:
+          URL: ${{ needs.deploy-infra.outputs.hovtp_function_app_url }}
+          # Straight from the deployment's own outputs (main.bicep), NOT from
+          # vars.HOVTP_ENABLED: the kill switch defaults differ per environment
+          # (test on, prod off) and re-deriving them here drifts from the
+          # bicepparam files. 'true'/'false' and 'Test'/'Production'.
+          HOVTP_ENABLED: ${{ needs.deploy-infra.outputs.hovtp_enabled }}
+          HOVTP_ENVIRONMENT: ${{ needs.deploy-infra.outputs.hovtp_environment }}
+          # Same secret the deploy passed into the template. The check stays on
+          # the app's own *.azurewebsites.net hostname on purpose — it must
+          # validate the code this run just deployed, not whether Front Door and
+          # APIM happen to be healthy — and that hostname is exactly what the
+          # gate refuses without this header. Empty (prod, or before the secret
+          # is set) is fine: the listener's gate fails open.
+          PROXY_SECRET: ${{ secrets.PROXY_SHARED_SECRET_HOVTP }}
+        run: |
+          set -uo pipefail
+          # hovtpEnabled=false is the kill switch: the app is deployed but every
+          # request is answered 503, which is then the expected smoke result.
+          case "${HOVTP_ENABLED:-}" in
+            true)  EXPECT=200 ;;
+            false) EXPECT=503 ;;
+            *)
+              echo "::warning::Skipping HOVTP smoke check: the deployment did not report hovtpEnabled (got '${HOVTP_ENABLED:-}')."
+              exit 0
+              ;;
+          esac
+          # Echoed back by the listener and, if header validation is ever
+          # enforced, matched against its HOVTP_ENVIRONMENT setting — so send the
+          # environment this deploy configured, not a hardcoded 'Test'. The
+          # listener's own fallback for an unset setting is 'Test'.
+          ENVIRONMENT="${HOVTP_ENVIRONMENT:-Test}"
+          # Built as an array so the optional header can be appended without
+          # word-splitting; never empty, so `set -u` has nothing to trip on.
+          CURL_ARGS=(-s -D - -o /dev/null -X OPTIONS
+            -H 'X-HOVTP-Session-Id: 00000000-0000-4000-8000-000000000001'
+            -H 'X-HOVTP-Origin: ci-smoke'
+            -H "X-HOVTP-Environment: ${ENVIRONMENT}"
+            -H 'X-HOVTP-Data-Type: ODF')
+          if [ -n "${PROXY_SECRET:-}" ]; then
+            CURL_ARGS+=(-H "X-Proxy-Secret: ${PROXY_SECRET}")
+          else
+            echo "PROXY_SHARED_SECRET_HOVTP is empty — probing without X-Proxy-Secret (the listener's gate fails open when its own setting is unset)."
+          fi
+          for i in $(seq 1 10); do
+            HEADERS=$(curl "${CURL_ARGS[@]}" "${URL}/api/v1/hovtp" || echo "")
+            CODE=$(printf '%s' "$HEADERS" | head -n 1 | awk '{print $2}')
+            if [ "$CODE" = "$EXPECT" ]; then
+              if [ "$EXPECT" = "503" ]; then
+                echo "HOVTP listener is deployed and disabled (503) at ${URL}/api/v1/hovtp"
+                exit 0
+              fi
+              if printf '%s' "$HEADERS" | grep -qi '^x-hovtp-last-serial-number:[[:space:]]*0'; then
+                echo "HOVTP listener healthy at ${URL}/api/v1/hovtp"
+                exit 0
+              fi
+              echo "OPTIONS returned 200 without x-hovtp-last-serial-number: 0, retrying..."
+            else
+              echo "OPTIONS returned ${CODE:-000} (expected ${EXPECT}), retrying..."
+            fi
+            sleep 10
+          done
+          if [ "$EXPECT" = "503" ]; then
+            echo "::warning::HOVTP smoke check never returned 503 (listener deployed with the kill switch on) at ${URL}/api/v1/hovtp"
+          else
+            echo "::warning::HOVTP smoke check never returned 200 with x-hovtp-last-serial-number: 0 at ${URL}/api/v1/hovtp"
+          fi
 
   deploy-frontend:
     name: Deploy Frontend (Web App)

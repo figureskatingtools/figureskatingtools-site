@@ -1,11 +1,21 @@
 // Storage for the platform (competitions registry) Function App.
 //
 //   competition-data  shared blob container keyed by competition GUID:
-//                       <guid>/uploads/...   cross-tool data reuse
-//                       <guid>/fsm/...       RESERVED for the future FSM ingest
+//                       <guid>/uploads/...            cross-tool data reuse
+//                       <guid>/fsm/...                files pushed by FS Manager,
+//                                                     written by the HOVTP listener
+//                                                     once their source IP is accepted
+//                       <guid>/fsm-pending/<ip>/...   quarantine written by the HOVTP
+//                                                     listener for a not-yet-accepted
+//                                                     source IP; invisible in the pool
+//                                                     until the source is accepted
 //                     Tool Function Apps get Storage Blob Data READER here via
 //                     shared-data-access.bicep — this is the cross-tool seam.
-//   app-package       Flex Consumption one-deploy package container
+//   app-package       Flex Consumption one-deploy package container (platform app).
+//                     The HOVTP listener has NO access to it: its own package and
+//                     host state live in its own account (modules/hovtp-storage.bicep),
+//                     so a compromise of the anonymous listener cannot overwrite the
+//                     platform app's deployment zip.
 //   competitions      table, two row kinds (see infra/functions/function_app.py):
 //                       PK=COMPETITION RK=<guid>            the competition
 //                       PK=CODE        RK=<normalized code> -> CompetitionId

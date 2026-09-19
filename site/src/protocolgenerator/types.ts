@@ -28,6 +28,26 @@ export interface Podium {
   names: string[];
 }
 
+/** How much of a roster a team page prints. 'none' keeps the page but drops the
+ * skater list. */
+export type NameMode = 'full' | 'firstNames' | 'none';
+
+/** One free-typed row printed on a team page ("Theme: Spies"). The rows are a
+ * flat per-team list, printed in stored order. */
+export interface TeamTextField {
+  id: string;
+  label: string;
+  value: string;
+}
+
+/** Team-page settings resolved to a value — what a level hands the one below it.
+ * Competition-wide they are absent on data written before the setting existed,
+ * which means pages on and full names. */
+export interface TeamPageSettings {
+  enabled: boolean;
+  nameMode: NameMode;
+}
+
 export interface Team {
   id: string;
   code: string;
@@ -39,6 +59,11 @@ export interface Team {
    * when the team has no competition (kiss'n'cry) photo. */
   photoFallback?: string | null;
   members: string[];
+  /** Team-page overrides; null/absent = inherit the category's setting (which in
+   * turn inherits the competition-wide one). */
+  pageEnabled?: boolean | null;
+  nameMode?: NameMode | null;
+  textFields?: TeamTextField[];
 }
 
 export interface Segment {
@@ -59,6 +84,11 @@ export interface Category {
   code?: string;
   discipline: Discipline;
   order: number;
+  /** Team-page defaults for this category's teams; null/absent = inherit the
+   * competition-wide setting. A default, never a copy: changing it moves every
+   * team that has not overridden it. */
+  pageEnabled?: boolean | null;
+  nameMode?: NameMode | null;
   titlePdf: string | null;
   podium: Podium;
   totalResultsPdf: string | null;
@@ -111,6 +141,7 @@ export interface Structure {
   header: PageRef;
   footer: PageRef;
   footerEnabled: boolean;
+  teamPages?: TeamPageSettings;
   scheduleParsed: boolean;
   files: Record<string, FileMeta>;
   categories: Category[];

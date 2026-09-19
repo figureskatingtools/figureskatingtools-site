@@ -14,7 +14,9 @@ import {
   matchCategory,
   planAutoAssignment,
   applyOutcomeLocally,
+  classifyRosterXml,
   stripTrailingDashes,
+  SUFFIX_SLOTS,
   type CategoryInfo,
   type AutoAssignOutcome,
   type AutoAssignTarget,
@@ -22,7 +24,8 @@ import {
   type TrayReason,
   type PoolFile,
 } from '@figureskatingtools/shared-ui';
-import type { CompetitionDetails, Structure, Category, Segment, SlotTarget, FileMeta } from './types';
+import type { CompetitionDetails, Structure, Category, Segment, SlotTarget, FileMeta,
+  NameMode, TeamPageSettings, TeamTextField } from './types';
 import { attachPreview } from './preview';
 import { escapeHtml, fetchUser, renderSignInView, setupUserMenu, type UserInfo } from '../shell.js';
 
@@ -59,6 +62,13 @@ let poolFiles: PoolFile[] | null = null;
 let poolDisabled = false;
 /** The "uploaded to this tool only" notice is worth saying once, not per file. */
 let poolNoticeShown = false;
+/**
+ * `<competition>::<pool file>::<uploadedUtc>` of every pool schedule this page
+ * session already parsed *by itself*. A parse that fails (or a schedule that
+ * yields no categories) must not be retried on the next details refresh, so the
+ * key is added before the request goes out.
+ */
+const autoParsedSchedules = new Set<string>();
 const openCats = new Set<string>();
 /** Collapsed-by-default state of the "Team rosters" per-category groups. */
 const openRosterCats = new Set<string>();
@@ -124,6 +134,10 @@ const APP_HTML = `
       </div>
     </div>
   </main>
+
+  <footer class="site-footer">
+    <p>Supporting the figure skating community — created with a pinch of AI ❤️</p>
+  </footer>
 `;
 
 function showView(viewId: string) {
@@ -321,6 +335,9 @@ async function openCompetition(id: string, name: string) {
   document.getElementById('retention')!.innerHTML = '';
   document.getElementById('detail-body')!.innerHTML = '<p class="text-muted">Loading…</p>';
   await loadDetails();
+  // The pool listing is fresh now (loadDetails refreshes it), so this is the
+  // first moment we can tell whether the schedule is already sitting there.
+  await autoParsePoolSchedule();
 }
 
 async function loadDetails() {
@@ -436,25 +453,131 @@ const STATUS_TITLE: Record<PhotoStatus, string> = {
   red: 'No picture at all — the team page falls back to a placeholder',
 };
 
+/** Matches `structure.MAX_TEAM_TEXT_FIELDS` — the backend caps the stored list. */
+const MAX_TEAM_TEXT_FIELDS = 6;
+
+const NAME_MODE_LABEL: Record<NameMode, string> = {
+  full: 'Family name + given name',
+  firstNames: 'Given names only',
+  none: 'No names',
+};
+
+/** The competition-wide team-page settings. Mirrors `structure.team_pages_defaults`:
+ * data written before the setting existed means pages on and full names. */
+function teamPageDefaults(s: Structure): TeamPageSettings {
+  return {
+    enabled: s.teamPages?.enabled !== false,
+    nameMode: s.teamPages?.nameMode ?? 'full',
+  };
+}
+
+/** What a category resolves to on its own — its overrides, else the competition
+ * default (mirrors `structure.category_page_enabled` / `category_name_mode`).
+ * This is what its teams inherit, so it is also what their "Default (…)" labels
+ * have to name. */
+function categoryPageSettings(s: Structure, cat: Category): TeamPageSettings {
+  const d = teamPageDefaults(s);
+  return {
+    enabled: cat.pageEnabled ?? d.enabled,
+    nameMode: cat.nameMode ?? d.nameMode,
+  };
+}
+
+/** A team's resolved settings — its own overrides, else its category's (mirrors
+ * `structure.team_page_enabled` / `team_name_mode`). */
+function teamPageEnabled(s: Structure, cat: Category, team: TeamRow): boolean {
+  return team.pageEnabled ?? categoryPageSettings(s, cat).enabled;
+}
+
+function teamNameMode(s: Structure, cat: Category, team: TeamRow): NameMode {
+  return team.nameMode ?? categoryPageSettings(s, cat).nameMode;
+}
+
+/** The two tri-state selects one inheritance level shows. `attr` names the
+ * data-attribute pair its handlers listen on ('cat' or 'team'); `inherited` is
+ * what this level falls back to, so "Default (…)" always reads as the level
+ * directly above — the competition for a category, the category for a team. */
+function pageSettingsHtml(o: {
+  attr: 'cat' | 'team'; id: string; catId: string;
+  level: { pageEnabled?: boolean | null; nameMode?: NameMode | null };
+  inherited: TeamPageSettings; pageLabel: string; skipLabel: string;
+}): string {
+  const opt = (value: string, label: string, selected: boolean) =>
+    `<option value="${value}"${selected ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+  const enabled = o.level.pageEnabled ?? o.inherited.enabled;
+  return `<div class="team-settings">
+      <label>${escapeHtml(o.pageLabel)}
+        <select class="discipline-select" data-${o.attr}-page="${o.id}" data-cat="${o.catId}">
+          ${opt('', `Default (${o.inherited.enabled ? 'created' : 'skipped'})`, o.level.pageEnabled == null)}
+          ${opt('true', 'Create the page', o.level.pageEnabled === true)}
+          ${opt('false', o.skipLabel, o.level.pageEnabled === false)}
+        </select>
+      </label>
+      <label>Skater names
+        <select class="discipline-select" data-${o.attr}-names="${o.id}" data-cat="${o.catId}"
+                ${enabled ? '' : 'disabled'}>
+          ${opt('', `Default (${NAME_MODE_LABEL[o.inherited.nameMode]})`, o.level.nameMode == null)}
+          ${(['full', 'firstNames', 'none'] as NameMode[])
+            .map(m => opt(m, NAME_MODE_LABEL[m], o.level.nameMode === m)).join('')}
+        </select>
+      </label>
+    </div>`;
+}
+
+/** One editable free-text row ("Theme" / "Spies"). */
+function textFieldRowHtml(team: TeamRow, row: TeamTextField): string {
+  return `<div class="team-text-row" data-text-row="${row.id}">
+      <input class="form-input form-input--compact team-text-label" placeholder="Label (e.g. Theme)"
+             value="${escapeHtml(row.label)}" data-text-field="${team.id}" data-text-part="label">
+      <input class="form-input form-input--compact team-text-value" placeholder="Value (e.g. Spies)"
+             value="${escapeHtml(row.value)}" data-text-field="${team.id}" data-text-part="value">
+      <button class="btn btn-xs btn-ghost btn-ghost--danger" data-rm-text="${row.id}"
+              data-team="${team.id}" title="Remove this row">×</button>
+    </div>`;
+}
+
+/** The per-team panel behind the skater-count toggle: what the team's page shows,
+ * and the free-text rows printed on it. */
+function teamPagePanelHtml(s: Structure, cat: Category, team: TeamRow): string {
+  const rows = team.textFields || [];
+  return `<div class="team-row-detail">
+      ${pageSettingsHtml({ attr: 'team', id: team.id, catId: cat.id, level: team,
+                           inherited: categoryPageSettings(s, cat),
+                           pageLabel: 'Team page', skipLabel: 'Skip this team' })}
+      <div class="team-text-fields">
+        <span class="micro-label">Custom rows</span>
+        ${rows.map(r => textFieldRowHtml(team, r)).join('')}
+        ${rows.length < MAX_TEAM_TEXT_FIELDS ? `<button class="btn btn-xs btn-ghost"
+           data-add-text="${team.id}" data-cat="${cat.id}">Add row</button>` : ''}
+      </div>
+    </div>`;
+}
+
 /** One compact team line: status dot, inline name/org edits, skater toggle,
  * Remove, and both photo slots (same SlotTarget objects the backend expects,
  * so drag/drop, chips and one-file-one-slot behave exactly as before). */
-function teamRowHtml(cat: Category, team: TeamRow): string {
+function teamRowHtml(cat: Category, team: TeamRow, s: Structure): string {
   const status = teamPhotoStatus(team);
   const count = team.members?.length || 0;
   const isOpen = openRosterTeams.has(team.id);
+  const skipped = !teamPageEnabled(s, cat, team);
+  const nameMode = teamNameMode(s, cat, team);
   const roster = count
     ? `<ul class="roster-skaters">${team.members.map(m => `<li>${escapeHtml(m)}</li>`).join('')}</ul>`
     : '<span class="team-roster-empty">No roster yet — import the DT_PARTIC XML pair.</span>';
-  return `<div class="team-row ${status === 'red' ? 'team-row--alert' : ''}">
+  return `<div class="team-row ${status === 'red' && !skipped ? 'team-row--alert' : ''} ${skipped ? 'team-row--skipped' : ''}"
+         data-team-row="${team.id}" data-cat="${cat.id}">
       <div class="team-row-main">
         <span class="status-dot is-${status}" title="${escapeHtml(STATUS_TITLE[status])}"></span>
         <input class="form-input form-input--compact team-row-name" placeholder="Team name" value="${escapeHtml(team.name)}"
                data-edit="set_team" data-cat="${cat.id}" data-team="${team.id}" data-field="name">
         <input class="form-input form-input--compact team-row-org" placeholder="Club" value="${escapeHtml(team.org)}"
                data-edit="set_team" data-cat="${cat.id}" data-team="${team.id}" data-field="org">
+        ${skipped ? '<span class="tag-synchro" title="This team gets no page in the protocol">no page</span>'
+          : nameMode !== 'full' ? `<span class="tag-synchro" title="${escapeHtml(NAME_MODE_LABEL[nameMode])}">${
+              nameMode === 'none' ? 'no names' : 'given names'}</span>` : ''}
         <button class="roster-skaters-toggle" data-toggle-roster-team="${team.id}"
-                title="Show or hide the skater names">${count} skater${count === 1 ? '' : 's'}
+                title="Show or hide the team page settings and the skater names">${count} skater${count === 1 ? '' : 's'}
           <span class="toggle-icon">${isOpen ? '▴' : '▾'}</span>
         </button>
         <button class="btn btn-xs btn-ghost btn-ghost--danger" data-rm-team="${team.id}" data-cat="${cat.id}">Remove</button>
@@ -463,13 +586,14 @@ function teamRowHtml(cat: Category, team: TeamRow): string {
         ${slotHtml('Competition photo', { kind: 'teamPhoto', categoryId: cat.id, teamId: team.id }, team.photo)}
         ${slotHtml('Fallback picture', { kind: 'teamPhotoFallback', categoryId: cat.id, teamId: team.id }, team.photoFallback ?? null)}
       </div>
-      ${isOpen ? `<div class="team-row-roster">${roster}</div>` : ''}
+      ${isOpen ? `${teamPagePanelHtml(s, cat, team)}
+      <div class="team-row-roster">${roster}</div>` : ''}
     </div>`;
 }
 
 /** One collapsible per-category roster group. Zero-team synchro categories are
  * included too, so "Add team" is reachable everywhere. */
-function rosterGroupHtml(cat: Category): string {
+function rosterGroupHtml(cat: Category, s: Structure): string {
   const isOpen = openRosterCats.has(cat.id);
   const teams = cat.teams || [];
   const tally: Record<PhotoStatus, number> = { green: 0, yellow: 0, red: 0 };
@@ -491,15 +615,22 @@ function rosterGroupHtml(cat: Category): string {
         </div>
       </div>
       <div class="roster-group-body" style="display:${isOpen ? 'block' : 'none'};">
-        ${teams.map(t => teamRowHtml(cat, t)).join('')
+        <div class="roster-group-settings">
+          <span class="micro-label">Default for this category</span>
+          ${pageSettingsHtml({ attr: 'cat', id: cat.id, catId: cat.id, level: cat,
+                               inherited: teamPageDefaults(s),
+                               pageLabel: 'Team pages', skipLabel: 'Skip every team here' })}
+        </div>
+        ${teams.map(t => teamRowHtml(cat, t, s)).join('')
           || '<p class="section-sub roster-group-empty">No teams here yet — import the rosters or add one manually.</p>'}
       </div>
     </div>`;
 }
 
-/** The whole "Team rosters" body: synchro categories only, in schedule order. */
-function rosterGroupsHtml(cats: Category[]): string {
-  const groups = cats
+/** The whole "Team rosters" body: the competition-wide team-page defaults, then
+ * the synchro categories in schedule order. */
+function rosterGroupsHtml(s: Structure): string {
+  const groups = (s.categories || [])
     .filter(c => c.discipline === 'synchro')
     .slice()
     .sort((a, b) => a.order - b.order);
@@ -507,7 +638,20 @@ function rosterGroupsHtml(cats: Category[]): string {
     return `<p class="section-sub">No synchronized skating categories — team pages, rosters and
       team photos only apply to synchro.</p>`;
   }
-  return `<div class="roster-groups">${groups.map(rosterGroupHtml).join('')}</div>`;
+  const d = teamPageDefaults(s);
+  return `<div class="team-page-defaults">
+      <label class="footer-toggle">
+        <input type="checkbox" id="team-pages-enabled" ${d.enabled ? 'checked' : ''}>
+        Create a presentation page for every team
+      </label>
+      <label class="team-page-names">Skater names
+        <select class="discipline-select" id="team-name-mode" ${d.enabled ? '' : 'disabled'}>
+          ${(['full', 'firstNames', 'none'] as NameMode[]).map(m =>
+            `<option value="${m}"${d.nameMode === m ? ' selected' : ''}>${NAME_MODE_LABEL[m]}</option>`).join('')}
+        </select>
+      </label>
+    </div>
+    <div class="roster-groups">${groups.map(c => rosterGroupHtml(c, s)).join('')}</div>`;
 }
 
 /** Persistent status panel for the last roster import (or automatic re-match).
@@ -648,6 +792,18 @@ function renderDetails() {
        </div>
        <p class="section-sub">An ISU <strong>DT_SCHEDULE</strong> XML is preferred — it carries exact times, disciplines, segments and the ice rink.</p>`;
 
+  // The schedule FS Manager pushed into the shared pool is one click away (and
+  // is parsed on its own when the competition has no categories yet).
+  const poolSchedule = scheduleCandidates()[0];
+  const poolScheduleHtml = poolSchedule
+    ? `<p class="section-sub">${s.scheduleParsed
+          ? 'A schedule is available in competition files'
+          : 'Schedule found in competition files'}:
+         <strong>${escapeHtml(poolSchedule.name)}</strong>
+         <button class="btn btn-xs btn-ghost" id="btn-pool-schedule">${
+           s.scheduleParsed ? 'Replace from it' : 'Use it'}</button></p>`
+    : '';
+
   const gen = details.generatedFiles || [];
   const genHtml = gen.length ? gen.map(g => `
       <div class="gen-file">
@@ -676,6 +832,7 @@ function renderDetails() {
     <div class="section">
       <div class="section-head"><h3>Schedule</h3></div>
       ${scheduleSection}
+      ${poolScheduleHtml}
     </div>
 
     <div class="section">
@@ -765,6 +922,17 @@ function renderDetails() {
             <li><span class="status-dot is-red"></span> <strong>Red</strong> — no picture at all, so
               the team page shows a placeholder; the whole row is highlighted.</li>
           </ul>
+          <strong>What the team pages show</strong>
+          <ul>
+            <li>The two controls above set the whole competition; open a team to override either
+              for that team alone, or to add the free-text rows its page prints
+              ("Free Skating theme: Spies").</li>
+            <li>A team marked <strong>no page</strong> is left out of the protocol entirely — no
+              photo, no names, no text rows. It still counts towards the information page's
+              competition units.</li>
+            <li><strong>No names</strong> keeps the page but drops the skater list, for when a
+              roster cannot be published.</li>
+          </ul>
         </span></span></h3>
         <div class="section-head-actions">
           <button class="btn btn-xs btn-ghost" id="btn-import-rosters">Import teams (DT_PARTIC)…</button>
@@ -774,7 +942,7 @@ function renderDetails() {
       <p class="section-sub">Everything team-related lives here: names, rosters and both pictures.
         Assign the <strong>Total Results</strong> PDFs first, then import the DT_PARTIC XML pair —
         see <span class="help-hint">?</span> for the full flow and the colour codes.</p>
-      ${rosterGroupsHtml(s.categories || [])}
+      ${rosterGroupsHtml(s)}
       ${rosterReportHtml(s)}
     </div>` : ''}
 
@@ -871,6 +1039,83 @@ function wireDetail() {
       editStructure(payload, false);
     }));
 
+  // Competition-wide team-page defaults (same optimistic pattern as the footer
+  // band toggle; the re-render refreshes every team's "Default (…)" label).
+  document.getElementById('team-pages-enabled')?.addEventListener('change', e => {
+    const enabled = (e.target as HTMLInputElement).checked;
+    if (details) details.structure.teamPages = { ...teamPageDefaults(details.structure), enabled };
+    editStructure({ op: 'set_team_pages', enabled }, false);
+    renderDetails();
+  });
+  document.getElementById('team-name-mode')?.addEventListener('change', e => {
+    const nameMode = (e.target as HTMLSelectElement).value as NameMode;
+    if (details) details.structure.teamPages = { ...teamPageDefaults(details.structure), nameMode };
+    editStructure({ op: 'set_team_pages', nameMode }, false);
+    renderDetails();
+  });
+
+  // Per-category defaults and per-team overrides. '' is the tri-state's
+  // "inherit", which the backend stores as null — hence the explicit null rather
+  // than an omitted key. Each re-renders, because the level below shows what it
+  // inherits in its "Default (…)" labels and in the collapsed row's pills.
+  body.querySelectorAll<HTMLSelectElement>('[data-cat-page]').forEach(sel =>
+    sel.addEventListener('change', () => {
+      const categoryId = sel.dataset.catPage!;
+      const pageEnabled = sel.value === '' ? null : sel.value === 'true';
+      const cat = findCategory(categoryId);
+      if (cat) cat.pageEnabled = pageEnabled;
+      editStructure({ op: 'set_category', categoryId, pageEnabled }, false);
+      renderDetails();
+    }));
+  body.querySelectorAll<HTMLSelectElement>('[data-cat-names]').forEach(sel =>
+    sel.addEventListener('change', () => {
+      const categoryId = sel.dataset.catNames!;
+      const nameMode = sel.value === '' ? null : (sel.value as NameMode);
+      const cat = findCategory(categoryId);
+      if (cat) cat.nameMode = nameMode;
+      editStructure({ op: 'set_category', categoryId, nameMode }, false);
+      renderDetails();
+    }));
+  body.querySelectorAll<HTMLSelectElement>('[data-team-page]').forEach(sel =>
+    sel.addEventListener('change', () => {
+      const teamId = sel.dataset.teamPage!;
+      const pageEnabled = sel.value === '' ? null : sel.value === 'true';
+      const team = findTeam(sel.dataset.cat!, teamId);
+      if (team) team.pageEnabled = pageEnabled;
+      editStructure({ op: 'set_team', categoryId: sel.dataset.cat, teamId, pageEnabled }, false);
+      renderDetails();
+    }));
+  body.querySelectorAll<HTMLSelectElement>('[data-team-names]').forEach(sel =>
+    sel.addEventListener('change', () => {
+      const teamId = sel.dataset.teamNames!;
+      const nameMode = sel.value === '' ? null : (sel.value as NameMode);
+      const team = findTeam(sel.dataset.cat!, teamId);
+      if (team) team.nameMode = nameMode;
+      editStructure({ op: 'set_team', categoryId: sel.dataset.cat, teamId, nameMode }, false);
+      renderDetails();
+    }));
+
+  // Free-text rows. The generic [data-edit] handler above sends one scalar field
+  // and cannot express a list, so these send the whole array — the same wholesale
+  // replace `members` uses.
+  body.querySelectorAll<HTMLInputElement>('[data-text-field]').forEach(inp =>
+    inp.addEventListener('change', () => saveTextFields(inp.closest('.team-row')!)));
+  body.querySelectorAll<HTMLElement>('[data-add-text]').forEach(b =>
+    b.addEventListener('click', () => {
+      const team = findTeam(b.dataset.cat!, b.dataset.addText!);
+      if (!team) return;
+      const rows = team.textFields || (team.textFields = []);
+      if (rows.length >= MAX_TEAM_TEXT_FIELDS) return;
+      rows.push({ id: `new-${Date.now()}`, label: '', value: '' });
+      renderDetails();
+    }));
+  body.querySelectorAll<HTMLElement>('[data-rm-text]').forEach(b =>
+    b.addEventListener('click', () => {
+      const row = b.closest('.team-row') as HTMLElement | null;
+      b.closest('.team-text-row')?.remove();
+      if (row) saveTextFields(row);
+    }));
+
   // Discipline change (re-render to toggle synchro team UI).
   body.querySelectorAll<HTMLSelectElement>('[data-discipline]').forEach(sel =>
     sel.addEventListener('change', () =>
@@ -928,6 +1173,11 @@ function wireDetail() {
     e.preventDefault(); schedDrop.classList.remove('dragover');
     if (e.dataTransfer?.files?.[0]) parseSchedule(e.dataTransfer.files[0]);
   });
+  // Parse the schedule the pool already holds (no download, no upload).
+  document.getElementById('btn-pool-schedule')?.addEventListener('click', () => {
+    const candidate = scheduleCandidates()[0];
+    if (candidate) void parseScheduleFromPool(candidate);
+  });
   document.getElementById('btn-reparse')?.addEventListener('click', () => {
     const inp = document.createElement('input');
     inp.type = 'file'; inp.accept = '.xml,.pdf';
@@ -947,6 +1197,10 @@ function wireDetail() {
   // Import files another tool (or FSM) put in this competition's shared pool.
   document.getElementById('btn-pool-import')?.addEventListener('click', () => void importPoolFiles());
   document.querySelector('.pool-import .pool-file-list')?.addEventListener('change', syncPoolImportButton);
+  document.getElementById('pool-show-all')?.addEventListener('change', (e) => {
+    writePoolShowAll((e.currentTarget as HTMLInputElement).checked);
+    renderDetails();   // re-renders the list; the <details> stays open
+  });
   document.getElementById('btn-pool-select-all')?.addEventListener('click', (e) => {
     const all = poolChecks();
     const everySelected = all.length > 0 && all.every(c => c.checked);
@@ -1195,20 +1449,81 @@ async function refreshPoolFiles(): Promise<void> {
   }
 }
 
-/** Pool files this competition has not imported yet. */
-function pendingPoolFiles(): PoolFile[] {
+/**
+ * "Show all files" in the import list. Off by default: the pool also holds the
+ * Judge Papers sheets FS Manager pushes for every segment, which this tool never
+ * uses, and they would otherwise bury the two or three files that matter.
+ */
+const POOL_SHOW_ALL_KEY = 'pg:pool-show-all:v1';
+let showAllPoolFiles = readPoolShowAll();
+
+function readPoolShowAll(): boolean {
+  try { return localStorage.getItem(POOL_SHOW_ALL_KEY) === '1'; } catch { return false; }
+}
+function writePoolShowAll(value: boolean): void {
+  showAllPoolFiles = value;
+  try { localStorage.setItem(POOL_SHOW_ALL_KEY, value ? '1' : '0'); } catch { /* private mode etc. */ }
+}
+
+/**
+ * Does Protocol Generator have any use for this pool file?
+ *
+ * Judged by the FSM suffix (everything after the last underscore) against the
+ * recognizer's slot table: a suffix it marks `skip` is a Judge Papers sheet
+ * (start lists, judges' sheets, referee/technical sheets…). Unknown suffixes stay
+ * visible — they may be anything a user uploaded by hand.
+ */
+function isProtocolGeneratorFile(name: string): boolean {
+  const suffix = name.slice(name.lastIndexOf('_') + 1);
+  return SUFFIX_SLOTS[suffix]?.kind !== 'skip';
+}
+
+/** Pool PDFs this competition has not imported yet (XML never shows here). */
+function importablePoolFiles(): PoolFile[] {
   if (!poolFiles || !details) return [];
   const known = new Set<string>();
   Object.values(details.structure.files || {}).forEach(m => {
     if (m.poolName) known.add(m.poolName);
     if (m.filename) known.add(m.filename);
   });
-  return poolFiles.filter(f => !known.has(f.name));
+  // Only PDFs: the ODF XML messages (schedule updates, participants…) are data
+  // feeds, not protocol pages. The schedule itself is handled by the Schedule
+  // section (parsed, not imported as a loose file).
+  return poolFiles.filter(f => /\.pdf$/i.test(f.name)
+    && !known.has(f.name) && !isScheduleCandidate(f.name));
+}
+
+/** The import list as shown: everything, or only what this tool uses. */
+function pendingPoolFiles(): PoolFile[] {
+  const all = importablePoolFiles();
+  return showAllPoolFiles ? all : all.filter(f => isProtocolGeneratorFile(f.name));
+}
+
+/**
+ * Is this pool file the competition schedule?
+ *
+ * FS Manager pushes the ODF schedule as `DT_SCHEDULE_FSK….xml` and its print as
+ * `…_CompetitionSchedule.pdf`. The `DT_SCHEDULE_UPDATE_…_<stamp>.xml` increments
+ * are *not* schedules — they only carry the changes since the full export, so
+ * parsing one would build a structure out of a handful of units.
+ */
+function isScheduleCandidate(name: string): boolean {
+  if (/^DT_SCHEDULE_UPDATE/i.test(name)) return false;
+  return /^DT_SCHEDULE_[^/]*\.xml$/i.test(name) || /_CompetitionSchedule\.pdf$/i.test(name);
+}
+
+/** Schedules in the pool, best first: the structured XML beats the PDF print,
+ * and within a format the newest push wins. */
+function scheduleCandidates(): PoolFile[] {
+  const isXml = (f: PoolFile) => (/\.xml$/i.test(f.name) ? 0 : 1);
+  return (poolFiles || []).filter(f => isScheduleCandidate(f.name)).sort((a, b) =>
+    isXml(a) - isXml(b) || (b.uploadedUtc || '').localeCompare(a.uploadedUtc || ''));
 }
 
 function poolImportHtml(): string {
+  const all = importablePoolFiles();
   const pending = pendingPoolFiles();
-  if (!pending.length) return '';
+  if (!all.length) return '';
   // Collapsed by default; a re-render (details refresh) keeps it open.
   const wasOpen = document.querySelector('details.pool-import')?.hasAttribute('open') ?? false;
   return `<details class="pool-import"${wasOpen ? ' open' : ''}>
@@ -1217,9 +1532,13 @@ function poolImportHtml(): string {
         <span class="pool-import-count">${pending.length} available</span>
       </summary>
       <p class="section-sub">Uploaded for this competition in another tool — select the files you need and press Import. Recognized files go straight into their slots.</p>
+      <label class="pool-import-toggle">
+        <input type="checkbox" id="pool-show-all"${showAllPoolFiles ? ' checked' : ''}>
+        Show all files
+      </label>
       <div class="pool-file-list">${pending.map(f =>
         `<label class="pool-file" title="${escapeHtml(f.sourceTool || f.source)}">
-           <input type="checkbox" class="pool-file-check" value="${escapeHtml(f.name)}">
+           <input type="checkbox" class="pool-file-check" value="${escapeHtml(f.name)}" data-source="${escapeHtml(f.source)}">
            <span class="pool-file-name">${escapeHtml(f.name)}</span>
          </label>`).join('')}</div>
       <div class="pool-import-actions">
@@ -1244,16 +1563,21 @@ function syncPoolImportButton(): void {
 /** Import the selected pool files, auto-placing what we can. */
 async function importPoolFiles(): Promise<void> {
   if (!currentId || !boundPlatformId) return;
-  const chosen = poolChecks().filter(c => c.checked).map(c => c.value);
+  // The pool has two folders (uploads/, fsm/); the checkbox carries which one
+  // this row came from, so the import reads the right one.
+  const chosen = poolChecks().filter(c => c.checked)
+    .map(c => ({ name: c.value, source: c.dataset.source || 'upload' }));
   if (!chosen.length) return;
 
   const btn = document.getElementById('btn-pool-import') as HTMLButtonElement | null;
   if (btn) { btn.disabled = true; btn.textContent = 'Importing…'; }
 
-  const outcomes = await planBatch(chosen);
+  const outcomes = await planBatch(chosen.map(c => c.name));
   let failed = 0;
   for (let i = 0; i < chosen.length; i++) {
-    const params = new URLSearchParams({ competition: currentId, name: chosen[i]! });
+    const pick = chosen[i]!;
+    const params = new URLSearchParams(
+      { competition: currentId, name: pick.name, source: pick.source });
     applyAutoParams(params, outcomes?.[i]);
     try {
       const resp = await fetch(apiUrl(`/import_platform_file?${params.toString()}`), { method: 'POST' });
@@ -1328,16 +1652,17 @@ async function autoPlaceTrayFiles(): Promise<void> {
  */
 async function uploadOneFile(file: File, params: URLSearchParams): Promise<void> {
   if (boundPlatformId && !poolDisabled) {
-    let poolName: string | null = null;
+    let pooled: PoolFile | null = null;
     try {
-      poolName = (await uploadCompetitionFile(boundPlatformId, file, 'protocolgenerator')).name;
+      pooled = await uploadCompetitionFile(boundPlatformId, file, 'protocolgenerator');
     } catch {
       notePoolUnavailable();
     }
-    if (poolName) {
+    if (pooled) {
       const importParams = new URLSearchParams(params);
       importParams.delete('filename');
-      importParams.set('name', poolName);
+      importParams.set('name', pooled.name);
+      importParams.set('source', pooled.source);
       try {
         const resp = await fetch(apiUrl(`/import_platform_file?${importParams.toString()}`), { method: 'POST' });
         if (resp.ok) return;
@@ -1391,6 +1716,40 @@ async function deleteFile(fileId: string) {
   } catch { alert('Could not delete file.'); }
 }
 
+/** A category in the loaded structure, or null once a re-render has moved on. */
+function findCategory(catId: string): Category | null {
+  return (details?.structure.categories || []).find(c => c.id === catId) || null;
+}
+
+/** A team in the loaded structure, or null once a re-render has moved on. */
+function findTeam(catId: string, teamId: string): TeamRow | null {
+  return (findCategory(catId)?.teams || []).find(t => t.id === teamId) || null;
+}
+
+/**
+ * Persist one team's free-text rows, read back out of the DOM.
+ *
+ * The rows are replaced wholesale (like `members`), so the array is rebuilt in
+ * DOM order — which is the order the team page prints them in. A row added in the
+ * browser carries a temporary id; sending it empty lets the backend mint the real
+ * one, which is also why this reloads rather than mutating local state: the reply
+ * carries the minted ids, the trimmed values, and the removal of anything left
+ * blank on both sides.
+ */
+function saveTextFields(row: HTMLElement) {
+  const teamId = row.dataset.teamRow!;
+  const categoryId = row.dataset.cat!;
+  const textFields: TeamTextField[] = [];
+  row.querySelectorAll<HTMLElement>('.team-text-row').forEach(el => {
+    const part = (name: string) =>
+      (el.querySelector(`[data-text-part="${name}"]`) as HTMLInputElement).value;
+    const id = el.dataset.textRow!;
+    textFields.push({ id: id.startsWith('new-') ? '' : id,
+                     label: part('label'), value: part('value') });
+  });
+  editStructure({ op: 'set_team', categoryId, teamId, textFields }, true);
+}
+
 async function editStructure(payload: any, reload: boolean) {
   if (!currentId) return;
   try {
@@ -1416,6 +1775,56 @@ async function parseSchedule(file: File, force = false) {
   } catch { alert('Network error parsing schedule.'); }
 }
 
+/**
+ * Parse a schedule that is already in the competition file pool.
+ *
+ * Same route as the drop box, without the bytes: the backend reads the named
+ * pool file itself (the folder comes from the competition's platform binding),
+ * so nothing has to be downloaded into the browser and back.
+ */
+async function parseScheduleFromPool(file: PoolFile, force = false): Promise<void> {
+  if (!currentId) return;
+  const url = `/parse_schedule?competition=${encodeURIComponent(currentId)}`
+    + `&poolName=${encodeURIComponent(file.name)}&source=${encodeURIComponent(file.source)}`
+    + (force ? '&force=true' : '');
+  try {
+    const resp = await fetch(apiUrl(url), { method: 'POST' });
+    if (resp.status === 409) {
+      const detail = await resp.text();
+      // The other 409 on this route is "competition not linked to the platform",
+      // which no confirmation can fix.
+      if (detail.includes('not_bound')) { alert('Schedule parse failed: ' + detail); return; }
+      if (confirm('This competition already has categories. Replace them from the schedule in the competition files?')) {
+        return parseScheduleFromPool(file, true);
+      }
+      return;
+    }
+    if (!resp.ok) { alert('Schedule parse failed: ' + (await resp.text())); return; }
+    await loadDetails();
+    flash(`Schedule parsed from competition files: ${file.name}`);
+  } catch { alert('Network error parsing schedule.'); }
+}
+
+/**
+ * Parse the pool schedule on the user's behalf when there is nothing to lose.
+ *
+ * Runs once per (competition, pool file) after a competition is opened: only
+ * with an unparsed schedule and no categories at all, so it can never replace
+ * work someone did by hand — and the guard set means a schedule that fails to
+ * parse is not retried on every refresh.
+ */
+async function autoParsePoolSchedule(): Promise<void> {
+  if (!currentId || !details) return;
+  const s = details.structure;
+  if (s.scheduleParsed || (s.categories || []).length) return;
+  const candidate = scheduleCandidates()[0];
+  if (!candidate) return;
+  const key = `${currentId}::${candidate.name}::${candidate.uploadedUtc || ''}`;
+  if (autoParsedSchedules.has(key)) return;
+  autoParsedSchedules.add(key);
+  await parseScheduleFromPool(candidate);
+}
+
 function pickRosters() {
   const inp = document.createElement('input');
   inp.type = 'file'; inp.accept = '.xml'; inp.multiple = true;
@@ -1423,19 +1832,15 @@ function pickRosters() {
     const files = Array.from(inp.files || []);
     if (!files.length) return;
     const texts = await Promise.all(files.map(f => f.text()));
-    let teamsXml = '', particXml = '';
-    texts.forEach(t => {
-      if (/DocumentType="DT_PARTIC_TEAMS"/.test(t)) teamsXml = t;
-      else if (/DocumentType="DT_PARTIC"/.test(t)) particXml = t;
-    });
-    // Fallbacks if DocumentType isn't present: use filenames, then order.
-    if (!teamsXml || !particXml) {
-      files.forEach((f, i) => {
-        if (/teams/i.test(f.name) && !teamsXml) teamsXml = texts[i];
-        else if (!particXml) particXml = texts[i];
-      });
+    const { teamsXml, particXml } = classifyRosterXml(
+      files.map((f, i) => ({ name: f.name, text: texts[i] })));
+    // Only refuse when nothing in the selection is a roster export at all: a
+    // DT_PARTIC on its own is a supported re-match against the archived roster,
+    // and the backend answers for itself when there is no archive yet.
+    if (!teamsXml && !particXml) {
+      alert('Neither selected file looks like a DT_PARTIC or DT_PARTIC_TEAMS export.');
+      return;
     }
-    if (!teamsXml) { alert('Could not find a DT_PARTIC_TEAMS file among the selected files.'); return; }
     await importRosters(teamsXml, particXml);
   };
   inp.click();

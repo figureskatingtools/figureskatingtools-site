@@ -15,6 +15,13 @@ ROUTES = [
     ("update", fa._update_competition, "PATCH",
      {"body": {"venue": "Helsinki"}, "route_params": {"id": "abc"}}),
     ("delete", fa._delete_competition, "DELETE", {"route_params": {"id": "abc"}}),
+    ("hovtp list", fa._list_hovtp_sources, "GET", {"route_params": {"id": "abc"}}),
+    ("hovtp accept", fa._accept_hovtp_source, "POST",
+     {"body": {"days": 1}, "route_params": {"id": "abc", "ip": "10.0.0.1"}}),
+    ("hovtp reject", fa._deny_hovtp_source, "POST",
+     {"route_params": {"id": "abc", "ip": "10.0.0.1"}}),
+    ("hovtp revoke", fa._deny_hovtp_source, "DELETE",
+     {"route_params": {"id": "abc", "ip": "10.0.0.1"}}),
 ]
 
 
