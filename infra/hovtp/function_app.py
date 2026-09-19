@@ -230,6 +230,29 @@ def _proxy_secret_ok(req: func.HttpRequest) -> bool:
     return hmac.compare_digest(provided, expected)
 
 
+def _proxy_header_state(req: func.HttpRequest) -> str:
+    """
+    What `X-Proxy-Secret` looked like, as the `proxyHeader` log field:
+    'absent', 'present' or 'mismatch'. Never the value — neither the provided
+    one nor the expected one — in any of the three states.
+
+    Recorded on ACCEPTED requests too, which is the whole point: while the gate
+    fails open (PROXY_SHARED_SECRET unset, both environments today) this is the
+    only way to answer "how much traffic would a set secret reject, and from
+    where?" before setting it. Once it is set, a 403's record says which it was.
+
+    With no secret configured nothing can mismatch — there is nothing to compare
+    against — so an unrecognised value still reads 'present'.
+    """
+    provided = (req.headers.get("X-Proxy-Secret") or "").strip()
+    if not provided:
+        return "absent"
+    expected = _setting("PROXY_SHARED_SECRET")
+    if expected and not hmac.compare_digest(provided, expected):
+        return "mismatch"
+    return "present"
+
+
 def _allowed_document_types() -> set[str]:
     raw = _setting("HOVTP_ALLOWED_DOCUMENT_TYPES", DEFAULT_ALLOWED_DOCUMENT_TYPES)
     return {part.strip().upper() for part in raw.split(",") if part.strip()}
@@ -1216,9 +1239,56 @@ def _hovtp_post(req: func.HttpRequest, record: dict) -> func.HttpResponse:
     return hovtp_response(200, last_serial)
 
 
+def _record_caller(req: func.HttpRequest, record: dict) -> None:
+    """
+    Fill in who the caller claims to be, for the refusal path only — the normal
+    handlers already do this once they have parsed the request.
+
+    Without it a 403 logs blank `origin`, `session`, `environment` and `ip`, so
+    the one question a refusal has to answer ("who was that?") has no answer.
+    It reads HEADERS ONLY: the body is still never read and no storage is
+    touched before the refusal, which is the part that matters.
+
+    Everything here is best effort. A caller worth identifying is exactly the
+    one likely to send a malformed header set, and neither `parse_hovtp_headers`
+    (400 on a bad session id) nor `client_ip` (500 when no address can be
+    determined) may be allowed to turn the 403 into another status.
+    """
+    try:
+        hdr = parse_hovtp_headers(req.headers, status_request=req.method == "OPTIONS")
+        record.update({
+            "origin": hdr.origin,
+            "environment": hdr.environment,
+            "session": hdr.session_id,
+            "serial": hdr.serial,
+        })
+    except Exception:
+        # Unparseable. `parse_hovtp_headers` is all-or-nothing, so one bad field
+        # — a non-numeric serial, say — would otherwise cost us every other one,
+        # including the session id, which is the most identifying thing FS
+        # Manager sends. Recover each identity header independently so a bad
+        # field only blanks itself. These are raw strings and may be invalid; on
+        # a refusal record they are evidence, not state. `serial` is left alone
+        # deliberately: it is typed (int or null) everywhere else, and a refusal
+        # is not worth putting a string in it.
+        for field, header in (("origin", "X-HOVTP-Origin"),
+                              ("environment", "X-HOVTP-Environment"),
+                              ("session", "X-HOVTP-Session-Id")):
+            try:
+                record[field] = (req.headers.get(header) or "").strip()
+            except Exception:
+                pass
+
+    try:
+        record["ip"] = client_ip(req.headers, _trusted_hops())
+    except Exception:
+        pass
+
+
 def _handle_hovtp(req: func.HttpRequest) -> func.HttpResponse:
     record = {
         "method": req.method,
+        "proxyHeader": "",
         "ip": "",
         "origin": "",
         "environment": "",
@@ -1241,7 +1311,9 @@ def _handle_hovtp(req: func.HttpRequest) -> func.HttpResponse:
         # Before anything else, and for POST and OPTIONS alike: a request that
         # did not come through our publishing layer may not be trusted about
         # who sent it, and OPTIONS leaks the session cursor.
+        record["proxyHeader"] = _proxy_header_state(req)
         if not _proxy_secret_ok(req):
+            _record_caller(req, record)
             raise HovtpError(403, "forbidden")
         if req.method == "OPTIONS":
             response = _hovtp_options(req, record)

@@ -11,9 +11,9 @@ import fixtures
 import function_app as fa
 from conftest import COMPETITION_CODE, COMPETITION_ID, DEFAULT_IP, SESSION_ID, make_request
 
-FIELDS = {"method", "ip", "origin", "environment", "session", "serial", "lastSerial",
-          "code", "competitionId", "documentType", "documentCode", "documentSubtype",
-          "outcome", "status", "reason", "bytes", "blobs"}
+FIELDS = {"method", "proxyHeader", "ip", "origin", "environment", "session", "serial",
+          "lastSerial", "code", "competitionId", "documentType", "documentCode",
+          "documentSubtype", "outcome", "status", "reason", "bytes", "blobs"}
 
 
 def _records(caplog):
@@ -29,6 +29,9 @@ def test_a_stored_message_logs_every_field(table, blobs, caplog):
     record = _records(caplog)[-1]
     assert set(record) == FIELDS
     assert record["method"] == "POST"
+    # No X-Proxy-Secret was sent and none is configured: the state the audit
+    # counts while the gate still fails open. See test_proxy_secret.py.
+    assert record["proxyHeader"] == "absent"
     assert record["ip"] == DEFAULT_IP
     assert record["outcome"] == "quarantined"
     assert record["status"] == 200

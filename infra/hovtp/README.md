@@ -298,11 +298,42 @@ probe would then never reach the function.
 ## Logging
 
 One structured line per request, `logging.info("hovtp " + <json>)`, with
-`method, ip, origin, environment, session, serial, lastSerial, code,
-competitionId, documentType, documentCode, documentSubtype, outcome, status,
-reason, bytes, blobs`. `outcome` is one of `ok | quarantined | dropped |
+`method, proxyHeader, ip, origin, environment, session, serial, lastSerial,
+code, competitionId, documentType, documentCode, documentSubtype, outcome,
+status, reason, bytes, blobs`. `outcome` is one of `ok | quarantined | dropped |
 rejected | out_of_sync | bad_request | unknown_code | quota | disabled | error`.
 Bodies and full header dumps are never logged.
+
+`proxyHeader` is the audit trail for the `X-Proxy-Secret` gate and is recorded
+on accepted requests as much as on refused ones:
+
+| value | meaning |
+| --- | --- |
+| `absent` | no `X-Proxy-Secret` header — with the secret set, this caller is refused |
+| `present` | the header was sent, and matches when `PROXY_SHARED_SECRET` is set (nothing is configured to compare against when it is unset) |
+| `mismatch` | the header was sent and does not match the configured secret |
+
+That is what makes the gate measurable before it is enforced: while
+`PROXY_SHARED_SECRET` is unset the listener refuses nothing, so the callers a
+set secret would start rejecting can be counted first. The record is one JSON
+string inside `traces.message` (`logging.info("hovtp " + json)`), not a set of
+Kusto columns, so the JSON has to be parsed before any field can be filtered on:
+
+```kusto
+traces
+| where timestamp > ago(24h)
+| where message startswith 'hovtp {'
+| extend d = parse_json(substring(message, 6))
+| summarize n = count() by proxyHeader = tostring(d.proxyHeader), ip = tostring(d.ip)
+| order by n desc
+```
+
+Rows with `proxyHeader == "absent"` are what enforcement would refuse; if there
+are none, setting the secret changes nothing for anyone. The secret value itself
+is never logged, in any state. A refusal's record also carries the caller's
+`ip`, `origin`, `session` and `environment` — parsed from the headers for the
+log only; the request is still refused before its body is read and before any
+storage call.
 
 ## Three things to confirm at runtime
 
