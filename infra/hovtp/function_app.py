@@ -1263,14 +1263,21 @@ def _record_caller(req: func.HttpRequest, record: dict) -> None:
             "serial": hdr.serial,
         })
     except Exception:
-        # Unparseable: keep the raw identity headers, which are plain strings.
-        try:
-            record.update({
-                "origin": (req.headers.get("X-HOVTP-Origin") or "").strip(),
-                "environment": (req.headers.get("X-HOVTP-Environment") or "").strip(),
-            })
-        except Exception:
-            pass
+        # Unparseable. `parse_hovtp_headers` is all-or-nothing, so one bad field
+        # — a non-numeric serial, say — would otherwise cost us every other one,
+        # including the session id, which is the most identifying thing FS
+        # Manager sends. Recover each identity header independently so a bad
+        # field only blanks itself. These are raw strings and may be invalid; on
+        # a refusal record they are evidence, not state. `serial` is left alone
+        # deliberately: it is typed (int or null) everywhere else, and a refusal
+        # is not worth putting a string in it.
+        for field, header in (("origin", "X-HOVTP-Origin"),
+                              ("environment", "X-HOVTP-Environment"),
+                              ("session", "X-HOVTP-Session-Id")):
+            try:
+                record[field] = (req.headers.get(header) or "").strip()
+            except Exception:
+                pass
 
     try:
         record["ip"] = client_ip(req.headers, _trusted_hops())

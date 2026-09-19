@@ -314,12 +314,26 @@ on accepted requests as much as on refused ones:
 | `mismatch` | the header was sent and does not match the configured secret |
 
 That is what makes the gate measurable before it is enforced: while
-`PROXY_SHARED_SECRET` is unset the listener refuses nothing, so
-`hovtp | where proxyHeader != "present"` in App Insights is the list of callers
-a set secret would start rejecting. The value itself is never logged, in any
-state. A refusal's record also carries the caller's `ip`, `origin`, `session`
-and `environment` — parsed from the headers for the log only; the request is
-still refused before its body is read and before any storage call.
+`PROXY_SHARED_SECRET` is unset the listener refuses nothing, so the callers a
+set secret would start rejecting can be counted first. The record is one JSON
+string inside `traces.message` (`logging.info("hovtp " + json)`), not a set of
+Kusto columns, so the JSON has to be parsed before any field can be filtered on:
+
+```kusto
+traces
+| where timestamp > ago(24h)
+| where message startswith 'hovtp {'
+| extend d = parse_json(substring(message, 6))
+| summarize n = count() by proxyHeader = tostring(d.proxyHeader), ip = tostring(d.ip)
+| order by n desc
+```
+
+Rows with `proxyHeader == "absent"` are what enforcement would refuse; if there
+are none, setting the secret changes nothing for anyone. The secret value itself
+is never logged, in any state. A refusal's record also carries the caller's
+`ip`, `origin`, `session` and `environment` — parsed from the headers for the
+log only; the request is still refused before its body is read and before any
+storage call.
 
 ## Three things to confirm at runtime
 

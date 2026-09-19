@@ -289,10 +289,37 @@ def test_garbage_headers_still_refuse_with_403_and_not_500(table, blobs, caplog,
     assert record["proxyHeader"] == "mismatch"
     assert record["outcome"] == "forbidden"
     assert record["status"] == 403
-    # Nothing parseable to identify, but what was readable is still there.
+    # Nothing parses, but the raw headers are still evidence about the caller,
+    # so each is recovered on its own rather than lost with the parse.
     assert record["origin"] == "FSM"
-    assert record["session"] == ""
-    assert record["ip"] == ""
+    assert record["session"] == "not-a-uuid"
+    assert record["serial"] is None      # typed field, never a raw string
+    assert record["ip"] == ""            # client_ip found no address at all
+    assert SECRET not in json.dumps(record)
+    assert blobs.blobs == {}
+    assert table.writes() == []
+
+
+def test_one_bad_header_does_not_blank_the_others(table, blobs, caplog, monkeypatch):
+    # parse_hovtp_headers is all-or-nothing, so a single malformed field used to
+    # cost the whole identity: a refused caller with a perfectly good session id
+    # and a non-numeric serial logged session "". That is the common shape of a
+    # misconfigured sender, and the session id is the most identifying thing FS
+    # Manager sends — exactly what a refusal has to keep hold of.
+    monkeypatch.setenv("PROXY_SHARED_SECRET", SECRET)
+    session = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+
+    with caplog.at_level(logging.INFO):
+        response = _post(body=b"<OdfBody/>",
+                         headers={"X-Proxy-Secret": "nope",
+                                  "X-HOVTP-Session-Id": session,
+                                  "X-HOVTP-Serial-Number": "not-a-number"})
+
+    assert response.status_code == 403
+    record = _record(caplog)
+    assert record["session"] == session      # kept despite the bad serial
+    assert record["origin"] == "FSM"
+    assert record["serial"] is None
     assert SECRET not in json.dumps(record)
     assert blobs.blobs == {}
     assert table.writes() == []
