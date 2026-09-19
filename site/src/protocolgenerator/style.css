@@ -865,8 +865,15 @@ input[type="checkbox"] { accent-color: var(--ink); }
   border-top: 1px solid var(--line);
 }
 .team-settings { display: flex; flex-wrap: wrap; gap: 1rem; }
-.team-text-fields { display: flex; flex-direction: column; gap: 0.5rem; }
-.team-text-group { display: flex; flex-direction: column; gap: 0.25rem; align-items: flex-start; }
+/* The category's own defaults, sitting above its team rows. */
+.roster-group-settings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.35rem 1rem;
+  padding: 0.35rem 0.4rem 0.55rem;
+}
+.team-text-fields { display: flex; flex-direction: column; gap: 0.35rem; align-items: flex-start; }
 .team-text-row { display: flex; align-items: center; gap: 0.4rem; width: 100%; }
 .team-text-label { flex: 1 1 10rem; min-width: 6rem; }
 .team-text-value { flex: 2 1 16rem; min-width: 8rem; }

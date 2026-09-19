@@ -32,17 +32,17 @@ export interface Podium {
  * skater list. */
 export type NameMode = 'full' | 'firstNames' | 'none';
 
-/** One free-typed row printed on a team page ("Free Skating theme: Spies").
- * `segmentId` null = the row belongs to the team rather than to a segment. */
+/** One free-typed row printed on a team page ("Theme: Spies"). The rows are a
+ * flat per-team list, printed in stored order. */
 export interface TeamTextField {
   id: string;
-  segmentId: string | null;
   label: string;
   value: string;
 }
 
-/** Competition-wide team-page defaults; absent on data written before the
- * setting existed, which means pages on and full names. */
+/** Team-page settings resolved to a value — what a level hands the one below it.
+ * Competition-wide they are absent on data written before the setting existed,
+ * which means pages on and full names. */
 export interface TeamPageSettings {
   enabled: boolean;
   nameMode: NameMode;
@@ -59,7 +59,8 @@ export interface Team {
    * when the team has no competition (kiss'n'cry) photo. */
   photoFallback?: string | null;
   members: string[];
-  /** Team-page overrides; null/absent = inherit the competition-wide setting. */
+  /** Team-page overrides; null/absent = inherit the category's setting (which in
+   * turn inherits the competition-wide one). */
   pageEnabled?: boolean | null;
   nameMode?: NameMode | null;
   textFields?: TeamTextField[];
@@ -83,6 +84,11 @@ export interface Category {
   code?: string;
   discipline: Discipline;
   order: number;
+  /** Team-page defaults for this category's teams; null/absent = inherit the
+   * competition-wide setting. A default, never a copy: changing it moves every
+   * team that has not overridden it. */
+  pageEnabled?: boolean | null;
+  nameMode?: NameMode | null;
   titlePdf: string | null;
   podium: Podium;
   totalResultsPdf: string | null;

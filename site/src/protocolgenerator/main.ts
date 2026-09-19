@@ -14,6 +14,7 @@ import {
   matchCategory,
   planAutoAssignment,
   applyOutcomeLocally,
+  classifyRosterXml,
   stripTrailingDashes,
   SUFFIX_SLOTS,
   type CategoryInfo,
@@ -453,7 +454,7 @@ const STATUS_TITLE: Record<PhotoStatus, string> = {
 };
 
 /** Matches `structure.MAX_TEAM_TEXT_FIELDS` — the backend caps the stored list. */
-const MAX_TEAM_TEXT_FIELDS = 12;
+const MAX_TEAM_TEXT_FIELDS = 6;
 
 const NAME_MODE_LABEL: Record<NameMode, string> = {
   full: 'Family name + given name',
@@ -470,30 +471,60 @@ function teamPageDefaults(s: Structure): TeamPageSettings {
   };
 }
 
-/** A team's resolved settings — its own overrides, else the competition default
- * (mirrors `structure.team_page_enabled` / `team_name_mode`). */
-function teamPageEnabled(s: Structure, team: TeamRow): boolean {
-  return team.pageEnabled ?? teamPageDefaults(s).enabled;
+/** What a category resolves to on its own — its overrides, else the competition
+ * default (mirrors `structure.category_page_enabled` / `category_name_mode`).
+ * This is what its teams inherit, so it is also what their "Default (…)" labels
+ * have to name. */
+function categoryPageSettings(s: Structure, cat: Category): TeamPageSettings {
+  const d = teamPageDefaults(s);
+  return {
+    enabled: cat.pageEnabled ?? d.enabled,
+    nameMode: cat.nameMode ?? d.nameMode,
+  };
 }
 
-function teamNameMode(s: Structure, team: TeamRow): NameMode {
-  return team.nameMode ?? teamPageDefaults(s).nameMode;
+/** A team's resolved settings — its own overrides, else its category's (mirrors
+ * `structure.team_page_enabled` / `team_name_mode`). */
+function teamPageEnabled(s: Structure, cat: Category, team: TeamRow): boolean {
+  return team.pageEnabled ?? categoryPageSettings(s, cat).enabled;
 }
 
-/** The buckets a team's free-text rows are edited in: the team itself, then the
- * category's segments in the order the protocol prints them. */
-function textFieldGroups(cat: Category, team: TeamRow) {
-  const rows = team.textFields || [];
-  const segments = (cat.segments || []).slice().sort((a, b) => a.order - b.order);
-  const known = new Set(segments.map(seg => seg.id));
-  const bucket = (id: string | null) =>
-    rows.filter(r => (known.has(r.segmentId as string) ? r.segmentId : null) === id);
-  return [{ id: null as string | null, title: 'Whole team' }, ...segments.map(
-    seg => ({ id: seg.id as string | null, title: seg.name }))]
-    .map(g => ({ ...g, rows: bucket(g.id) }));
+function teamNameMode(s: Structure, cat: Category, team: TeamRow): NameMode {
+  return team.nameMode ?? categoryPageSettings(s, cat).nameMode;
 }
 
-/** One editable free-text row ("Free Skating theme" / "Spies"). */
+/** The two tri-state selects one inheritance level shows. `attr` names the
+ * data-attribute pair its handlers listen on ('cat' or 'team'); `inherited` is
+ * what this level falls back to, so "Default (…)" always reads as the level
+ * directly above — the competition for a category, the category for a team. */
+function pageSettingsHtml(o: {
+  attr: 'cat' | 'team'; id: string; catId: string;
+  level: { pageEnabled?: boolean | null; nameMode?: NameMode | null };
+  inherited: TeamPageSettings; pageLabel: string; skipLabel: string;
+}): string {
+  const opt = (value: string, label: string, selected: boolean) =>
+    `<option value="${value}"${selected ? ' selected' : ''}>${escapeHtml(label)}</option>`;
+  const enabled = o.level.pageEnabled ?? o.inherited.enabled;
+  return `<div class="team-settings">
+      <label>${escapeHtml(o.pageLabel)}
+        <select class="discipline-select" data-${o.attr}-page="${o.id}" data-cat="${o.catId}">
+          ${opt('', `Default (${o.inherited.enabled ? 'created' : 'skipped'})`, o.level.pageEnabled == null)}
+          ${opt('true', 'Create the page', o.level.pageEnabled === true)}
+          ${opt('false', o.skipLabel, o.level.pageEnabled === false)}
+        </select>
+      </label>
+      <label>Skater names
+        <select class="discipline-select" data-${o.attr}-names="${o.id}" data-cat="${o.catId}"
+                ${enabled ? '' : 'disabled'}>
+          ${opt('', `Default (${NAME_MODE_LABEL[o.inherited.nameMode]})`, o.level.nameMode == null)}
+          ${(['full', 'firstNames', 'none'] as NameMode[])
+            .map(m => opt(m, NAME_MODE_LABEL[m], o.level.nameMode === m)).join('')}
+        </select>
+      </label>
+    </div>`;
+}
+
+/** One editable free-text row ("Theme" / "Spies"). */
 function textFieldRowHtml(team: TeamRow, row: TeamTextField): string {
   return `<div class="team-text-row" data-text-row="${row.id}">
       <input class="form-input form-input--compact team-text-label" placeholder="Label (e.g. Theme)"
@@ -508,36 +539,17 @@ function textFieldRowHtml(team: TeamRow, row: TeamTextField): string {
 /** The per-team panel behind the skater-count toggle: what the team's page shows,
  * and the free-text rows printed on it. */
 function teamPagePanelHtml(s: Structure, cat: Category, team: TeamRow): string {
-  const d = teamPageDefaults(s);
-  const opt = (value: string, label: string, selected: boolean) =>
-    `<option value="${value}"${selected ? ' selected' : ''}>${escapeHtml(label)}</option>`;
-  const rowCount = (team.textFields || []).length;
-  const groups = textFieldGroups(cat, team).map(g => `
-      <div class="team-text-group" data-text-group="${g.id ?? ''}">
-        <span class="micro-label">${escapeHtml(g.title)}</span>
-        ${g.rows.map(r => textFieldRowHtml(team, r)).join('')}
-        ${rowCount < MAX_TEAM_TEXT_FIELDS ? `<button class="btn btn-xs btn-ghost" data-add-text="${team.id}"
-           data-cat="${cat.id}" data-seg="${g.id ?? ''}">Add row</button>` : ''}
-      </div>`).join('');
+  const rows = team.textFields || [];
   return `<div class="team-row-detail">
-      <div class="team-settings">
-        <label>Team page
-          <select class="discipline-select" data-team-page="${team.id}" data-cat="${cat.id}">
-            ${opt('', `Default (${d.enabled ? 'created' : 'skipped'})`, team.pageEnabled == null)}
-            ${opt('true', 'Create the page', team.pageEnabled === true)}
-            ${opt('false', 'Skip this team', team.pageEnabled === false)}
-          </select>
-        </label>
-        <label>Skater names
-          <select class="discipline-select" data-team-names="${team.id}" data-cat="${cat.id}"
-                  ${teamPageEnabled(s, team) ? '' : 'disabled'}>
-            ${opt('', `Default (${NAME_MODE_LABEL[d.nameMode]})`, team.nameMode == null)}
-            ${(['full', 'firstNames', 'none'] as NameMode[])
-              .map(m => opt(m, NAME_MODE_LABEL[m], team.nameMode === m)).join('')}
-          </select>
-        </label>
+      ${pageSettingsHtml({ attr: 'team', id: team.id, catId: cat.id, level: team,
+                           inherited: categoryPageSettings(s, cat),
+                           pageLabel: 'Team page', skipLabel: 'Skip this team' })}
+      <div class="team-text-fields">
+        <span class="micro-label">Custom rows</span>
+        ${rows.map(r => textFieldRowHtml(team, r)).join('')}
+        ${rows.length < MAX_TEAM_TEXT_FIELDS ? `<button class="btn btn-xs btn-ghost"
+           data-add-text="${team.id}" data-cat="${cat.id}">Add row</button>` : ''}
       </div>
-      <div class="team-text-fields">${groups}</div>
     </div>`;
 }
 
@@ -548,8 +560,8 @@ function teamRowHtml(cat: Category, team: TeamRow, s: Structure): string {
   const status = teamPhotoStatus(team);
   const count = team.members?.length || 0;
   const isOpen = openRosterTeams.has(team.id);
-  const skipped = !teamPageEnabled(s, team);
-  const nameMode = teamNameMode(s, team);
+  const skipped = !teamPageEnabled(s, cat, team);
+  const nameMode = teamNameMode(s, cat, team);
   const roster = count
     ? `<ul class="roster-skaters">${team.members.map(m => `<li>${escapeHtml(m)}</li>`).join('')}</ul>`
     : '<span class="team-roster-empty">No roster yet — import the DT_PARTIC XML pair.</span>';
@@ -603,6 +615,12 @@ function rosterGroupHtml(cat: Category, s: Structure): string {
         </div>
       </div>
       <div class="roster-group-body" style="display:${isOpen ? 'block' : 'none'};">
+        <div class="roster-group-settings">
+          <span class="micro-label">Default for this category</span>
+          ${pageSettingsHtml({ attr: 'cat', id: cat.id, catId: cat.id, level: cat,
+                               inherited: teamPageDefaults(s),
+                               pageLabel: 'Team pages', skipLabel: 'Skip every team here' })}
+        </div>
         ${teams.map(t => teamRowHtml(cat, t, s)).join('')
           || '<p class="section-sub roster-group-empty">No teams here yet — import the rosters or add one manually.</p>'}
       </div>
@@ -1036,8 +1054,28 @@ function wireDetail() {
     renderDetails();
   });
 
-  // Per-team overrides. '' is the tri-state's "inherit", which the backend stores
-  // as null — hence the explicit null rather than an omitted key.
+  // Per-category defaults and per-team overrides. '' is the tri-state's
+  // "inherit", which the backend stores as null — hence the explicit null rather
+  // than an omitted key. Each re-renders, because the level below shows what it
+  // inherits in its "Default (…)" labels and in the collapsed row's pills.
+  body.querySelectorAll<HTMLSelectElement>('[data-cat-page]').forEach(sel =>
+    sel.addEventListener('change', () => {
+      const categoryId = sel.dataset.catPage!;
+      const pageEnabled = sel.value === '' ? null : sel.value === 'true';
+      const cat = findCategory(categoryId);
+      if (cat) cat.pageEnabled = pageEnabled;
+      editStructure({ op: 'set_category', categoryId, pageEnabled }, false);
+      renderDetails();
+    }));
+  body.querySelectorAll<HTMLSelectElement>('[data-cat-names]').forEach(sel =>
+    sel.addEventListener('change', () => {
+      const categoryId = sel.dataset.catNames!;
+      const nameMode = sel.value === '' ? null : (sel.value as NameMode);
+      const cat = findCategory(categoryId);
+      if (cat) cat.nameMode = nameMode;
+      editStructure({ op: 'set_category', categoryId, nameMode }, false);
+      renderDetails();
+    }));
   body.querySelectorAll<HTMLSelectElement>('[data-team-page]').forEach(sel =>
     sel.addEventListener('change', () => {
       const teamId = sel.dataset.teamPage!;
@@ -1054,6 +1092,7 @@ function wireDetail() {
       const team = findTeam(sel.dataset.cat!, teamId);
       if (team) team.nameMode = nameMode;
       editStructure({ op: 'set_team', categoryId: sel.dataset.cat, teamId, nameMode }, false);
+      renderDetails();
     }));
 
   // Free-text rows. The generic [data-edit] handler above sends one scalar field
@@ -1067,7 +1106,7 @@ function wireDetail() {
       if (!team) return;
       const rows = team.textFields || (team.textFields = []);
       if (rows.length >= MAX_TEAM_TEXT_FIELDS) return;
-      rows.push({ id: `new-${Date.now()}`, segmentId: b.dataset.seg || null, label: '', value: '' });
+      rows.push({ id: `new-${Date.now()}`, label: '', value: '' });
       renderDetails();
     }));
   body.querySelectorAll<HTMLElement>('[data-rm-text]').forEach(b =>
@@ -1677,35 +1716,36 @@ async function deleteFile(fileId: string) {
   } catch { alert('Could not delete file.'); }
 }
 
+/** A category in the loaded structure, or null once a re-render has moved on. */
+function findCategory(catId: string): Category | null {
+  return (details?.structure.categories || []).find(c => c.id === catId) || null;
+}
+
 /** A team in the loaded structure, or null once a re-render has moved on. */
 function findTeam(catId: string, teamId: string): TeamRow | null {
-  const cat = (details?.structure.categories || []).find(c => c.id === catId);
-  return (cat?.teams || []).find(t => t.id === teamId) || null;
+  return (findCategory(catId)?.teams || []).find(t => t.id === teamId) || null;
 }
 
 /**
  * Persist one team's free-text rows, read back out of the DOM.
  *
- * The rows are stored as a single list and replaced wholesale (like `members`),
- * so the array is rebuilt from the groups in DOM order — which is the order the
- * team page prints them in. A row added in the browser carries a temporary id;
- * sending it empty lets the backend mint the real one, which is also why this
- * reloads rather than mutating local state: the reply carries the minted ids, the
- * trimmed values, and the removal of anything left blank on both sides.
+ * The rows are replaced wholesale (like `members`), so the array is rebuilt in
+ * DOM order — which is the order the team page prints them in. A row added in the
+ * browser carries a temporary id; sending it empty lets the backend mint the real
+ * one, which is also why this reloads rather than mutating local state: the reply
+ * carries the minted ids, the trimmed values, and the removal of anything left
+ * blank on both sides.
  */
 function saveTextFields(row: HTMLElement) {
   const teamId = row.dataset.teamRow!;
   const categoryId = row.dataset.cat!;
   const textFields: TeamTextField[] = [];
-  row.querySelectorAll<HTMLElement>('.team-text-group').forEach(group => {
-    const segmentId = group.dataset.textGroup || null;
-    group.querySelectorAll<HTMLElement>('.team-text-row').forEach(el => {
-      const part = (name: string) =>
-        (el.querySelector(`[data-text-part="${name}"]`) as HTMLInputElement).value;
-      const id = el.dataset.textRow!;
-      textFields.push({ id: id.startsWith('new-') ? '' : id, segmentId,
-                       label: part('label'), value: part('value') });
-    });
+  row.querySelectorAll<HTMLElement>('.team-text-row').forEach(el => {
+    const part = (name: string) =>
+      (el.querySelector(`[data-text-part="${name}"]`) as HTMLInputElement).value;
+    const id = el.dataset.textRow!;
+    textFields.push({ id: id.startsWith('new-') ? '' : id,
+                     label: part('label'), value: part('value') });
   });
   editStructure({ op: 'set_team', categoryId, teamId, textFields }, true);
 }
@@ -1792,19 +1832,15 @@ function pickRosters() {
     const files = Array.from(inp.files || []);
     if (!files.length) return;
     const texts = await Promise.all(files.map(f => f.text()));
-    let teamsXml = '', particXml = '';
-    texts.forEach(t => {
-      if (/DocumentType="DT_PARTIC_TEAMS"/.test(t)) teamsXml = t;
-      else if (/DocumentType="DT_PARTIC"/.test(t)) particXml = t;
-    });
-    // Fallbacks if DocumentType isn't present: use filenames, then order.
-    if (!teamsXml || !particXml) {
-      files.forEach((f, i) => {
-        if (/teams/i.test(f.name) && !teamsXml) teamsXml = texts[i];
-        else if (!particXml) particXml = texts[i];
-      });
+    const { teamsXml, particXml } = classifyRosterXml(
+      files.map((f, i) => ({ name: f.name, text: texts[i] })));
+    // Only refuse when nothing in the selection is a roster export at all: a
+    // DT_PARTIC on its own is a supported re-match against the archived roster,
+    // and the backend answers for itself when there is no archive yet.
+    if (!teamsXml && !particXml) {
+      alert('Neither selected file looks like a DT_PARTIC or DT_PARTIC_TEAMS export.');
+      return;
     }
-    if (!teamsXml) { alert('Could not find a DT_PARTIC_TEAMS file among the selected files.'); return; }
     await importRosters(teamsXml, particXml);
   };
   inp.click();

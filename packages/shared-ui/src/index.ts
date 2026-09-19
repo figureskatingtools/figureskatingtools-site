@@ -86,6 +86,14 @@ export type {
 } from './protocol-auto-assign.js';
 
 export {
+  classifyRosterFile,
+  classifyRosterXml,
+  readDocumentType,
+  sniffRosterXmlStructure,
+} from './roster-xml.js';
+export type { RosterXmlFile, RosterXmlKind, RosterXmlSelection } from './roster-xml.js';
+
+export {
   initCompetitionSelector,
   openCreateCompetitionDialog,
 } from './competition-selector.js';
