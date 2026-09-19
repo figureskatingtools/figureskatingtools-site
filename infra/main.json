@@ -4,8 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.44.1.10279",
-      "templateHash": "9948455835984518952"
+      "version": "0.47.16.16243",
+      "templateHash": "5255930192292714267"
     }
   },
   "parameters": {
@@ -164,8 +164,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.44.1.10279",
-              "templateHash": "18192871658490529346"
+              "version": "0.47.16.16243",
+              "templateHash": "13587412431444522201"
             }
           },
           "parameters": {
@@ -265,8 +265,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.44.1.10279",
-              "templateHash": "12299156645940250561"
+              "version": "0.47.16.16243",
+              "templateHash": "7659786952994055026"
             }
           },
           "parameters": {
@@ -515,8 +515,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.44.1.10279",
-              "templateHash": "9204266741201873098"
+              "version": "0.47.16.16243",
+              "templateHash": "4307431702006555811"
             }
           },
           "parameters": {
@@ -589,17 +589,6 @@
               ]
             },
             {
-              "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
-              "apiVersion": "2023-01-01",
-              "name": "[format('{0}/{1}/{2}', parameters('storageAccountName'), 'default', 'app-package-hovtp')]",
-              "properties": {
-                "publicAccess": "None"
-              },
-              "dependsOn": [
-                "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('storageAccountName'), 'default')]"
-              ]
-            },
-            {
               "type": "Microsoft.Storage/storageAccounts/tableServices",
               "apiVersion": "2023-01-01",
               "name": "[format('{0}/{1}', parameters('storageAccountName'), 'default')]",
@@ -629,10 +618,6 @@
               "type": "string",
               "value": "[format('{0}app-package', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), '2023-01-01').primaryEndpoints.blob)]"
             },
-            "hovtpDeploymentContainerUrl": {
-              "type": "string",
-              "value": "[format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), '2023-01-01').primaryEndpoints.blob, 'app-package-hovtp')]"
-            },
             "blobEndpoint": {
               "type": "string",
               "value": "[reference(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), '2023-01-01').primaryEndpoints.blob]"
@@ -640,6 +625,99 @@
             "dataContainerName": {
               "type": "string",
               "value": "[parameters('dataContainerName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "hovtpStorageDeployment",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "storageAccountName": {
+            "value": "[format('stfshovtp{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "16668098184907597555"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "storageAccountName": {
+              "type": "string"
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Storage/storageAccounts",
+              "apiVersion": "2023-01-01",
+              "name": "[parameters('storageAccountName')]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "Standard_LRS"
+              },
+              "kind": "StorageV2",
+              "properties": {
+                "accessTier": "Hot",
+                "minimumTlsVersion": "TLS1_2",
+                "supportsHttpsTrafficOnly": true,
+                "allowBlobPublicAccess": false
+              }
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/blobServices",
+              "apiVersion": "2023-01-01",
+              "name": "[format('{0}/{1}', parameters('storageAccountName'), 'default')]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+              "apiVersion": "2023-01-01",
+              "name": "[format('{0}/{1}/{2}', parameters('storageAccountName'), 'default', 'app-package')]",
+              "properties": {
+                "publicAccess": "None"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('storageAccountName'), 'default')]"
+              ]
+            }
+          ],
+          "outputs": {
+            "storageAccountName": {
+              "type": "string",
+              "value": "[parameters('storageAccountName')]"
+            },
+            "storageAccountId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+            },
+            "deploymentContainerUrl": {
+              "type": "string",
+              "value": "[format('{0}{1}', reference(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), '2023-01-01').primaryEndpoints.blob, 'app-package')]"
             }
           }
         }
@@ -690,8 +768,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.44.1.10279",
-              "templateHash": "15165352887109794720"
+              "version": "0.47.16.16243",
+              "templateHash": "3122050296282859768"
             }
           },
           "parameters": {
@@ -884,8 +962,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.44.1.10279",
-              "templateHash": "13203193144560708498"
+              "version": "0.47.16.16243",
+              "templateHash": "11287382927328424640"
             }
           },
           "parameters": {
@@ -899,7 +977,7 @@
               "type": "bool",
               "defaultValue": true,
               "metadata": {
-                "description": "Grant Storage Blob Delegator (user-delegation SAS for downloads). The HOVTP listener only writes, so it does not need it."
+                "description": "Grant Storage Blob Delegator (user-delegation SAS for downloads). Kept switchable: only an identity that actually mints download SAS needs it."
               }
             }
           },
@@ -973,10 +1051,13 @@
             "value": "asp-fs-hovtp"
           },
           "storageAccountName": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.storageAccountName.value]"
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'hovtpStorageDeployment'), '2025-04-01').outputs.storageAccountName.value]"
           },
           "deploymentContainerUrl": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.hovtpDeploymentContainerUrl.value]"
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'hovtpStorageDeployment'), '2025-04-01').outputs.deploymentContainerUrl.value]"
+          },
+          "dataStorageAccountName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.storageAccountName.value]"
           },
           "appInsightsConnectionString": {
             "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformFunctionDeployment'), '2025-04-01').outputs.appInsightsConnectionString.value]"
@@ -997,8 +1078,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.44.1.10279",
-              "templateHash": "3663621727086518085"
+              "version": "0.47.16.16243",
+              "templateHash": "3708748775375750719"
             }
           },
           "parameters": {
@@ -1012,7 +1093,16 @@
               "type": "string"
             },
             "storageAccountName": {
-              "type": "string"
+              "type": "string",
+              "metadata": {
+                "description": "The listener OWN storage account: AzureWebJobsStorage host state + its one-deploy package container. NOT the platform account."
+              }
+            },
+            "dataStorageAccountName": {
+              "type": "string",
+              "metadata": {
+                "description": "The PLATFORM storage account holding `competition-data` and the `competitions` table. Passed to the app as COMPETITION_DATA_ACCOUNT because AzureWebJobsStorage no longer points at it."
+              }
             },
             "deploymentContainerUrl": {
               "type": "string"
@@ -1121,6 +1211,10 @@
                       "value": "[parameters('dataContainerName')]"
                     },
                     {
+                      "name": "COMPETITION_DATA_ACCOUNT",
+                      "value": "[parameters('dataStorageAccountName')]"
+                    },
+                    {
                       "name": "HOVTP_ENABLED",
                       "value": "[string(parameters('hovtpEnabled'))]"
                     },
@@ -1208,6 +1302,7 @@
         }
       },
       "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'hovtpStorageDeployment')]",
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformFunctionDeployment')]",
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment')]",
         "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
@@ -1216,7 +1311,7 @@
     {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
-      "name": "hovtpRoleAssignmentDeployment",
+      "name": "hovtpHostRoleAssignmentDeployment",
       "resourceGroup": "[parameters('resourceGroupName')]",
       "properties": {
         "expressionEvaluationOptions": {
@@ -1225,13 +1320,10 @@
         "mode": "Incremental",
         "parameters": {
           "storageAccountName": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.storageAccountName.value]"
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'hovtpStorageDeployment'), '2025-04-01').outputs.storageAccountName.value]"
           },
           "functionPrincipalId": {
             "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'hovtpFunctionDeployment'), '2025-04-01').outputs.functionPrincipalId.value]"
-          },
-          "grantBlobDelegator": {
-            "value": false
           }
         },
         "template": {
@@ -1240,8 +1332,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.44.1.10279",
-              "templateHash": "13203193144560708498"
+              "version": "0.47.16.16243",
+              "templateHash": "12130473472396994604"
             }
           },
           "parameters": {
@@ -1250,32 +1342,12 @@
             },
             "functionPrincipalId": {
               "type": "string"
-            },
-            "grantBlobDelegator": {
-              "type": "bool",
-              "defaultValue": true,
-              "metadata": {
-                "description": "Grant Storage Blob Delegator (user-delegation SAS for downloads). The HOVTP listener only writes, so it does not need it."
-              }
             }
           },
           "variables": {
-            "storageTableDataContributorId": "0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3",
-            "storageBlobDataContributorId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
-            "storageBlobDelegatorId": "db58b8e5-c6ad-4a2a-8342-4190687cbf4a"
+            "storageBlobDataContributorId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
           },
           "resources": [
-            {
-              "type": "Microsoft.Authorization/roleAssignments",
-              "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
-              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('functionPrincipalId'), variables('storageTableDataContributorId'))]",
-              "properties": {
-                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageTableDataContributorId'))]",
-                "principalId": "[parameters('functionPrincipalId')]",
-                "principalType": "ServicePrincipal"
-              }
-            },
             {
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
@@ -1286,15 +1358,92 @@
                 "principalId": "[parameters('functionPrincipalId')]",
                 "principalType": "ServicePrincipal"
               }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'hovtpFunctionDeployment')]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'hovtpStorageDeployment')]",
+        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "hovtpDataAccessDeployment",
+      "resourceGroup": "[parameters('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "storageAccountName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.storageAccountName.value]"
+          },
+          "dataContainerName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.dataContainerName.value]"
+          },
+          "functionPrincipalId": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'hovtpFunctionDeployment'), '2025-04-01').outputs.functionPrincipalId.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "11130104994807108915"
+            }
+          },
+          "parameters": {
+            "storageAccountName": {
+              "type": "string"
             },
+            "dataContainerName": {
+              "type": "string",
+              "defaultValue": "competition-data",
+              "metadata": {
+                "description": "Shared blob container the listener writes competition files into."
+              }
+            },
+            "competitionsTableName": {
+              "type": "string",
+              "defaultValue": "competitions",
+              "metadata": {
+                "description": "Table holding the platform CODE/COMPETITION rows and the listener own HOVTPSESSION/HOVTPSOURCE rows."
+              }
+            },
+            "functionPrincipalId": {
+              "type": "string"
+            }
+          },
+          "variables": {
+            "storageBlobDataContributorId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
+            "storageTableDataContributorId": "0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3"
+          },
+          "resources": [
             {
-              "condition": "[parameters('grantBlobDelegator')]",
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
-              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('functionPrincipalId'), variables('storageBlobDelegatorId'))]",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', parameters('dataContainerName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', parameters('dataContainerName')), parameters('functionPrincipalId'), variables('storageBlobDataContributorId'))]",
               "properties": {
-                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDelegatorId'))]",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContributorId'))]",
+                "principalId": "[parameters('functionPrincipalId')]",
+                "principalType": "ServicePrincipal"
+              }
+            },
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts/tableServices/tables', parameters('storageAccountName'), 'default', parameters('competitionsTableName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts/tableServices/tables', parameters('storageAccountName'), 'default', parameters('competitionsTableName')), parameters('functionPrincipalId'), variables('storageTableDataContributorId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageTableDataContributorId'))]",
                 "principalId": "[parameters('functionPrincipalId')]",
                 "principalType": "ServicePrincipal"
               }
@@ -1332,8 +1481,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.44.1.10279",
-              "templateHash": "8340835106389023107"
+              "version": "0.47.16.16243",
+              "templateHash": "4111271637362070528"
             }
           },
           "parameters": {
@@ -1418,8 +1567,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.44.1.10279",
-              "templateHash": "5919595783719410208"
+              "version": "0.47.16.16243",
+              "templateHash": "931355369448053010"
             }
           },
           "parameters": {
@@ -1569,8 +1718,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.44.1.10279",
-              "templateHash": "5879125814402653143"
+              "version": "0.47.16.16243",
+              "templateHash": "15348017569795913157"
             }
           },
           "parameters": {
@@ -1636,8 +1785,8 @@
                   "metadata": {
                     "_generator": {
                       "name": "bicep",
-                      "version": "0.44.1.10279",
-                      "templateHash": "6198082379997488054"
+                      "version": "0.47.16.16243",
+                      "templateHash": "9124815284901924517"
                     }
                   },
                   "parameters": {
@@ -1719,6 +1868,10 @@
       "type": "string",
       "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.storageAccountName.value]"
     },
+    "hovtpStorageAccountName": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'hovtpStorageDeployment'), '2025-04-01').outputs.storageAccountName.value]"
+    },
     "hovtpFunctionAppName": {
       "type": "string",
       "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'hovtpFunctionDeployment'), '2025-04-01').outputs.functionAppName.value]"
@@ -1730,6 +1883,14 @@
     "hovtpFunctionPrincipalId": {
       "type": "string",
       "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'hovtpFunctionDeployment'), '2025-04-01').outputs.functionPrincipalId.value]"
+    },
+    "hovtpEnabled": {
+      "type": "bool",
+      "value": "[parameters('hovtpEnabled')]"
+    },
+    "hovtpEnvironment": {
+      "type": "string",
+      "value": "[parameters('hovtpEnvironment')]"
     },
     "toolPrincipalsGranted": {
       "type": "int",

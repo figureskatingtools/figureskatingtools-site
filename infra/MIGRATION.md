@@ -120,7 +120,8 @@ az ad app federated-credential create --id <AUTH_APP_OBJECT_ID> --parameters '{
 
 ### b. Azure RBAC: deploy SP must be able to write role assignments
 
-`platform-roleassignment.bicep` and `shared-data-access.bicep` create
+`platform-roleassignment.bicep`, `hovtp-host-roleassignment.bicep`,
+`hovtp-data-access.bicep` and `shared-data-access.bicep` create
 `Microsoft.Authorization/roleAssignments`. **Contributor cannot do this.** Check:
 
 ```bash
@@ -141,6 +142,99 @@ az role assignment create \
 
 Symptom if you skip this: the bicep deployment fails with
 `AuthorizationFailed` on `Microsoft.Authorization/roleAssignments/write`.
+
+### c. HOVTP storage isolation — revoke the old account-scoped grants
+
+**Required once per environment, after the deploy that introduces
+`modules/hovtp-storage.bicep`.** Bicep deployments are *incremental*: they never
+delete. The listener used to hold `Storage Blob Data Contributor` **and**
+`Storage Table Data Contributor` at **whole-account** scope on the platform
+storage account (`stfsplat*`), via `hovtpRoleAssignment`. Those assignments
+survive the deploy that replaces them with the narrow ones, and while they exist
+the new container-/table-scoped grants are purely decorative — the listener
+still has the run of the account, including `app-package`, the **platform**
+Function App's deployment zip.
+
+Get the principal id (the listener's system-assigned identity) and see what it
+has:
+
+```bash
+PRINCIPAL=$(az deployment sub show -n <deployment> \
+  --query 'properties.outputs.hovtpFunctionPrincipalId.value' -o tsv)
+
+az role assignment list --assignee "$PRINCIPAL" --all -o table
+```
+
+Delete the two account-scoped ones on the **platform** account:
+
+```bash
+PLATFORM_ID=$(az storage account show -g rg-fs-site-<env> \
+  -n <stfsplat-account> --query id -o tsv)
+
+az role assignment delete --assignee "$PRINCIPAL" --scope "$PLATFORM_ID" \
+  --role "Storage Blob Data Contributor"
+az role assignment delete --assignee "$PRINCIPAL" --scope "$PLATFORM_ID" \
+  --role "Storage Table Data Contributor"
+```
+
+Note that `az role assignment list` shows container- and account-scoped rows but
+the portal's IAM blade does **not** render table-scoped ones at all. To confirm
+the new table grant exists:
+
+```bash
+az role assignment list -o table --scope \
+  "$PLATFORM_ID/tableServices/default/tables/competitions"
+az role assignment list -o table --scope \
+  "$PLATFORM_ID/blobServices/default/containers/competition-data"
+```
+
+Then clean up what the listener left behind in the platform account, now that
+its host state and package live in its own `stfshovtp*` account:
+
+```bash
+# the listener's orphaned deployment-package container
+az storage container delete --name app-package-hovtp \
+  --account-name <stfsplat-account> --auth-mode login
+
+# the listener's per-app folders inside the SHARED host containers
+az storage blob delete-batch --account-name <stfsplat-account> --auth-mode login \
+  --source azure-webjobs-secrets --pattern 'func-fs-hovtp-*/*'
+az storage blob delete-batch --account-name <stfsplat-account> --auth-mode login \
+  --source azure-webjobs-hosts --pattern '*/func-fs-hovtp-*/*'
+```
+
+> **Never delete the `azure-webjobs-secrets` or `azure-webjobs-hosts`
+> containers themselves.** They are the *platform* Function App's host state and
+> it is still running out of them; deleting either takes the site's API down and
+> loses its function keys. Only the `func-fs-hovtp-*` folders inside them belong
+> to the listener. (Check the blob names first with
+> `az storage blob list --container-name azure-webjobs-secrets --account-name
+> <stfsplat-account> --auth-mode login -o tsv --query '[].name'` — Flex
+> Consumption keys host state by app name, so the split is unambiguous.)
+
+**Acceptance check.** When this is done the listener's principal must have
+**exactly three** role assignments and *nothing* scoped to the platform storage
+account itself:
+
+```bash
+az role assignment list --assignee "$PRINCIPAL" --all \
+  --query "[].{role:roleDefinitionName, scope:scope}" -o table
+```
+
+| Role                             | Scope |
+| -------------------------------- | ----- |
+| Storage Blob Data Contributor    | `.../storageAccounts/<stfshovtp-account>` (its own account) |
+| Storage Blob Data Contributor    | `.../storageAccounts/<stfsplat-account>/blobServices/default/containers/competition-data` |
+| Storage Table Data Contributor   | `.../storageAccounts/<stfsplat-account>/tableServices/default/tables/competitions` |
+
+Any row whose scope ends at `.../storageAccounts/<stfsplat-account>` means the
+old grant is still live and the isolation has not actually taken effect.
+
+Smoke test afterwards: push one message from FSM (or replay a captured one) and
+confirm it lands in `competition-data/<guid>/fsm-pending/<ip>/`. A
+`451 unknown competition code` for a competition that plainly exists means
+`COMPETITION_DATA_ACCOUNT` is not reaching the app and it is talking to its own
+empty host account.
 
 ---
 

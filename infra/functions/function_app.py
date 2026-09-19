@@ -180,10 +180,22 @@ _SOURCE_TOOL_STRIP_RE = re.compile(r"[^a-zA-Z0-9_-]+")
 
 # ── storage clients ───────────────────────────────────────────────────────────
 
+def _data_account_name() -> str:
+    """The account holding `competition-data` and the `competitions` table.
+
+    The listener has its own host storage account now, so its
+    AzureWebJobsStorage is NOT the platform account any more and the data
+    account has to be named explicitly. The fallback keeps single-account and
+    local setups working.
+    """
+    return (os.environ.get("COMPETITION_DATA_ACCOUNT")
+            or os.environ.get("AzureWebJobsStorage__accountName") or "")
+
+
 def get_table_client(table_name: str = COMPETITIONS_TABLE):
     """Table client via managed identity (deployed) or connection string (local)."""
     try:
-        account_name = os.environ.get("AzureWebJobsStorage__accountName")
+        account_name = _data_account_name()
         if account_name:
             credential = DefaultAzureCredential()
             endpoint = f"https://{account_name}.table.core.windows.net"
@@ -202,7 +214,7 @@ def get_table_client(table_name: str = COMPETITIONS_TABLE):
 def get_blob_service_client():
     """Blob client via managed identity (deployed) or connection string (local)."""
     try:
-        account_name = os.environ.get("AzureWebJobsStorage__accountName")
+        account_name = _data_account_name()
         if account_name:
             credential = DefaultAzureCredential()
             account_url = f"https://{account_name}.blob.core.windows.net"

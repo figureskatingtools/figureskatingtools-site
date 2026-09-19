@@ -39,11 +39,30 @@ def test_an_empty_body_is_400(table, blobs):
     assert head(response, "X-HOVTP-Error-Reason") == "empty body"
 
 
-def test_a_truncated_body_is_400(table, blobs):
+def test_a_body_cut_inside_the_root_start_tag_is_400(table, blobs):
+    # Precisely what this pins down: 60 bytes lands mid-`<OdfBody …`, so the
+    # root start tag never completes and the parser never sees a root at all.
+    # It is NOT evidence that truncated bodies are rejected in general — see the
+    # test below for the half of the range that is accepted.
     response = _post(body=fixtures.DT_SCHEDULE_BODY[:60])
 
     assert response.status_code == 400
+    assert head(response, "X-HOVTP-Error-Reason") == "body is not valid XML"
     assert blobs.blobs == {}
+
+
+def test_a_body_cut_after_the_root_start_tag_is_accepted_today(table, blobs):
+    # KNOWN GAP, deliberately left as it is: once the root start tag has closed,
+    # `parse_odf` has everything it needs for a non-PDF document and breaks out
+    # of `iterparse` without calling `close()`, so the truncation is never
+    # detected and the half-message is stored verbatim. This test records that
+    # behaviour rather than endorsing it — FSM truncating a stream mid-send
+    # would leave an unusable XML in the pool. Change it together with
+    # `parse_odf`, not on its own.
+    response = _post(body=fixtures.DT_SCHEDULE_BODY[:300])
+
+    assert response.status_code == 200
+    assert len(blobs.blobs) == 1
 
 
 def test_an_oversized_content_length_is_413_before_the_body_is_read(table, blobs):

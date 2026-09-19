@@ -5,13 +5,24 @@
 // internet-exposed, unauthenticated surface of the platform, so it must be
 // stoppable, redeployable and revocable on its own (`az functionapp stop`,
 // HOVTP_ENABLED=false, or dropping its RBAC) without taking the site's API down.
-// It shares the platform storage account (Flex Consumption host state is keyed
-// by app name) and the ai-fs-platform Application Insights component, but gets
-// its own plan, its own one-deploy package container and its own identity.
+// Storage is split for the same reason: `storageAccountName` is the listener's
+// OWN account (modules/hovtp-storage.bicep), holding nothing but Functions host
+// state and its deployment package, while `dataStorageAccountName` is the
+// shared platform account where the competition data actually lives. The
+// listener holds account-scoped roles only on the former; on the latter it gets
+// the `competition-data` container and the `competitions` table and nothing
+// else (modules/hovtp-data-access.bicep). It still shares the ai-fs-platform
+// Application Insights component, and has its own plan and identity.
 param location string
 param functionAppName string
 param appServicePlanName string
+
+@description('The listener OWN storage account: AzureWebJobsStorage host state + its one-deploy package container. NOT the platform account.')
 param storageAccountName string
+
+@description('The PLATFORM storage account holding `competition-data` and the `competitions` table. Passed to the app as COMPETITION_DATA_ACCOUNT because AzureWebJobsStorage no longer points at it.')
+param dataStorageAccountName string
+
 param deploymentContainerUrl string
 
 @description('Connection string of the shared ai-fs-platform Application Insights component.')
@@ -88,6 +99,14 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'COMPETITION_DATA_CONTAINER'
           value: dataContainerName
+        }
+        {
+          // Without this the data clients would fall back to
+          // AzureWebJobsStorage__accountName — i.e. the listener own, empty host
+          // account — and every competition lookup would 451.
+          // See _data_account_name() in infra/hovtp/function_app.py.
+          name: 'COMPETITION_DATA_ACCOUNT'
+          value: dataStorageAccountName
         }
         {
           name: 'HOVTP_ENABLED'

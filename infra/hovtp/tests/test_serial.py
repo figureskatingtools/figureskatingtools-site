@@ -4,14 +4,18 @@ Two rules drive everything here: serial 1 always resets the session (that is how
 FSM restarts a feed), and the sender gives up after ten consecutive 450s — so a
 gap is a warning, not a refusal, unless HOVTP_STRICT_SERIAL says otherwise.
 
-The ordering rule is the other half: blobs are stored BEFORE the serial is
-committed, so a storage failure leaves the cursor where it was and FSM's resend
-is accepted instead of meeting a false duplicate.
+The ordering rule is the other half: the blobs AND the source row are written
+BEFORE the serial is committed, so a failed write leaves the cursor where it was
+and FSM's resend is accepted instead of meeting a false duplicate.
+
+The third rule only shows up under concurrency: FSM opens several connections on
+one session, so the cursor must only ever move forward. Serial 1 is the single
+exception, because it is a deliberate reset.
 """
 import fixtures
 import function_app as fa
-from conftest import (DEFAULT_IP, SESSION_ID, head, make_request, seed_session,
-                      session_row)
+from conftest import (DEFAULT_IP, SESSION_ID, concurrent_writer, head, make_request,
+                      seed_session, session_row, source_row)
 
 
 def _post(**kwargs):
@@ -151,3 +155,68 @@ def test_a_failed_upload_leaves_the_serial_uncommitted(table, blobs):
 
     assert response.status_code == 500
     assert session_row(table)["LastSerial"] == 4
+
+
+def test_a_failed_source_write_leaves_the_serial_uncommitted(table, blobs):
+    # The blobs are only half the bookkeeping. Committing the serial before the
+    # source row would let a failed row write strand the quarantined files: no
+    # row means no listing and no `accept` in the UI, while the resend that
+    # could still fix it is answered 450 duplicate.
+    seed_session(table, last_serial=4)
+    table.fail_next_create = RuntimeError("the table is having a day")
+
+    response = _post(session_id=SESSION_ID, serial=5)
+
+    assert response.status_code == 500
+    assert session_row(table)["LastSerial"] == 4
+    assert table.rows_in(fa.PK_HOVTP_SOURCE) == {}
+
+    response = _post(session_id=SESSION_ID, serial=5)
+
+    # The resend replays onto the same deterministic blob name (overwrite=True),
+    # so nothing is duplicated and nothing is double-counted.
+    assert response.status_code == 200
+    assert session_row(table)["LastSerial"] == 5
+    assert len(blobs.blobs) == 1
+    assert source_row(table)["PendingCount"] == 1
+
+
+def test_a_cursor_another_writer_moved_ahead_is_not_written_back(table, blobs):
+    # The handler read 4 before uploading; while the upload ran, the connection
+    # carrying serial 6 committed. Our etag is FRESH — nothing conflicts — so
+    # only re-reading the value inside the commit keeps 5 from overwriting 6.
+    seed_session(table, last_serial=6)
+
+    assert fa.commit_serial(table, SESSION_ID, 5, DEFAULT_IP, "2026-09-01T21:05:00Z") == 6
+
+    assert session_row(table)["LastSerial"] == 6
+    assert [call for call in table.calls if call[0] == "update_entity"] == []
+
+
+def test_a_concurrent_commit_survives_our_retry(table, blobs):
+    # Same race, this time with the other writer landing after we read: the etag
+    # conflicts, we retry, and the retry must not replay the stale 5 it carries.
+    seed_session(table, last_serial=4)
+    table.concurrent_writer = concurrent_writer(fa.PK_HOVTP_SESSION, SESSION_ID,
+                                                LastSerial=6)
+
+    response = _post(session_id=SESSION_ID, serial=5)
+
+    assert response.status_code == 200
+    assert session_row(table)["LastSerial"] == 6
+    # Reporting 5 here would ask FSM to resend a serial we already hold.
+    assert head(response, "X-HOVTP-Last-Serial-Number") == "6"
+
+
+def test_serial_one_still_resets_a_cursor_that_is_ahead(table, blobs):
+    # The forward-only rule must not swallow the reset: serial 1 is how FSM
+    # restarts the feed, and it wins over any cursor it finds.
+    seed_session(table, last_serial=6)
+    table.concurrent_writer = concurrent_writer(fa.PK_HOVTP_SESSION, SESSION_ID,
+                                                LastSerial=9)
+
+    response = _post(session_id=SESSION_ID, serial=1)
+
+    assert response.status_code == 200
+    assert session_row(table)["LastSerial"] == 1
+    assert head(response, "X-HOVTP-Last-Serial-Number") == "1"

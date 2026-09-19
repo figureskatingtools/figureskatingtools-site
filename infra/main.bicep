@@ -131,6 +131,18 @@ module platformStorage 'modules/platform-storage.bicep' = {
   }
 }
 
+// The listener's own storage account. It is anonymous and internet-facing, so
+// its Functions host state must not sit next to the platform app's deployment
+// package — see modules/hovtp-storage.bicep.
+module hovtpStorage 'modules/hovtp-storage.bicep' = {
+  scope: rg
+  name: 'hovtpStorageDeployment'
+  params: {
+    location: location
+    storageAccountName: 'stfshovtp${uniqueString(rg.id)}'
+  }
+}
+
 module platformFunction 'modules/platform-function.bicep' = {
   scope: rg
   name: 'platformFunctionDeployment'
@@ -159,8 +171,9 @@ module platformRoleAssignment 'modules/platform-roleassignment.bicep' = {
 
 // Separate Function App on purpose: the only anonymous, internet-facing surface
 // of the platform, so it can be stopped or revoked without touching the site API.
-// Shares the platform storage account and App Insights; own plan, own package
-// container, own identity.
+// Own storage account, own plan, own identity; shares only the ai-fs-platform
+// App Insights component and — through narrowly scoped RBAC below — the
+// competition-data container and competitions table of the platform account.
 module hovtpFunction 'modules/hovtp-function.bicep' = {
   scope: rg
   name: 'hovtpFunctionDeployment'
@@ -168,8 +181,9 @@ module hovtpFunction 'modules/hovtp-function.bicep' = {
     location: location
     functionAppName: 'func-fs-hovtp-${uniqueString(rg.id)}'
     appServicePlanName: 'asp-fs-hovtp'
-    storageAccountName: platformStorage.outputs.storageAccountName
-    deploymentContainerUrl: platformStorage.outputs.hovtpDeploymentContainerUrl
+    storageAccountName: hovtpStorage.outputs.storageAccountName
+    deploymentContainerUrl: hovtpStorage.outputs.deploymentContainerUrl
+    dataStorageAccountName: platformStorage.outputs.storageAccountName
     appInsightsConnectionString: platformFunction.outputs.appInsightsConnectionString
     dataContainerName: platformStorage.outputs.dataContainerName
     hovtpEnabled: hovtpEnabled
@@ -177,15 +191,32 @@ module hovtpFunction 'modules/hovtp-function.bicep' = {
   }
 }
 
-// Same data-plane roles as the platform app minus Blob Delegator — the listener
-// only writes competition files, it never mints download SAS.
-module hovtpRoleAssignment 'modules/platform-roleassignment.bicep' = {
+// Account-scoped Blob Data Contributor on the listener's OWN account only: the
+// Functions host creates azure-webjobs-hosts/-secrets itself, which
+// container-scoped RBAC cannot do. That account holds nothing but host state
+// and the listener's deployment package, so the wide scope costs nothing.
+module hovtpHostRoleAssignment 'modules/hovtp-host-roleassignment.bicep' = {
   scope: rg
-  name: 'hovtpRoleAssignmentDeployment'
+  name: 'hovtpHostRoleAssignmentDeployment'
+  params: {
+    storageAccountName: hovtpStorage.outputs.storageAccountName
+    functionPrincipalId: hovtpFunction.outputs.functionPrincipalId
+  }
+}
+
+// Everything the listener may touch in the PLATFORM account: the
+// `competition-data` container and the `competitions` table, each scoped to the
+// child resource — no account-scoped role, so `app-package` (the platform app's
+// deployment zip) is out of reach. Replaces the old account-scoped
+// hovtpRoleAssignment; incremental deployment does not delete that one, so see
+// infra/MIGRATION.md for the manual removal.
+module hovtpDataAccess 'modules/hovtp-data-access.bicep' = {
+  scope: rg
+  name: 'hovtpDataAccessDeployment'
   params: {
     storageAccountName: platformStorage.outputs.storageAccountName
+    dataContainerName: platformStorage.outputs.dataContainerName
     functionPrincipalId: hovtpFunction.outputs.functionPrincipalId
-    grantBlobDelegator: false
   }
 }
 
@@ -243,9 +274,15 @@ output platformFunctionAppName string = platformFunction.outputs.functionAppName
 output platformFunctionAppUrl string = platformFunction.outputs.functionAppUrl
 output platformFunctionPrincipalId string = platformFunction.outputs.functionPrincipalId
 output platformStorageAccountName string = platformStorage.outputs.storageAccountName
+output hovtpStorageAccountName string = hovtpStorage.outputs.storageAccountName
 output hovtpFunctionAppName string = hovtpFunction.outputs.functionAppName
 output hovtpFunctionAppUrl string = hovtpFunction.outputs.functionAppUrl
 output hovtpFunctionPrincipalId string = hovtpFunction.outputs.functionPrincipalId
+// Surfaced so CI can run the listener smoke check (and stamp its
+// X-HOVTP-Environment header) from what was actually deployed, instead of
+// re-deriving the per-environment bicepparam defaults in shell.
+output hovtpEnabled bool = hovtpEnabled
+output hovtpEnvironment string = hovtpEnvironment
 output toolPrincipalsGranted int = sharedDataAccess.outputs.grantedCount
 output customDomain string = customDomain
 output dnsZoneName string = dnsZoneName

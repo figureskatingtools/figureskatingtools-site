@@ -9,7 +9,10 @@ It is deliberately **not** part of the platform API (`infra/functions`): this is
 the only endpoint on the platform that an unauthenticated stranger can reach, so
 it must be switchable off on its own — `HOVTP_ENABLED=false`,
 `az functionapp stop`, or revoking its storage RBAC — without taking the site
-down with it.
+down with it. For the same reason its storage is isolated: its Functions host
+state lives in a storage account of its own, and on the shared platform account
+it can reach only the `competition-data` container and the `competitions` table
+(see **Storage**).
 
 ## FSM settings to enter
 
@@ -84,10 +87,18 @@ A serial gap is a **warning**, not a refusal, by default: the sender gives up
 after ten consecutive `450`s, and losing the feed is worse than a hole in it.
 Serial `1` always resets the session — that is how FSM restarts a feed.
 
-Ordering guarantees: blobs are written **before** the serial is committed (a
-failed store must let FSM resend rather than meet a false duplicate); `451`
+Ordering guarantees: the blobs and the source row are written **before** the
+serial is committed (a failed write must let FSM resend rather than meet a false
+duplicate, and a resend replays idempotently onto the same blob names); `451`
 outcomes still commit the serial (the message will never be valid, so resending
 it is pointless); `400`, `450`, `500` and `503` write nothing at all.
+
+Concurrency: FSM opens up to five connections, so the session cursor and the
+per-IP trust row are both written etag-conditionally and re-read on retry. The
+cursor only ever moves forward — a commit that finds the session already past
+its serial reports the newer value instead of writing its own, serial `1`
+excepted — and the quarantine counters are recomputed from the row as it stands
+at write time, so a competing message cannot be lost out of the quota.
 
 ## Document-type allowlist
 
@@ -144,7 +155,30 @@ Quarantine quotas, all answered `451 quarantine full`: **200 files** and
 
 ## Storage
 
-Both live in the platform's storage account, shared with `infra/functions`.
+Two accounts, on purpose.
+
+**Its own account** (`stfshovtp*`, `modules/hovtp-storage.bicep`) holds nothing
+but Functions host state (`azure-webjobs-hosts` / `azure-webjobs-secrets`, which
+the host creates itself) and `app-package`, this app's deployment zip.
+`AzureWebJobsStorage__accountName` points here. The listener's identity is
+`Storage Blob Data Contributor` at **account** scope here — unavoidable, because
+container-scoped RBAC cannot create the containers the host needs — and that is
+tolerable precisely because there is no data in this account.
+
+**The platform account** (`stfsplat*`, shared with `infra/functions`) holds the
+table and container below, and the listener's rights on it are narrow:
+`Storage Blob Data Contributor` scoped to the **`competition-data` container**
+and `Storage Table Data Contributor` scoped to the **`competitions` table**
+(`modules/hovtp-data-access.bicep`) — no account-scoped role at all, so the
+platform Function App's own `app-package` deployment zip is out of reach of this
+anonymous, internet-facing app. The table-scoped assignment is invisible in the
+portal's IAM blade; list it with
+`az role assignment list --scope <.../tableServices/default/tables/competitions>`.
+
+Because `AzureWebJobsStorage` is no longer the data account, the account holding
+the two is named explicitly in `COMPETITION_DATA_ACCOUNT` (see the settings
+table; `_data_account_name()` falls back to `AzureWebJobsStorage__accountName`
+so single-account and local setups keep working).
 
 Table `competitions` — two row kinds owned by this app:
 
@@ -199,7 +233,8 @@ Read on every call, so an app-setting change takes effect without a restart.
 | `HOVTP_TRUSTED_PROXY_HOPS`     | `0`                                                    | reverse proxies we own in front of App Service |
 | `HOVTP_ALLOWED_DOCUMENT_TYPES` | `DT_PDF,DT_PARTIC,DT_PARTIC_TEAMS,DT_SCHEDULE,DT_SCHEDULE_UPDATE` | comma list |
 | `COMPETITION_DATA_CONTAINER`   | `competition-data`                                     | read at import, like the platform app |
-| `AzureWebJobsStorage__accountName` / `AzureWebJobsStorage` | —                          | managed identity, or a connection string locally |
+| `COMPETITION_DATA_ACCOUNT`     | `AzureWebJobsStorage__accountName`                     | the **platform** account holding `competition-data` + `competitions`; deployed it is *not* this app's host account |
+| `AzureWebJobsStorage__accountName` / `AzureWebJobsStorage` | —                          | this app's **own** host storage account (managed identity), or a connection string locally |
 
 ## Local development
 

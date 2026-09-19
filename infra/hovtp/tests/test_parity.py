@@ -76,7 +76,39 @@ def test_the_copied_helpers_are_byte_identical():
     platform = _platform_module()
 
     for name in ("sanitize_pool_filename", "_ascii_metadata", "_iso_utc", "_now_utc",
-                 "get_table_client", "get_blob_service_client", "_get_container_client",
-                 "_pool_content_type"):
+                 "_data_account_name", "get_table_client", "get_blob_service_client",
+                 "_get_container_client", "_pool_content_type"):
         assert inspect.getsource(getattr(fa, name)) == \
                inspect.getsource(getattr(platform, name)), name
+
+
+def test_the_data_account_is_resolved_independently_of_the_host_account(monkeypatch):
+    """The listener has its OWN host storage account, so the account holding
+    `competition-data` + the `competitions` table must be named explicitly.
+
+    If this ever falls back to AzureWebJobsStorage__accountName while
+    COMPETITION_DATA_ACCOUNT is set, the listener writes competition files and
+    trust rows into its empty host account and FSM starts seeing
+    `451 unknown competition code` for competitions that plainly exist.
+    """
+    monkeypatch.setenv("COMPETITION_DATA_ACCOUNT", "stfsplatdata")
+    monkeypatch.setenv("AzureWebJobsStorage__accountName", "stfshovtphost")
+
+    assert fa._data_account_name() == "stfsplatdata"
+
+
+def test_the_data_account_falls_back_to_the_host_account(monkeypatch):
+    """Single-account setups (the platform app, and local dev) keep working."""
+    monkeypatch.delenv("COMPETITION_DATA_ACCOUNT", raising=False)
+    monkeypatch.setenv("AzureWebJobsStorage__accountName", "stfsplatonly")
+
+    assert fa._data_account_name() == "stfsplatonly"
+
+
+def test_the_data_account_is_empty_when_neither_setting_is_present(monkeypatch):
+    """No account name at all ⇒ the clients fall through to AzureWebJobsStorage
+    (the Azurite connection string used locally), not to a bogus endpoint."""
+    monkeypatch.delenv("COMPETITION_DATA_ACCOUNT", raising=False)
+    monkeypatch.delenv("AzureWebJobsStorage__accountName", raising=False)
+
+    assert fa._data_account_name() == ""

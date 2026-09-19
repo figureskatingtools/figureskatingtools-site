@@ -9,9 +9,13 @@ tests would break the moment either is packaged on its own.
 They are extended for what the listener actually depends on and the platform
 routes do not:
 
-  * per-row etags, so the etag-conditional serial commit can be exercised
-    (including a forced ResourceModifiedError and the retry that follows),
-  * `upsert_entity` with MERGE semantics — the trust row is written blind,
+  * per-row etags, so the etag-conditional writes can be exercised — both the
+    serial commit and the trust row, including a forced ResourceModifiedError
+    and the retry that follows,
+  * `concurrent_writer`, a genuine second writer that lands on one row between
+    the app's read and its write. A forced conflict alone proves only that the
+    retry happens; it takes a writer that actually MOVES the row to prove the
+    retry recomputes instead of replaying a stale value,
   * `query_entities` with a `RowKey ge/lt` range, which is how the pending
     sources of one competition are counted.
 """
@@ -61,10 +65,12 @@ class FakeTableClient:
         self._etag_seq = 0
         # Set to an exception instance to make the NEXT call of that kind blow up.
         self.fail_next_create: Exception | None = None
-        self.fail_next_upsert: Exception | None = None
         # Make the first N update_entity calls raise ResourceModifiedError, as a
-        # concurrent writer on the same session row would.
+        # concurrent writer on the same row would.
         self.fail_updates = 0
+        # Set to a `concurrent_writer(...)` hook: another writer landing on a
+        # row just before we write it. Called with (client, key).
+        self.concurrent_writer = None
 
     # -- API surface used by function_app --------------------------------
     def _next_etag(self) -> str:
@@ -81,6 +87,7 @@ class FakeTableClient:
     def create_entity(self, entity):
         key = (entity["PartitionKey"], entity["RowKey"])
         self.calls.append(("create_entity", key))
+        self._let_others_write(key)
         if self.fail_next_create is not None:
             error, self.fail_next_create = self.fail_next_create, None
             raise error
@@ -98,6 +105,7 @@ class FakeTableClient:
     def update_entity(self, entity, mode=None, etag=None, match_condition=None):
         key = (entity["PartitionKey"], entity["RowKey"])
         self.calls.append(("update_entity", key))
+        self._let_others_write(key)
         if self.fail_updates > 0:
             self.fail_updates -= 1
             raise ResourceModifiedError("etag mismatch")
@@ -106,16 +114,6 @@ class FakeTableClient:
         if etag is not None and etag != self.etags[key]:
             raise ResourceModifiedError("etag mismatch")
         merged = dict(self.rows[key])
-        merged.update(entity)
-        self._store(key, merged)
-
-    def upsert_entity(self, entity, mode=None):
-        key = (entity["PartitionKey"], entity["RowKey"])
-        self.calls.append(("upsert_entity", key))
-        if self.fail_next_upsert is not None:
-            error, self.fail_next_upsert = self.fail_next_upsert, None
-            raise error
-        merged = dict(self.rows.get(key, {}))
         merged.update(entity)
         self._store(key, merged)
 
@@ -138,13 +136,24 @@ class FakeTableClient:
         return results
 
     # -- test conveniences ------------------------------------------------
+    def _let_others_write(self, key):
+        """Give a `concurrent_writer` hook, if one is set, its chance to land on
+        this row (and move its etag) between our read and our write."""
+        if self.concurrent_writer is not None:
+            self.concurrent_writer(self, key)
+
+    def store_row(self, key, entity):
+        """Write a row behind the routes' back, moving its etag — what another
+        connection's committed write looks like from in here."""
+        self._store(key, entity)
+
     def rows_in(self, partition_key):
         return {rk: row for (pk, rk), row in self.rows.items() if pk == partition_key}
 
     def writes(self):
         """Every mutating call, in order — used to prove OPTIONS is read-only."""
         return [call for call in self.calls
-                if call[0] in ("create_entity", "update_entity", "upsert_entity",
+                if call[0] in ("create_entity", "update_entity",
                                "delete_entity", "create_table")]
 
 
@@ -156,6 +165,31 @@ def _matches(value, op, operand) -> bool:
         "le": value <= operand,
         "lt": value < operand,
     }[op]
+
+
+def concurrent_writer(partition_key, row_key, **fields):
+    """A hook for `FakeTableClient.concurrent_writer`: another connection commits
+    to one row, moving its etag, in the window between our read and our write.
+
+    `fields` are the values that writer leaves behind; a callable receives the
+    current value, so a counter can be incremented the way a second in-flight
+    message would increment it. It fires once, on the first write that touches
+    the row — a real competitor commits once, not on every retry.
+    """
+    state = {"fired": False}
+
+    def hook(client, key):
+        if state["fired"] or key != (partition_key, row_key):
+            return
+        state["fired"] = True
+        row = dict(client.rows.get(key, {}))
+        row.setdefault("PartitionKey", partition_key)
+        row.setdefault("RowKey", row_key)
+        for name, value in fields.items():
+            row[name] = value(row.get(name)) if callable(value) else value
+        client.store_row(key, row)
+
+    return hook
 
 
 class FakeBlob:

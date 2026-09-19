@@ -5,11 +5,20 @@ away — its files are quarantined under `<guid>/fsm-pending/<ip>/`, invisible t
 the pool listing, until an operator accepts the source in the UI. Accepted
 sources write flat into `<guid>/fsm/`, which is the only layout the pool listing
 walks.
+
+The trust row is also the storage ceiling: PendingCount and PendingBytes are
+what the quarantine quota is measured against, and the row is keyed by
+(competition, IP) rather than by session, so FSM's several concurrent
+connections all write it with nothing serialising them. Every counter update
+therefore has to survive a competing one — a lost increment is a quota that can
+be overshot on an endpoint that is anonymous and has no IP restrictions.
 """
 import fixtures
 import function_app as fa
-from conftest import (COMPETITION_ID, DEFAULT_IP, head, make_request, seed_source,
-                      source_row)
+from conftest import (COMPETITION_ID, DEFAULT_IP, concurrent_writer, head, make_request,
+                      seed_source, source_row)
+
+SOURCE_ROW = (fa.PK_HOVTP_SOURCE, fa.source_row_key(COMPETITION_ID, DEFAULT_IP))
 
 FSM = f"{COMPETITION_ID}/fsm/"
 PENDING = f"{COMPETITION_ID}/fsm-pending/{DEFAULT_IP}/"
@@ -67,6 +76,59 @@ def test_a_second_ip_gets_its_own_folder_and_row(table, blobs):
         PENDING + "DT_SCHEDULE_FSK-------------------------------.xml",
     ]
     assert len(table.rows_in(fa.PK_HOVTP_SOURCE)) == 2
+
+
+# ── concurrent writers on one trust row ───────────────────────────────────────
+
+def test_a_concurrent_message_does_not_lose_a_pending_increment(table, blobs):
+    # A second connection from the same IP commits its own quarantined file
+    # while ours is uploading. Both files exist, so both must be counted.
+    seed_source(table, pending_count=1, pending_bytes=1000, message_count=1)
+    table.concurrent_writer = concurrent_writer(
+        *SOURCE_ROW,
+        MessageCount=lambda value: int(value) + 1,
+        PendingCount=lambda value: int(value) + 1,
+        PendingBytes=lambda value: int(value) + 500,
+    )
+
+    assert _post().status_code == 200
+
+    row = source_row(table)
+    assert row["MessageCount"] == 3
+    assert row["PendingCount"] == 3
+    assert row["PendingBytes"] == 1500 + len(fixtures.DT_SCHEDULE_BODY)
+
+
+def test_a_lost_update_cannot_overshoot_the_pending_quota(table, blobs):
+    # The quota is the only storage ceiling on this endpoint. Two messages in
+    # flight over a row two short of the cap must land ON the cap, not around it.
+    seed_source(table, pending_count=fa.MAX_PENDING_FILES - 2)
+    table.concurrent_writer = concurrent_writer(
+        *SOURCE_ROW, PendingCount=lambda value: int(value) + 1)
+
+    assert _post().status_code == 200
+    assert source_row(table)["PendingCount"] == fa.MAX_PENDING_FILES
+
+    # Blind-merging our own count over the concurrent one would leave room here.
+    assert _post().status_code == 451
+
+
+def test_two_first_messages_from_one_ip_keep_the_winners_first_seen(table, blobs):
+    # Both connections find no row and both try to create it. The loser must
+    # fold its message into the row that won, not drop it — and FirstSeenUtc
+    # belongs to whoever got there first, for good.
+    table.concurrent_writer = concurrent_writer(
+        *SOURCE_ROW, CompetitionId=COMPETITION_ID, Ip=DEFAULT_IP, Status="pending",
+        FirstSeenUtc="2026-09-01T20:59:00Z", LastSeenUtc="2026-09-01T20:59:00Z",
+        MessageCount=1, PendingCount=1, PendingBytes=1000)
+
+    assert _post().status_code == 200
+
+    row = source_row(table)
+    assert row["FirstSeenUtc"] == "2026-09-01T20:59:00Z"
+    assert row["MessageCount"] == 2
+    assert row["PendingCount"] == 2
+    assert row["PendingBytes"] == 1000 + len(fixtures.DT_SCHEDULE_BODY)
 
 
 # ── acceptance ────────────────────────────────────────────────────────────────

@@ -149,6 +149,7 @@ _INFRA_HEADER_PREFIXES = (
 )
 
 SERIAL_COMMIT_RETRIES = 3
+SOURCE_UPSERT_RETRIES = 3
 
 
 # ── settings (read per call so an app-setting change takes effect at once) ────
@@ -191,10 +192,22 @@ def _allowed_document_types() -> set[str]:
 
 # ── storage clients (KEEP IN SYNC with infra/functions/function_app.py) ───────
 
+def _data_account_name() -> str:
+    """The account holding `competition-data` and the `competitions` table.
+
+    The listener has its own host storage account now, so its
+    AzureWebJobsStorage is NOT the platform account any more and the data
+    account has to be named explicitly. The fallback keeps single-account and
+    local setups working.
+    """
+    return (os.environ.get("COMPETITION_DATA_ACCOUNT")
+            or os.environ.get("AzureWebJobsStorage__accountName") or "")
+
+
 def get_table_client(table_name: str = COMPETITIONS_TABLE):
     """Table client via managed identity (deployed) or connection string (local)."""
     try:
-        account_name = os.environ.get("AzureWebJobsStorage__accountName")
+        account_name = _data_account_name()
         if account_name:
             credential = DefaultAzureCredential()
             endpoint = f"https://{account_name}.table.core.windows.net"
@@ -213,7 +226,7 @@ def get_table_client(table_name: str = COMPETITIONS_TABLE):
 def get_blob_service_client():
     """Blob client via managed identity (deployed) or connection string (local)."""
     try:
-        account_name = os.environ.get("AzureWebJobsStorage__accountName")
+        account_name = _data_account_name()
         if account_name:
             credential = DefaultAzureCredential()
             account_url = f"https://{account_name}.blob.core.windows.net"
@@ -662,8 +675,18 @@ def decide_serial(last_serial: int, serial: int | None, strict: bool) -> tuple[i
 
 def commit_serial(table_client, session_id: str, serial: int | None, ip: str, now: str) -> int:
     """
-    Persist the accepted serial, etag-conditional so two concurrent posts on one
-    session can't lose an update. Called only AFTER the blobs are stored: a
+    Persist the accepted serial. The cursor may only move FORWARD: the row is
+    re-read inside the loop and a serial another writer has already passed is
+    reported back instead of written. FSM opens several connections on one
+    session, and the etag alone would not catch that — a writer that lands
+    between the handler's read and this one leaves our etag perfectly valid
+    while the value we carry is already stale. The etag guards the write we do
+    make; this check decides whether there is a write to make at all.
+
+    Serial 1 is the single exception: it is FSM restarting the feed (spec §6.2),
+    so it resets the session however far ahead the cursor stands.
+
+    Called only AFTER the blobs are stored and the source row is written: a
     failed store must let FSM resend without meeting a false 450.
     """
     if not session_id or serial is None:
@@ -671,6 +694,10 @@ def commit_serial(table_client, session_id: str, serial: int | None, ip: str, no
 
     for attempt in range(SERIAL_COMMIT_RETRIES):
         existing = read_session(table_client, session_id)
+        stored = int(existing.get("LastSerial") or 0) if existing is not None else 0
+        if serial != 1 and serial <= stored:
+            # Another writer on this session already moved us past this serial.
+            return stored
         try:
             if existing is None:
                 table_client.create_entity({
@@ -756,53 +783,88 @@ def upsert_source(table_client, competition_id: str, ip: str, hdr: HovtpHeaders,
                   pending_bytes: int = 0, document_type: str = "",
                   counters: bool = True) -> None:
     """
-    Merge-upsert the trust row. `counters=False` is the "just record that we
-    heard from this IP" path (a rejected source, or a dropped document type):
-    it must not touch Status or the quarantine counters.
+    Write the trust row, etag-conditional and re-read inside the loop.
+
+    The row is keyed by (competition, IP), not by session, so FSM's several
+    concurrent connections all land on this one row with nothing serialising
+    them. A blind merge would lose increments, and two of these fields —
+    PendingCount and PendingBytes — are what ENFORCES the quarantine quota on an
+    anonymous endpoint, so a lost update is a lost storage ceiling. Every value
+    written is therefore recomputed from a read taken inside the loop (the
+    caller's snapshot predates the blob uploads, which for a large PDF is
+    seconds), and the write is conditional on that read's etag.
+
+    `counters=False` is the "just record that we heard from this IP" path (a
+    rejected source, or a dropped document type): it must not touch Status or
+    the quarantine counters. `existing` is the caller's snapshot and decides
+    that flag only. FirstSeenUtc is written once, by the create, and is never
+    part of an update.
     """
-    entity = {
-        "PartitionKey": PK_HOVTP_SOURCE,
-        "RowKey": source_row_key(competition_id, ip),
-        "LastSeenUtc": now,
-        "UpdatedUtc": now,
-    }
+    row_key = source_row_key(competition_id, ip)
 
-    if existing is None:
-        entity.update({
-            "CompetitionId": competition_id,
-            "Ip": ip,
-            "FirstSeenUtc": now,
-            "MessageCount": 1,
-            "PendingCount": int(pending_files),
-            "PendingBytes": int(pending_bytes),
-            "Status": status or SOURCE_PENDING,
-            "AcceptedUntilUtc": "",
-            "AcceptedBy": "",
-            "AcceptedUtc": "",
-            "RejectedBy": "",
-            "RejectedUtc": "",
-        })
-    else:
-        entity["MessageCount"] = int(existing.get("MessageCount") or 0) + 1
-        if counters:
-            entity["PendingCount"] = int(existing.get("PendingCount") or 0) + int(pending_files)
-            entity["PendingBytes"] = int(existing.get("PendingBytes") or 0) + int(pending_bytes)
-            if status:
-                entity["Status"] = status
+    for attempt in range(SOURCE_UPSERT_RETRIES):
+        current = load_source(table_client, competition_id, ip)
 
-    if counters or existing is None:
-        entity.update({
-            "Origin": hdr.origin,
-            "Venue": hdr.venue,
-            "Discipline": hdr.discipline,
-            "Environment": hdr.environment,
-            "LastDataType": hdr.data_type,
-        })
+        entity = {
+            "PartitionKey": PK_HOVTP_SOURCE,
+            "RowKey": row_key,
+            "LastSeenUtc": now,
+            "UpdatedUtc": now,
+        }
 
-    if document_type:
-        entity["LastDocumentType"] = document_type
+        if current is None:
+            entity.update({
+                "CompetitionId": competition_id,
+                "Ip": ip,
+                "FirstSeenUtc": now,
+                "MessageCount": 1,
+                "PendingCount": int(pending_files),
+                "PendingBytes": int(pending_bytes),
+                "Status": status or SOURCE_PENDING,
+                "AcceptedUntilUtc": "",
+                "AcceptedBy": "",
+                "AcceptedUtc": "",
+                "RejectedBy": "",
+                "RejectedUtc": "",
+            })
+        else:
+            entity["MessageCount"] = int(current.get("MessageCount") or 0) + 1
+            if counters:
+                entity["PendingCount"] = int(current.get("PendingCount") or 0) + int(pending_files)
+                entity["PendingBytes"] = int(current.get("PendingBytes") or 0) + int(pending_bytes)
+                if status:
+                    entity["Status"] = status
 
-    table_client.upsert_entity(entity, mode=UpdateMode.MERGE)
+        if counters or current is None:
+            entity.update({
+                "Origin": hdr.origin,
+                "Venue": hdr.venue,
+                "Discipline": hdr.discipline,
+                "Environment": hdr.environment,
+                "LastDataType": hdr.data_type,
+            })
+
+        if document_type:
+            entity["LastDocumentType"] = document_type
+
+        try:
+            if current is None:
+                table_client.create_entity(entity)
+            else:
+                table_client.update_entity(
+                    entity,
+                    mode=UpdateMode.MERGE,
+                    etag=_entity_etag(current),
+                    match_condition=MatchConditions.IfNotModified,
+                )
+            return
+        except (ResourceModifiedError, ResourceExistsError) as e:
+            logging.warning(
+                f"HOVTP source '{row_key}' changed under us "
+                f"(attempt {attempt + 1}/{SOURCE_UPSERT_RETRIES}): {e}"
+            )
+
+    logging.error(f"Could not write the HOVTP source row '{row_key}'")
 
 
 # ── file derivation ───────────────────────────────────────────────────────────
@@ -1012,10 +1074,10 @@ def _hovtp_post(req: func.HttpRequest, record: dict) -> func.HttpResponse:
     # Not on the allowlist: transport accepted (200, serial committed so FSM
     # keeps streaming), nothing stored, but the source still surfaces in the UI.
     if message.document_type not in _allowed_document_types():
-        last_serial = commit_serial(table_client, hdr.session_id, hdr.serial, ip, now)
         upsert_source(table_client, competition_id, ip, hdr, now, existing_source,
                       document_type=message.document_type,
                       counters=existing_source is None)
+        last_serial = commit_serial(table_client, hdr.session_id, hdr.serial, ip, now)
         record.update({"outcome": "dropped", "status": 200,
                        "lastSerial": last_serial, "blobs": []})
         return hovtp_response(200, last_serial)
@@ -1024,9 +1086,9 @@ def _hovtp_post(req: func.HttpRequest, record: dict) -> func.HttpResponse:
 
     state = source_state(existing_source, now)
     if state == SOURCE_REJECTED:
-        last_serial = commit_serial(table_client, hdr.session_id, hdr.serial, ip, now)
         upsert_source(table_client, competition_id, ip, hdr, now, existing_source,
                       counters=False)
+        last_serial = commit_serial(table_client, hdr.session_id, hdr.serial, ip, now)
         record.update({"outcome": "rejected", "status": 451,
                        "reason": "source not accepted", "lastSerial": last_serial,
                        "blobs": []})
@@ -1071,9 +1133,13 @@ def _hovtp_post(req: func.HttpRequest, record: dict) -> func.HttpResponse:
             raise HovtpError(500, "could not store the message", last_serial=stored_serial)
         stored.append(item.name)
 
-    # Blobs first, serial second: a failed store leaves the serial uncommitted
-    # so FSM's resend is accepted rather than answered 450.
-    last_serial = commit_serial(table_client, hdr.session_id, hdr.serial, ip, now)
+    # Blobs and the trust row first, the serial last. The serial is the only
+    # thing that makes FSM stop resending, so nothing may be acknowledged before
+    # the bookkeeping that makes the files visible is durable: a source row lost
+    # to a failed write would leave quarantined blobs no listing shows and no
+    # operator can accept. A resend replays idempotently — the blob names are
+    # deterministic and written with overwrite=True, and a resend only happens
+    # when this row write is the thing that failed, so nothing is counted twice.
     upsert_source(
         table_client, competition_id, ip, hdr, now, existing_source,
         status=SOURCE_PENDING if quarantined else SOURCE_ACCEPTED,
@@ -1081,6 +1147,7 @@ def _hovtp_post(req: func.HttpRequest, record: dict) -> func.HttpResponse:
         pending_bytes=total_bytes if quarantined else 0,
         document_type=message.document_type,
     )
+    last_serial = commit_serial(table_client, hdr.session_id, hdr.serial, ip, now)
 
     record.update({
         "outcome": "quarantined" if quarantined else "ok",
