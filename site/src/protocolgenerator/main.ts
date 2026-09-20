@@ -211,7 +211,9 @@ async function editBoundCompetition(btn: HTMLButtonElement): Promise<void> {
     // The dialog resolves with the unchanged competition when nothing was edited.
     if (updated.name === active.name && updated.code === active.code
       && updated.date === active.date && updated.venue === active.venue) return;
-    const renamed = competitionLabel(updated) !== boundLabel;
+    // Compare against the competition as it was when the dialog opened, not
+    // against `boundLabel`: that cache lags while a re-bind is still in flight.
+    const renamed = competitionLabel(updated) !== competitionLabel(active);
     setActiveCompetition(updated);                   // sync notify → bindActiveCompetition() re-resolves when the label changed
     if (!renamed) await bindActiveCompetition(true); // date/venue-only edit: the early-out would swallow it
     flash(renamed ? `Renamed to ${competitionLabel(updated)}.` : 'Competition details updated.');
