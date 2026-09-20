@@ -1,0 +1,67 @@
+# Dependabot version updates. Weekly, grouped into one PR per ecosystem,
+# targeting `test` so updates flow through the normal test -> verify ->
+# promote-to-main process instead of auto-deploying prod on merge.
+#
+# NOTE: this file is only read from the default branch (main).
+# NOTE: the npm entry covers the root workspaces (site + packages/shared-ui);
+# shared-ui resolves as a workspace link, so no registry block is needed. If a
+# Dependabot npm run ever fails resolving @figureskatingtools/* because of the
+# root .npmrc scope, add a `registries:` section with a github-npm registry
+# (https://npm.pkg.github.com, token ${{ secrets.PACKAGES_READ_TOKEN }}) and a
+# Dependabot secret PACKAGES_READ_TOKEN (classic PAT with read:packages), set
+# under Settings -> Secrets and variables -> Dependabot, exactly as
+# fs-judgepapers had it.
+version: 2
+
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "Europe/Helsinki"
+    target-branch: "test"
+    groups:
+      npm-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "pip"
+    directory: "/infra/functions"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "Europe/Helsinki"
+    target-branch: "test"
+    groups:
+      pip-dependencies:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "pip"
+    directory: "/infra/hovtp"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "Europe/Helsinki"
+    target-branch: "test"
+    groups:
+      pip-dependencies-hovtp:
+        patterns:
+          - "*"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "Europe/Helsinki"
+    target-branch: "test"
+    groups:
+      actions-dependencies:
+        patterns:
+          - "*"
