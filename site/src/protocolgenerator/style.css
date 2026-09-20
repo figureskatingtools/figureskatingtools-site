@@ -303,6 +303,45 @@ input[type="checkbox"] { accent-color: var(--ink); }
 .view-header h2 { margin: 0; }
 .view-header-lead { display: flex; align-items: center; gap: 1rem; }
 
+/* Quiet pencil beside the competition heading — opens the shared platform edit
+   dialog. Same affordance as the home page's .comp-edit, but CSS never crosses
+   documents so it is redeclared here in this app's palette. The negative margin
+   pulls it out of the lead's 1rem gap so it reads as part of the heading. */
+.title-edit {
+  flex-shrink: 0;
+  width: 1.35rem;
+  height: 1.35rem;
+  margin-left: -0.6rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: none;
+  color: var(--ink-faint);
+  font-family: var(--font-body);
+  font-size: 0.8125rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s, opacity 0.15s;
+}
+
+.title-edit:hover {
+  background-color: var(--rink-tint);
+  color: var(--rink);
+}
+
+.title-edit:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.title-edit:focus-visible {
+  outline: 2px solid var(--rink);
+  outline-offset: 2px;
+}
+
 /* Compact retention control in the competition header: "Auto-deletes … · Extend" */
 .retention {
   display: flex;

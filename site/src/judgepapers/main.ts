@@ -219,6 +219,8 @@ function showView(viewId: string) {
 
 /** Platform competition GUID this tool is currently bound to */
 let boundPlatformId: string | null = null;
+/** Label the current binding was resolved with — a same-GUID rename must re-resolve */
+let boundLabel: string | null = null;
 /** Guards against an out-of-order resolve when the selection changes mid-flight */
 let bindToken = 0;
 /**
@@ -328,8 +330,11 @@ let openBoundCompetition: ((id: string, name: string) => Promise<void>) | null =
 /**
  * Bind this tool to the active platform competition.
  *
- * No selection → the quiet "pick a competition" card. Same GUID as the current
- * binding → nothing to do (the subscription fires on every storage change).
+ * No selection → the quiet "pick a competition" card. Same GUID *and* the same
+ * label as the current binding → nothing to do (the subscription fires on every
+ * storage change). A label change on the same GUID — a rename made elsewhere,
+ * arriving here as a storage event — must re-resolve: that is what lets the
+ * backend sync this tool's record name.
  * Otherwise resolve the platform GUID into this tool's competition folder and
  * open it.
  */
@@ -339,17 +344,18 @@ async function bindActiveCompetition(force = false): Promise<void> {
 
     if (!active) {
         boundPlatformId = null;
+        boundLabel = null;
         showPickCompetition();
         return;
     }
 
-    if (!force && active.id === boundPlatformId) return;
+    const label = competitionLabel(active);
+    if (!force && active.id === boundPlatformId && label === boundLabel) return;
 
     // Pool availability is per competition (a tool record may be unbound), so a
     // new selection starts from a clean slate.
     poolDisabled = false;
 
-    const label = competitionLabel(active);
     showBindLoading(label);
 
     try {
@@ -365,10 +371,12 @@ async function bindActiveCompetition(force = false): Promise<void> {
         if (token !== bindToken) return;   // selection changed while we waited
         if (!data?.id) throw new Error('The tool API returned no competition id.');
         boundPlatformId = active.id;
+        boundLabel = label;
         if (openBoundCompetition) await openBoundCompetition(data.id, data.name || label);
     } catch (e) {
         if (token !== bindToken) return;
         boundPlatformId = null;
+        boundLabel = null;
         showBindError(e instanceof Error ? e.message : 'Network error.');
     }
 }
