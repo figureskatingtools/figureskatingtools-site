@@ -5,6 +5,8 @@ import {
   injectSiteNavStyles,
   initCompetitionSelector,
   getActiveCompetition,
+  setActiveCompetition,
+  openEditCompetitionDialog,
   competitionLabel,
   formatDateFi,
   subscribeActiveCompetition,
@@ -53,6 +55,8 @@ function attr(obj: unknown): string {
 let currentId: string | null = null;
 /** Platform competition GUID this tool is currently bound to (see `bindActiveCompetition`). */
 let boundPlatformId: string | null = null;
+/** Label the current binding was resolved with — a same-GUID rename must re-resolve. */
+let boundLabel: string | null = null;
 /** Guards against an out-of-order resolve when the selection changes mid-flight. */
 let bindToken = 0;
 let details: CompetitionDetails | null = null;
@@ -112,6 +116,7 @@ const APP_HTML = `
           <div class="view-header">
             <div class="view-header-lead">
               <h2 id="detail-title">Competition</h2>
+              <button id="detail-edit" class="title-edit" type="button" title="Edit competition">✎</button>
               <span class="help-icon" tabindex="0" role="button" aria-label="How to use the Protocol Generator">?<span class="help-pop">
                 <strong>How to use the Protocol Generator</strong>
                 <ul>
@@ -193,11 +198,38 @@ function showBindError(message: string) {
     ?.addEventListener('click', () => void bindActiveCompetition(true));
 }
 
+/** Header pencil: rename/edit the bound competition in the shared platform dialog.
+ *  The change lands in the registry, so every tool sees it; re-resolving here lets
+ *  the backend sync this tool's record name (and an un-customised protocol title). */
+async function editBoundCompetition(btn: HTMLButtonElement): Promise<void> {
+  const active = getActiveCompetition();
+  if (!active) return;
+  btn.disabled = true;
+  try {
+    const updated = await openEditCompetitionDialog(active);
+    if (!updated) return;
+    // The dialog resolves with the unchanged competition when nothing was edited.
+    if (updated.name === active.name && updated.code === active.code
+      && updated.date === active.date && updated.venue === active.venue) return;
+    // Compare against the competition as it was when the dialog opened, not
+    // against `boundLabel`: that cache lags while a re-bind is still in flight.
+    const renamed = competitionLabel(updated) !== competitionLabel(active);
+    setActiveCompetition(updated);                   // sync notify → bindActiveCompetition() re-resolves when the label changed
+    if (!renamed) await bindActiveCompetition(true); // date/venue-only edit: the early-out would swallow it
+    flash(renamed ? `Renamed to ${competitionLabel(updated)}.` : 'Competition details updated.');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 /**
  * Bind this tool to the active platform competition.
  *
- * No selection → the quiet "pick a competition" card. Same GUID as the current
- * binding → nothing to do (the subscription fires on every storage change).
+ * No selection → the quiet "pick a competition" card. Same GUID *and* the same
+ * label as the current binding → nothing to do (the subscription fires on every
+ * storage change). A label change on the same GUID — a rename from the header
+ * pencil, or one made in another tab and arriving as a storage event — must
+ * re-resolve: that is what lets the backend sync this tool's record name.
  * Otherwise resolve the platform GUID into this tool's competition record and
  * open it.
  */
@@ -207,6 +239,7 @@ async function bindActiveCompetition(force = false): Promise<void> {
 
   if (!active) {
     boundPlatformId = null;
+    boundLabel = null;
     currentId = null;
     details = null;
     poolFiles = null;
@@ -214,14 +247,14 @@ async function bindActiveCompetition(force = false): Promise<void> {
     return;
   }
 
-  if (!force && active.id === boundPlatformId) return;
+  const label = competitionLabel(active);
+  if (!force && active.id === boundPlatformId && label === boundLabel) return;
 
   // Pool availability is per competition (a tool record can be unbound) — a new
   // selection gets a clean slate.
   poolFiles = null;
   poolDisabled = false;
 
-  const label = competitionLabel(active);
   showBindLoading(label);
 
   try {
@@ -239,10 +272,12 @@ async function bindActiveCompetition(force = false): Promise<void> {
     if (token !== bindToken) return;   // selection changed while we waited
     if (!data?.id) throw new Error('The tool API returned no competition id.');
     boundPlatformId = active.id;
+    boundLabel = label;
     await openCompetition(data.id, data.name || label);
   } catch (e) {
     if (token !== bindToken) return;
     boundPlatformId = null;
+    boundLabel = null;
     showBindError(e instanceof Error ? e.message : 'Network error.');
   }
 }
@@ -1979,6 +2014,13 @@ async function init() {
     // The selector never fires on subscribe, so bind once here and then on every
     // change (this tab and, through the storage event, other tabs).
     subscribeActiveCompetition(() => void bindActiveCompetition());
+
+    // Header pencil — edits the platform record every tool shares.
+    const editBtn = document.getElementById('detail-edit') as HTMLButtonElement | null;
+    if (editBtn) {
+      editBtn.setAttribute('aria-label', 'Edit competition name, code, date or venue');
+      editBtn.addEventListener('click', () => void editBoundCompetition(editBtn));
+    }
 
     loadingView.classList.add('hidden');
     mainContent.classList.remove('hidden');
