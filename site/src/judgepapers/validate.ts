@@ -6,7 +6,9 @@ export interface FileData {
     type: string;
     category: string;
     categoryCode?: string;
-    judgingMethod?: string; // "ISU" or "MUPI" — from categories table
+    judgingMethod?: string; // "ISU" or "MUPI" — effective method for this competition
+    defaultJudgingMethod?: string; // the categories table value, before any override
+    judgingMethodOverridable?: boolean; // true for synchronized skating categories
     segment: string;
     raw_segment: string;
     prefix?: string;
@@ -100,7 +102,8 @@ export function validateCategory(
         // ISU Specific Logic (Always applied for Figure Skating, skipped for MUPI)
         
         // Detect if this segment belongs to a MUPI category.
-        // Uses the judgingMethod field from the backend (sourced from the categories table).
+        // Uses the judgingMethod field from the backend (sourced from the categories
+        // table, but for synchronized skating it may be a per-competition override).
         const isMupi = files.some(f => f.judgingMethod === 'MUPI');
 
         if (!isMupi) {

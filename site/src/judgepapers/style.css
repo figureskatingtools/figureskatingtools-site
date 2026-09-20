@@ -1246,6 +1246,43 @@ input[type="checkbox"] {
   vertical-align: middle;
 }
 
+/* ── Judging method switch — the MUPI stamp, made selectable (synchro only) ── */
+.method-switch {
+  display: inline-flex;
+  margin-left: 0.5rem;
+  vertical-align: middle;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.25rem;
+  overflow: hidden;
+}
+
+.method-switch-btn {
+  background: var(--paper-tint);
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  padding: 0.12rem 0.45rem;
+  border: 0;
+  cursor: pointer;
+}
+
+.method-switch-btn + .method-switch-btn {
+  border-left: 1px solid var(--line-strong);
+}
+
+/* The active half reads like the old badge: gold for MUPI, ink on paper for ISU */
+.method-switch-btn.is-on {
+  background-color: var(--paper);
+  color: var(--ink);
+}
+
+.method-switch-btn[data-method="MUPI"].is-on {
+  background-color: var(--gold-tint);
+  color: var(--gold);
+}
+
 /* ── Help popovers — question-mark triggers with hover/click instructions ── */
 .help-wrap {
   position: relative;
