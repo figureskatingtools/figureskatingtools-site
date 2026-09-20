@@ -640,7 +640,7 @@ async function init() {
                 ? `<span class="method-switch" role="group" aria-label="Judging method"
                          data-code="${escapeHtml(methodCode)}" data-default="${escapeHtml(defaultMethod)}"
                          title="Judging method (table default: ${escapeHtml(defaultMethod)})">
-                       ${['ISU', 'MUPI'].map(m => `<button type="button" class="method-switch-btn${effectiveMethod === m ? ' is-on' : ''}" data-method="${m}">${m}</button>`).join('')}
+                       ${['ISU', 'MUPI'].map(m => `<button type="button" class="method-switch-btn${effectiveMethod === m ? ' is-on' : ''}" data-method="${m}" aria-pressed="${effectiveMethod === m}">${m}</button>`).join('')}
                    </span>${renderHelpTrigger(`help-method-${category.replace(/\s+/g, '-')}`, 'What do ISU and MUPI mean here?', judgingMethodHelpHtml())}`
                 : (isMupi ? '<span class="tag-mupi">MUPI</span>' : '');
 
@@ -762,6 +762,13 @@ async function init() {
      * picking the table default removes the key; the full map is sent on every
      * save because the server shallow-replaces the whole setting.
      */
+    // Override saves run one after another on this chain. Each save sends the
+    // full map as it stood when queued, so the last request in the chain always
+    // carries the final selection and an older response can never overwrite a
+    // newer one. Generate awaits the chain, because the backend reads the
+    // overrides from metadata.json when it records statistics.
+    let overrideSaveChain: Promise<void> = Promise.resolve();
+
     async function setJudgingMethodOverride(code: string, method: string, defaultMethod: string) {
         if (!currentCompetitionData || !code) return;
 
@@ -785,23 +792,34 @@ async function init() {
         }
         renderCompetitionView();
 
-        try {
-            const resp = await fetch(`${API_BASE}/save_competition_settings`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    id: currentCompetitionData.id,
-                    settings: { judgingMethodOverrides: overrides }
-                })
-            });
-            if (!resp.ok) {
-                console.warn('Failed to save judging method override');
-                loadCompetitionDetails(currentCompetitionData.id);
+        const competitionId = currentCompetitionData.id;
+        overrideSaveChain = overrideSaveChain.then(async () => {
+            // The competition changed under us while queued; this map is moot.
+            if (currentCompetitionData?.id !== competitionId) return;
+            let ok = false;
+            try {
+                const resp = await fetch(`${API_BASE}/save_competition_settings`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id: competitionId,
+                        settings: { judgingMethodOverrides: overrides }
+                    })
+                });
+                ok = resp.ok;
+            } catch (_e) {
+                ok = false;
             }
-        } catch (_e) {
-            console.warn('Failed to save judging method override');
-            loadCompetitionDetails(currentCompetitionData.id);
-        }
+            if (!ok) {
+                console.warn('Failed to save judging method override');
+                // Resync only if nothing newer is queued behind us; otherwise the
+                // later save carries the current selection and will report itself.
+                if (currentCompetitionData?.judgingMethodOverrides === overrides) {
+                    await loadCompetitionDetails(competitionId);
+                }
+            }
+        });
+        await overrideSaveChain;
     }
 
     // Generate Handler
@@ -841,6 +859,9 @@ async function init() {
         }
         
         try {
+            // A judging-method switch may still be saving; the backend reads the
+            // overrides from metadata.json when it records statistics.
+            await overrideSaveChain;
             const resp = await fetch(`${API_BASE}/generate_judging_papers`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
