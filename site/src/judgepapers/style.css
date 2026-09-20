@@ -744,6 +744,19 @@ input[type="checkbox"] {
   text-overflow: ellipsis;
 }
 
+/* A help popover inside a category header (the ISU/MUPI switch's "?") is
+   absolutely positioned and would be clipped by the card's and the lead's
+   overflow: hidden. Lift the clipping only while that popover is showing, so
+   the rounded corners and the title ellipsis keep working the rest of the time. */
+.category-card:has(.help-wrap:hover),
+.category-card:has(.help-wrap.is-open),
+.category-card:has(.help-trigger:focus-visible),
+.category-head-lead:has(.help-wrap:hover),
+.category-head-lead:has(.help-wrap.is-open),
+.category-head-lead:has(.help-trigger:focus-visible) {
+  overflow: visible;
+}
+
 .status-mark {
   font-weight: 700;
   flex-shrink: 0;
