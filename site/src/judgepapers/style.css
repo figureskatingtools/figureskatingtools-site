@@ -744,6 +744,19 @@ input[type="checkbox"] {
   text-overflow: ellipsis;
 }
 
+/* A help popover inside a category header (the ISU/MUPI switch's "?") is
+   absolutely positioned and would be clipped by the card's and the lead's
+   overflow: hidden. Lift the clipping only while that popover is showing, so
+   the rounded corners and the title ellipsis keep working the rest of the time. */
+.category-card:has(.help-wrap:hover),
+.category-card:has(.help-wrap.is-open),
+.category-card:has(.help-trigger:focus-visible),
+.category-head-lead:has(.help-wrap:hover),
+.category-head-lead:has(.help-wrap.is-open),
+.category-head-lead:has(.help-trigger:focus-visible) {
+  overflow: visible;
+}
+
 .status-mark {
   font-weight: 700;
   flex-shrink: 0;
@@ -1244,6 +1257,65 @@ input[type="checkbox"] {
   margin-left: 0.5rem;
   border: 1px solid var(--gold-bright);
   vertical-align: middle;
+}
+
+/* ── Judging method switch — the MUPI stamp, made selectable (synchro only) ──
+   The selected half is a solid fill with a check mark so the state reads at a
+   glance; the other half stays muted. Blue = ISU, gold = MUPI (the badge colour). */
+.method-switch {
+  display: inline-flex;
+  margin-left: 0.5rem;
+  vertical-align: middle;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.25rem;
+  overflow: hidden;
+}
+
+.method-switch-btn {
+  background: var(--paper-tint);
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  padding: 0.14rem 0.5rem;
+  border: 0;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.method-switch-btn + .method-switch-btn {
+  border-left: 1px solid var(--line-strong);
+}
+
+.method-switch-btn:not(.is-on):hover {
+  background: var(--frost);
+  color: var(--ink);
+}
+
+.method-switch-btn:focus-visible {
+  outline: 2px solid var(--rink);
+  outline-offset: -2px;
+}
+
+.method-switch-btn.is-on {
+  cursor: default;
+  color: var(--paper);
+}
+
+.method-switch-btn.is-on::before {
+  content: "\2713\00a0"; /* ✓ */
+}
+
+.method-switch-btn[data-method="ISU"].is-on {
+  background-color: var(--rink);
+}
+
+/* Gold is too light for white text at this size; ink on gold reads like the
+   badge and clears the small-text contrast threshold. */
+.method-switch-btn[data-method="MUPI"].is-on {
+  background-color: var(--gold);
+  color: var(--ink);
 }
 
 /* ── Help popovers — question-mark triggers with hover/click instructions ── */

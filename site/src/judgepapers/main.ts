@@ -11,7 +11,6 @@ import {
     formatDateTimeFi,
     listCompetitionFiles,
     uploadCompetitionFile,
-    type CategoryInfo,
     type PoolFile,
     SUFFIX_SLOTS,
 } from '@figureskatingtools/shared-ui';
@@ -23,7 +22,7 @@ import {
     type UserInfo,
 } from '../shell.js';
 import { validateCategory, validateCompetition } from './validate';
-import { renderHelpTrigger, filesHelpHtml, initHelp } from './help';
+import { renderHelpTrigger, filesHelpHtml, judgingMethodHelpHtml, initHelp } from './help';
 
 // Inject the shared figureskatingtools.com nav styles once at startup
 injectSiteNavStyles();
@@ -38,25 +37,8 @@ const APP_PATH = '/judgepapers/';
  */
 const API_BASE = '/judgepapers/api';
 
-// `CategoryInfo` is the shared shape of one `categories` table row — the same
-// type the filename recognizer in shared-ui consumes.
-
-// Module-level categories cache, loaded once from the API
-let categoriesCache: CategoryInfo[] = [];
-
 // Language setting: 'fi' (Finnish, default) or 'en' (English)
 let currentLanguage: 'fi' | 'en' = 'fi';
-
-async function loadCategoriesCache() {
-    try {
-        const resp = await fetch(`${API_BASE}/get_categories`);
-        if (resp.ok) {
-            categoriesCache = await resp.json();
-        }
-    } catch (_e) {
-        console.warn('Failed to load categories');
-    }
-}
 
 /**
  * Get the localized category name from file data in the structure.
@@ -73,11 +55,6 @@ function getLocalizedCategoryName(categoryKey: string, segments: Record<string, 
         }
     }
     return categoryKey;
-}
-
-function isMupiCategory(categoryCode: string): boolean {
-    const cat = categoriesCache.find(c => c.abbreviation === categoryCode);
-    return cat?.judgingMethod === 'MUPI';
 }
 
 const appElement = document.querySelector<HTMLDivElement>('#app')!;
@@ -311,6 +288,7 @@ function showPickCompetition() {
             <li>PDFs uploaded for the same competition in another tool appear under <strong>Competition files</strong> — import them here without re-uploading.</li>
             <li>The system validates the files, groups them into categories by their file names, and ensures all required documents are present.</li>
             <li><strong>Check that every file sits under the right category</strong> — grouping goes by file name, so verify the listing before generating.</li>
+            <li><strong>Synchronized skating:</strong> pick <strong>ISU</strong> or <strong>MUPI</strong> on the category card ${renderHelpTrigger('help-method-welcome', 'What do ISU and MUPI mean here?', judgingMethodHelpHtml())} — the default comes from the category registry, the choice applies to this competition only and decides which files are required.</li>
             <li>Once validated, click <strong>Generate Papers</strong> to create the combined PDF booklets and ZIP archives.</li>
             <li>Download the generated files using the links that appear. You can also copy the links to share them.</li>
         </ol>
@@ -526,9 +504,6 @@ async function init() {
     loadingView.classList.add('hidden');
     mainContent.classList.remove('hidden');
 
-    // Load categories cache from API (table-driven config)
-    await loadCategoriesCache();
-
     // Keep the tool bound to the nav's competition selector — including changes
     // made in another tab. The subscription never fires on subscribe itself, so
     // init() does the first bind explicitly.
@@ -645,31 +620,29 @@ async function init() {
             
             const displayCategory = getLocalizedCategoryName(category, segments) || category || '(Unspecified Category)';
             
-            // Check if this specific category should be tagged MUPI
-            // Now driven by the categories table via the backend's judgingMethod field
-            let isMupi = false;
-            // Check from the file data if judgingMethod is available (enriched by backend)
-            for (const segment of Object.values(segments)) {
-                for (const file of (segment as any[])) {
-                     if (file.judgingMethod === 'MUPI') {
-                         isMupi = true;
-                         break;
-                     }
-                }
-                if (isMupi) break;
-            }
-            // Fallback: check via the categories cache using categoryCode
-            if (!isMupi) {
-                for (const segment of Object.values(segments)) {
-                    for (const file of (segment as any[])) {
-                        if (file.categoryCode && isMupiCategory(file.categoryCode)) {
-                            isMupi = true;
-                            break;
-                        }
-                    }
-                    if (isMupi) break;
-                }
-            }
+            // Judging method for this card. Every file of a category carries the
+            // same categoryCode and method (the `#N` split groups included), so the
+            // first file that has a code describes the whole card. The backend has
+            // already applied any per-competition override, so `judgingMethod` is
+            // the effective value and drives both the badge and validation.
+            const methodFile = (Object.values(segments) as any[][])
+                .flat()
+                .find((f: any) => f && f.categoryCode);
+            const methodCode: string = methodFile?.categoryCode ?? '';
+            const effectiveMethod: string = methodFile?.judgingMethod ?? '';
+            const defaultMethod: string = methodFile?.defaultJudgingMethod ?? effectiveMethod;
+            // Only synchronized-skating categories may be switched per competition.
+            const overridable = !!methodFile?.judgingMethodOverridable;
+            const isMupi = effectiveMethod === 'MUPI';
+
+            // Switch for overridable categories, today's plain badge otherwise.
+            const methodHtml = overridable
+                ? `<span class="method-switch" role="group" aria-label="Judging method"
+                         data-code="${escapeHtml(methodCode)}" data-default="${escapeHtml(defaultMethod)}"
+                         title="Judging method (table default: ${escapeHtml(defaultMethod)})">
+                       ${['ISU', 'MUPI'].map(m => `<button type="button" class="method-switch-btn${effectiveMethod === m ? ' is-on' : ''}" data-method="${m}" aria-pressed="${effectiveMethod === m}">${m}</button>`).join('')}
+                   </span>${renderHelpTrigger(`help-method-${category.replace(/\s+/g, '-')}`, 'What do ISU and MUPI mean here?', judgingMethodHelpHtml())}`
+                : (isMupi ? '<span class="tag-mupi">MUPI</span>' : '');
 
             html += `
                 <div class="category-card">
@@ -678,7 +651,7 @@ async function init() {
                         <div class="category-head-lead">
                              <span class="status-mark">${statusIcon}</span>
                              <span class="category-title">${escapeHtml(displayCategory)}</span>
-                             ${isMupi ? '<span class="tag-mupi">MUPI</span>' : ''}
+                             ${methodHtml}
                              ${catCompNameHtml}
                         </div>
                         <div class="category-head-tail">
@@ -736,9 +709,28 @@ async function init() {
             });
         });
 
+        // Judging-method switch (synchronized skating only). stopPropagation so
+        // clicking it doesn't also collapse the category card underneath.
+        document.querySelectorAll('.method-switch-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const el = e.currentTarget as HTMLElement;
+                const method = el.dataset.method!;
+                const group = el.closest('.method-switch') as HTMLElement | null;
+                if (!group) return;
+                const code = group.dataset.code!;
+                const defaultMethod = group.dataset.default || '';
+                if (el.classList.contains('is-on')) return; // already the active choice
+                void setJudgingMethodOverride(code, method, defaultMethod);
+            });
+        });
+
         // Header click logic
         document.querySelectorAll('.category-header').forEach(header => {
             header.addEventListener('click', (e) => {
+                // The judging-method switch and its help popover live inside the
+                // header; interacting with them must not collapse the card.
+                if ((e.target as HTMLElement).closest('.method-switch, .help-wrap')) return;
                 const cat = (e.currentTarget as HTMLElement).getAttribute('data-category');
                 if (cat) {
                      const content = document.getElementById(`content-${cat.replace(/\s+/g, '-')}`);
@@ -762,6 +754,72 @@ async function init() {
         if (btn) {
             btn.disabled = !isGlobalValid;
         }
+    }
+
+    /**
+     * Switch one synchronized-skating category between ISU and MUPI for this
+     * competition. Only deviations from the categories table are stored, so
+     * picking the table default removes the key; the full map is sent on every
+     * save because the server shallow-replaces the whole setting.
+     */
+    // Override saves run one after another on this chain. Each save sends the
+    // full map as it stood when queued, so the last request in the chain always
+    // carries the final selection and an older response can never overwrite a
+    // newer one. Generate awaits the chain, because the backend reads the
+    // overrides from metadata.json when it records statistics.
+    let overrideSaveChain: Promise<void> = Promise.resolve();
+
+    async function setJudgingMethodOverride(code: string, method: string, defaultMethod: string) {
+        if (!currentCompetitionData || !code) return;
+
+        const overrides: Record<string, string> = { ...(currentCompetitionData.judgingMethodOverrides || {}) };
+        if (method === defaultMethod) {
+            delete overrides[code];
+        } else {
+            overrides[code] = method;
+        }
+        currentCompetitionData.judgingMethodOverrides = overrides;
+
+        // Patch the parsed files locally instead of re-fetching: a re-fetch
+        // re-parses every PDF and is slow, and the effective method is all the
+        // validation and the badge read.
+        for (const segments of Object.values(currentCompetitionData.structure || {})) {
+            for (const files of Object.values(segments as Record<string, any[]>)) {
+                for (const file of files) {
+                    if (file.categoryCode === code) file.judgingMethod = method;
+                }
+            }
+        }
+        renderCompetitionView();
+
+        const competitionId = currentCompetitionData.id;
+        overrideSaveChain = overrideSaveChain.then(async () => {
+            // The competition changed under us while queued; this map is moot.
+            if (currentCompetitionData?.id !== competitionId) return;
+            let ok = false;
+            try {
+                const resp = await fetch(`${API_BASE}/save_competition_settings`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        id: competitionId,
+                        settings: { judgingMethodOverrides: overrides }
+                    })
+                });
+                ok = resp.ok;
+            } catch (_e) {
+                ok = false;
+            }
+            if (!ok) {
+                console.warn('Failed to save judging method override');
+                // Resync only if nothing newer is queued behind us; otherwise the
+                // later save carries the current selection and will report itself.
+                if (currentCompetitionData?.judgingMethodOverrides === overrides) {
+                    await loadCompetitionDetails(competitionId);
+                }
+            }
+        });
+        await overrideSaveChain;
     }
 
     // Generate Handler
@@ -801,6 +859,9 @@ async function init() {
         }
         
         try {
+            // A judging-method switch may still be saving; the backend reads the
+            // overrides from metadata.json when it records statistics.
+            await overrideSaveChain;
             const resp = await fetch(`${API_BASE}/generate_judging_papers`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },

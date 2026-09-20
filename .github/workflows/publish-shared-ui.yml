@@ -5,6 +5,15 @@ name: Publish shared-ui
 # repos' legacy v2.x frontends and is retired with them. Dispatch from the
 # ref whose packages/shared-ui/package.json version you want to publish
 # (publishing an already-published version fails with 409).
+
+# Runner image is pinned on purpose. The ubuntu-latest label moves from Ubuntu
+# 24.04 to 26.04 between 2026-10-19 and 2026-11-19
+# (https://github.com/actions/runner-images/issues/14748), so an explicit label
+# keeps a -latest flip from changing the deploy OS under us mid-rollout.
+# Bump it deliberately: change every runs-on in this file together, dispatch
+# the workflow against the test environment first, then promote. Never set it
+# back to ubuntu-latest. Rollback label: ubuntu-24.04.
+
 on:
   workflow_dispatch:
 
@@ -15,7 +24,7 @@ permissions:
 jobs:
   publish:
     name: Build & Publish @figureskatingtools/shared-ui
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     defaults:
       run:
         working-directory: packages/shared-ui
