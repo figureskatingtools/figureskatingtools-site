@@ -42,6 +42,14 @@ export interface NewCompetitionInput {
   venue?: string;
 }
 
+/** Fields accepted when editing a competition — only the keys present are sent */
+export interface UpdateCompetitionInput {
+  name?: string;
+  code?: string;
+  date?: string;
+  venue?: string;
+}
+
 /** localStorage key holding the active competition */
 export const ACTIVE_COMPETITION_KEY = 'fst:active-competition:v1';
 
@@ -351,6 +359,65 @@ export async function deleteCompetition(id: string): Promise<void> {
       detail || `Could not delete competition (${resp.status})`
     );
   }
+}
+
+/**
+ * `PATCH /api/competitions/{id}`.
+ *
+ * A partial update: only the keys present in `input` are sent, so an edit form
+ * can post just what the user actually changed. Renaming the **code** moves the
+ * registry's `CODE` row, which is what makes a 409 possible here too —
+ * surfaced as a `CompetitionApiError` with `status === 409`.
+ *
+ * Resolves with the full competition as the registry now stores it.
+ */
+export async function updateCompetition(
+  id: string,
+  input: UpdateCompetitionInput
+): Promise<PlatformCompetition> {
+  const body: Record<string, string> = {};
+  if ('name' in input) body.name = (input.name ?? '').trim();
+  if ('code' in input) body.code = normalizeCompetitionCode(input.code ?? '');
+  if ('date' in input) body.startDate = (input.date ?? '').trim();
+  if ('venue' in input) body.venue = (input.venue ?? '').trim();
+
+  let resp: Response;
+  try {
+    resp = await fetch(`${COMPETITIONS_API}/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch (_e) {
+    throw new CompetitionApiError(0, 'Competitions API unreachable');
+  }
+
+  if (resp.status === 409) {
+    throw new CompetitionApiError(409, `Competition code "${body.code}" is already in use.`);
+  }
+  if (!resp.ok) {
+    let detail = '';
+    try {
+      const payload = await resp.json();
+      // The registry answers `{error: <code>, message: <human text>}`
+      detail =
+        (typeof payload?.message === 'string' && payload.message) ||
+        (typeof payload?.error === 'string' && payload.error) ||
+        '';
+    } catch (_e) {
+      // No JSON body — fall back to the bare status
+    }
+    throw new CompetitionApiError(
+      resp.status,
+      detail || `Could not update competition (${resp.status})`
+    );
+  }
+
+  const updated = toPlatformCompetition(await resp.json());
+  if (!updated) {
+    throw new CompetitionApiError(resp.status, 'Competitions API returned an unexpected body');
+  }
+  return updated;
 }
 
 /**

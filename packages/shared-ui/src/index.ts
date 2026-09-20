@@ -23,8 +23,13 @@ export {
   setActiveCompetition,
   subscribeActiveCompetition,
   toPlatformCompetition,
+  updateCompetition,
 } from './competition.js';
-export type { PlatformCompetition, NewCompetitionInput } from './competition.js';
+export type {
+  NewCompetitionInput,
+  PlatformCompetition,
+  UpdateCompetitionInput,
+} from './competition.js';
 
 export {
   competitionFileUrl,
@@ -96,4 +101,5 @@ export type { RosterXmlFile, RosterXmlKind, RosterXmlSelection } from './roster-
 export {
   initCompetitionSelector,
   openCreateCompetitionDialog,
+  openEditCompetitionDialog,
 } from './competition-selector.js';

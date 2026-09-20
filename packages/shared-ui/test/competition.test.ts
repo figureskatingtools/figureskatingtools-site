@@ -24,6 +24,7 @@ import {
   setActiveCompetition,
   subscribeActiveCompetition,
   toPlatformCompetition,
+  updateCompetition,
   type PlatformCompetition,
 } from '../src/competition.js';
 
@@ -49,6 +50,18 @@ class MemoryStorage implements Storage {
   setItem(key: string, value: string): void {
     this.map.set(key, String(value));
   }
+}
+
+/** A minimal `Response` stand-in — only what the API client actually reads */
+function response(status: number, body?: unknown): Response {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: async () => {
+      if (body === undefined) throw new Error('no body');
+      return body;
+    },
+  } as Response;
 }
 
 const COMP: PlatformCompetition = {
@@ -240,18 +253,6 @@ describe('competitionLabel', () => {
 });
 
 describe('deleteCompetition', () => {
-  /** A minimal `Response` stand-in — only what the client actually reads */
-  function response(status: number, body?: unknown): Response {
-    return {
-      ok: status >= 200 && status < 300,
-      status,
-      json: async () => {
-        if (body === undefined) throw new Error('no body');
-        return body;
-      },
-    } as Response;
-  }
-
   afterEach(() => {
     vi.unstubAllGlobals();
   });
@@ -312,5 +313,111 @@ describe('deleteCompetition', () => {
     const error = await deleteCompetition(COMP.id).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(CompetitionApiError);
     expect((error as CompetitionApiError).status).toBe(0);
+  });
+});
+
+describe('updateCompetition', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('PATCHes only the given keys, with the date and code in registry shape', async () => {
+    const fetchMock = vi.fn(async () => response(200, { id: COMP.id, code: 'winter-cup' }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await updateCompetition(COMP.id, { code: 'Winter Cup', date: '2026-03-01' });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${COMPETITIONS_API}/${COMP.id}`);
+    expect(init.method).toBe('PATCH');
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
+    expect(JSON.parse(init.body as string)).toEqual({
+      code: 'winter-cup',
+      startDate: '2026-03-01',
+    });
+  });
+
+  it('resolves with the mapped competition', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        response(200, {
+          id: COMP.id,
+          code: 'spring-cup-2026',
+          name: 'Spring Cup 2026',
+          startDate: '2026-04-02',
+          venue: 'Ice Arena, Tampere',
+          createdBy: 'organizer@example.com',
+        })
+      )
+    );
+
+    await expect(updateCompetition(COMP.id, { name: 'Spring Cup 2026' })).resolves.toEqual({
+      id: COMP.id,
+      code: 'spring-cup-2026',
+      name: 'Spring Cup 2026',
+      date: '2026-04-02',
+      venue: 'Ice Arena, Tampere',
+      createdBy: 'organizer@example.com',
+    });
+  });
+
+  it('surfaces a code conflict as 409 naming the normalized code', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        response(409, { error: 'code_in_use', message: 'in use', code: 'spring-cup' })
+      )
+    );
+
+    const error = await updateCompetition(COMP.id, { code: 'Spring Cup' }).catch(
+      (e: unknown) => e
+    );
+    expect(error).toBeInstanceOf(CompetitionApiError);
+    expect((error as CompetitionApiError).status).toBe(409);
+    expect((error as CompetitionApiError).message).toContain('spring-cup');
+  });
+
+  it('surfaces a 404 with the registry message', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => response(404, { error: 'not_found', message: 'Competition not found.' }))
+    );
+
+    await expect(updateCompetition(COMP.id, { name: 'x' })).rejects.toMatchObject({
+      status: 404,
+      message: 'Competition not found.',
+    });
+  });
+
+  it('falls back to the bare status when the error body is not JSON', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response(500)));
+
+    await expect(updateCompetition(COMP.id, { name: 'x' })).rejects.toMatchObject({
+      status: 500,
+      message: 'Could not update competition (500)',
+    });
+  });
+
+  it('reports a network failure as status 0', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new TypeError('Failed to fetch');
+      })
+    );
+
+    const error = await updateCompetition(COMP.id, { name: 'x' }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(CompetitionApiError);
+    expect((error as CompetitionApiError).status).toBe(0);
+  });
+
+  it('rejects an unexpected success body', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response(200, {})));
+
+    await expect(updateCompetition(COMP.id, { name: 'x' })).rejects.toBeInstanceOf(
+      CompetitionApiError
+    );
   });
 });
