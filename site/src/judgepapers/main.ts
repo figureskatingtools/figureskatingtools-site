@@ -22,7 +22,7 @@ import {
     type UserInfo,
 } from '../shell.js';
 import { validateCategory, validateCompetition } from './validate';
-import { renderHelpTrigger, filesHelpHtml, initHelp } from './help';
+import { renderHelpTrigger, filesHelpHtml, judgingMethodHelpHtml, initHelp } from './help';
 
 // Inject the shared figureskatingtools.com nav styles once at startup
 injectSiteNavStyles();
@@ -288,6 +288,7 @@ function showPickCompetition() {
             <li>PDFs uploaded for the same competition in another tool appear under <strong>Competition files</strong> — import them here without re-uploading.</li>
             <li>The system validates the files, groups them into categories by their file names, and ensures all required documents are present.</li>
             <li><strong>Check that every file sits under the right category</strong> — grouping goes by file name, so verify the listing before generating.</li>
+            <li><strong>Synchronized skating:</strong> pick <strong>ISU</strong> or <strong>MUPI</strong> on the category card ${renderHelpTrigger('help-method-welcome', 'What do ISU and MUPI mean here?', judgingMethodHelpHtml())} — the default comes from the category registry, the choice applies to this competition only and decides which files are required.</li>
             <li>Once validated, click <strong>Generate Papers</strong> to create the combined PDF booklets and ZIP archives.</li>
             <li>Download the generated files using the links that appear. You can also copy the links to share them.</li>
         </ol>
@@ -640,7 +641,7 @@ async function init() {
                          data-code="${escapeHtml(methodCode)}" data-default="${escapeHtml(defaultMethod)}"
                          title="Judging method (table default: ${escapeHtml(defaultMethod)})">
                        ${['ISU', 'MUPI'].map(m => `<button type="button" class="method-switch-btn${effectiveMethod === m ? ' is-on' : ''}" data-method="${m}">${m}</button>`).join('')}
-                   </span>`
+                   </span>${renderHelpTrigger(`help-method-${category.replace(/\s+/g, '-')}`, 'What do ISU and MUPI mean here?', judgingMethodHelpHtml())}`
                 : (isMupi ? '<span class="tag-mupi">MUPI</span>' : '');
 
             html += `
@@ -727,6 +728,9 @@ async function init() {
         // Header click logic
         document.querySelectorAll('.category-header').forEach(header => {
             header.addEventListener('click', (e) => {
+                // The judging-method switch and its help popover live inside the
+                // header; interacting with them must not collapse the card.
+                if ((e.target as HTMLElement).closest('.method-switch, .help-wrap')) return;
                 const cat = (e.currentTarget as HTMLElement).getAttribute('data-category');
                 if (cat) {
                      const content = document.getElementById(`content-${cat.replace(/\s+/g, '-')}`);

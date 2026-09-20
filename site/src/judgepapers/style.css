@@ -1246,7 +1246,9 @@ input[type="checkbox"] {
   vertical-align: middle;
 }
 
-/* ── Judging method switch — the MUPI stamp, made selectable (synchro only) ── */
+/* ── Judging method switch — the MUPI stamp, made selectable (synchro only) ──
+   The selected half is a solid fill with a check mark so the state reads at a
+   glance; the other half stays muted. Blue = ISU, gold = MUPI (the badge colour). */
 .method-switch {
   display: inline-flex;
   margin-left: 0.5rem;
@@ -1263,24 +1265,41 @@ input[type="checkbox"] {
   font-size: 0.66rem;
   font-weight: 600;
   letter-spacing: 0.08em;
-  padding: 0.12rem 0.45rem;
+  padding: 0.14rem 0.5rem;
   border: 0;
   cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
 }
 
 .method-switch-btn + .method-switch-btn {
   border-left: 1px solid var(--line-strong);
 }
 
-/* The active half reads like the old badge: gold for MUPI, ink on paper for ISU */
-.method-switch-btn.is-on {
-  background-color: var(--paper);
+.method-switch-btn:not(.is-on):hover {
+  background: var(--frost);
   color: var(--ink);
 }
 
+.method-switch-btn:focus-visible {
+  outline: 2px solid var(--rink);
+  outline-offset: -2px;
+}
+
+.method-switch-btn.is-on {
+  cursor: default;
+  color: var(--paper);
+}
+
+.method-switch-btn.is-on::before {
+  content: "\2713\00a0"; /* ✓ */
+}
+
+.method-switch-btn[data-method="ISU"].is-on {
+  background-color: var(--rink);
+}
+
 .method-switch-btn[data-method="MUPI"].is-on {
-  background-color: var(--gold-tint);
-  color: var(--gold);
+  background-color: var(--gold);
 }
 
 /* ── Help popovers — question-mark triggers with hover/click instructions ── */

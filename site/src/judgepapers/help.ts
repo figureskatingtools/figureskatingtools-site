@@ -102,5 +102,26 @@ export function filesHelpHtml(): string {
   <p class="help-do">Export <strong>PlannedProgramContent</strong></p>
   <p class="help-dont">not <strong>PlannedProgramContentChecklist</strong> &mdash; the Checklist is a different FSM export and will not work.</p>
 </div>
-<p class="help-popover-note">MUPI categories need only the first four files. Synchronized skating categories can be switched between ISU and MUPI per competition from the category header. CompetitionSchedule.pdf is optional.</p>`;
+<p class="help-popover-note">MUPI categories need only the first four files. Synchronized skating categories can be switched between ISU and MUPI on their category card (see the ? next to the switch). CompetitionSchedule.pdf is optional.</p>`;
+}
+
+/**
+ * Popover body for the ISU | MUPI switch shown on synchronized skating cards.
+ * The ISU-only list comes from validate.ts so the copy tracks what validation
+ * actually demands.
+ */
+export function judgingMethodHelpHtml(): string {
+    const isuOnly = ISU_ONLY_FILES
+        .map(f => f === 'TechnicalSpecialistSheet' ? 'TechnicalSpecialistSheet1, 2…' : f)
+        .map(f => `<li>${f}</li>`)
+        .join('');
+
+    return `
+<h4 class="help-popover-title">ISU or MUPI?</h4>
+<p>Synchronized skating is judged under ISU in some competitions and under MUPI in others, so you choose the judging method for this category <strong>in this competition</strong>. The highlighted side is what is in use; the default comes from the category registry.</p>
+<p class="help-popover-sub">MUPI</p>
+<p>Needs only the four common files per segment.</p>
+<p class="help-popover-sub">ISU additionally needs</p>
+<ul class="help-file-list">${isuOnly}</ul>
+<p class="help-popover-note">The choice is saved at once for this competition only and changes which files are required and what the statistics record. The generated packets are the same either way: every official gets the sheets that exist for their role. Other categories cannot be switched here.</p>`;
 }
