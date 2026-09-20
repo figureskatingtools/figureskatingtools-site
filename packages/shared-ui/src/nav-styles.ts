@@ -493,6 +493,20 @@ const NAV_STYLES = `
   color: #93a7ba;
 }
 
+/* Renaming the code is safe but has an FSM-side consequence — amber, not red */
+.fst-comp-code-warning {
+  color: #8a5a00;
+  background: #fff7e6;
+  border-left: 2px solid #e0a300;
+  padding: 0.4rem 0.6rem;
+  border-radius: 0.3rem;
+  line-height: 1.45;
+}
+
+.fst-comp-code-warning code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .fst-comp-field-row {
   display: grid;
   grid-template-columns: 1fr 1fr;

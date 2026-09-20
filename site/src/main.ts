@@ -6,6 +6,7 @@ import {
   getEnvPrefix,
   initCompetitionSelector,
   openCreateCompetitionDialog,
+  openEditCompetitionDialog,
   listCompetitions,
   deleteCompetition,
   CompetitionApiError,
@@ -181,6 +182,7 @@ function renderCompetitionPanel(competitions: PlatformCompetition[] | null): voi
                 <span class="comp-recent-meta">${escapeHtml([c.code, formatDateFi(c.date), c.venue].filter(Boolean).join(' · '))}</span>
                 ${createdLineHtml(c, 'comp-recent-created')}
               </button>
+              <button type="button" class="comp-edit" data-edit-competition-id="${escapeHtml(c.id)}">✎</button>
               <button type="button" class="comp-delete" data-delete-competition-id="${escapeHtml(c.id)}">×</button>
             </li>`).join('')}</ul>`
         : '<p class="text-secondary comp-recent-empty">Nothing else yet.</p>'}
@@ -189,7 +191,10 @@ function renderCompetitionPanel(competitions: PlatformCompetition[] | null): voi
     <div class="comp-actions">
       <button type="button" class="btn btn-secondary btn-sm" id="comp-create">New competition…</button>
       ${active
-        ? `<button type="button" class="btn-link comp-delete-link" data-delete-competition-id="${escapeHtml(active.id)}">Delete this competition</button>`
+        ? `<span class="comp-actions-right">
+             <button type="button" class="btn-link comp-edit-link" data-edit-competition-id="${escapeHtml(active.id)}">Edit…</button>
+             <button type="button" class="btn-link comp-delete-link" data-delete-competition-id="${escapeHtml(active.id)}">Delete this competition</button>
+           </span>`
         : ''}
     </div>
   `;
@@ -216,6 +221,22 @@ function renderCompetitionPanel(competitions: PlatformCompetition[] | null): voi
     btn.setAttribute('aria-label', `Delete ${label}`);
     btn.addEventListener('click', () => {
       void handleDeleteCompetition(target, btn);
+    });
+  });
+
+  // Editing shares the create dialog; changes land in every tool at once
+  container.querySelectorAll<HTMLButtonElement>('[data-edit-competition-id]').forEach((btn) => {
+    const id = btn.getAttribute('data-edit-competition-id');
+    const target = (active && active.id === id ? active : null)
+      ?? competitions.find((c) => c.id === id)
+      ?? null;
+    if (!target) return;
+    const label = competitionLabel(target);
+    // Set as properties (not interpolated markup) — names may contain quotes
+    btn.title = `Edit ${label}`;
+    btn.setAttribute('aria-label', `Edit ${label}`);
+    btn.addEventListener('click', () => {
+      void handleEditCompetition(target, btn);
     });
   });
 
@@ -627,6 +648,32 @@ async function handleDeleteCompetition(
   const active = getActiveCompetition();
   if (active && active.id === competition.id) {
     setActiveCompetition(null); // the subscription re-renders the panel
+    return;
+  }
+  renderCompetitionPanel(knownCompetitions);
+}
+
+/**
+ * Edit a competition's details in the shared dialog.
+ *
+ * The registry is the single source of truth, so a rename (name, code, date or
+ * venue) is immediately what every tool sees — no confirmation needed, and the
+ * dialog itself carries the one warning that matters (a changed code).
+ */
+async function handleEditCompetition(
+  competition: PlatformCompetition,
+  trigger: HTMLButtonElement
+): Promise<void> {
+  trigger.disabled = true;
+  const updated = await openEditCompetitionDialog(competition);
+  trigger.disabled = false;
+  if (!updated) return;
+
+  panelError = null;
+  knownCompetitions = (knownCompetitions ?? []).map((c) => (c.id === updated.id ? updated : c));
+
+  if (getActiveCompetition()?.id === updated.id) {
+    setActiveCompetition(updated); // the subscription re-renders panel + nav selector
     return;
   }
   renderCompetitionPanel(knownCompetitions);

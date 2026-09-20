@@ -19,7 +19,9 @@ import {
   normalizeCompetitionCode,
   setActiveCompetition,
   subscribeActiveCompetition,
+  updateCompetition,
   type PlatformCompetition,
+  type UpdateCompetitionInput,
 } from './competition.js';
 import { formatDateFi } from './format.js';
 
@@ -190,10 +192,22 @@ function wire(
 }
 
 /* ════════════════════════════════════════════════════════════════
-   "New competition" dialog
+   "New competition" / "Edit competition" dialog
+
+   One form, two modes: creating posts the whole thing, editing sends only
+   the fields that actually changed.
    ════════════════════════════════════════════════════════════════ */
 
 const DIALOG_ID = 'fst-competition-dialog';
+
+interface CompetitionDialogOptions {
+  mode: 'create' | 'edit';
+  /** Field values the form opens with — also the baseline an edit diffs against */
+  initial: { name: string; code: string; date: string; venue: string };
+  /** Edit mode: the row being edited (its id drives the PATCH, its provenance
+   *  fields are merged back into the resolved competition) */
+  original?: PlatformCompetition;
+}
 
 /**
  * Open the shared "New competition" dialog.
@@ -202,6 +216,44 @@ const DIALOG_ID = 'fst-competition-dialog';
  * The caller decides whether to make it the active competition.
  */
 export function openCreateCompetitionDialog(prefillName = ''): Promise<PlatformCompetition | null> {
+  return openCompetitionDialog({
+    mode: 'create',
+    initial: {
+      name: prefillName,
+      code: normalizeCompetitionCode(prefillName),
+      date: '',
+      venue: '',
+    },
+  });
+}
+
+/**
+ * Open the same form in "Edit competition" mode.
+ *
+ * Resolves with the updated competition (provenance merged back in), with the
+ * unchanged one when nothing was edited, or null when the user cancels.
+ */
+export function openEditCompetitionDialog(
+  competition: PlatformCompetition
+): Promise<PlatformCompetition | null> {
+  return openCompetitionDialog({
+    mode: 'edit',
+    initial: {
+      name: competition.name ?? '',
+      code: competition.code ?? '',
+      date: competition.date ?? '',
+      venue: competition.venue ?? '',
+    },
+    original: competition,
+  });
+}
+
+function openCompetitionDialog(
+  opts: CompetitionDialogOptions
+): Promise<PlatformCompetition | null> {
+  const editing = opts.mode === 'edit';
+  const initial = opts.initial;
+
   return new Promise((resolve) => {
     document.getElementById(DIALOG_ID)?.remove();
 
@@ -210,21 +262,26 @@ export function openCreateCompetitionDialog(prefillName = ''): Promise<PlatformC
     dialog.className = 'fst-comp-dialog';
     dialog.innerHTML = `
       <form method="dialog" class="fst-comp-form">
-        <h2 class="fst-comp-dialog-title">New competition</h2>
+        <h2 class="fst-comp-dialog-title">${editing ? 'Edit competition' : 'New competition'}</h2>
         <p class="fst-comp-dialog-lead">
-          Everything you create here becomes available to every tool on the site.
+          ${editing
+            ? 'Changes apply to every tool on the site.'
+            : 'Everything you create here becomes available to every tool on the site.'}
         </p>
 
         <label class="fst-comp-field">
           <span class="fst-comp-field-label">Name</span>
-          <input type="text" name="name" required autocomplete="off" value="${esc(prefillName)}"
+          <input type="text" name="name" required autocomplete="off" value="${esc(initial.name)}"
                  placeholder="Winter Cup 2026">
         </label>
 
         <label class="fst-comp-field">
           <span class="fst-comp-field-label">Code</span>
           <input type="text" name="code" required autocomplete="off" placeholder="winter-cup-2026">
-          <span class="fst-comp-field-note">Unique across the whole site. Auto-filled from the name.</span>
+          <span class="fst-comp-field-note">${editing
+            ? 'Unique across the whole site. FS Manager identifies this competition by its code.'
+            : 'Unique across the whole site. Auto-filled from the name.'}</span>
+          <span class="fst-comp-field-note fst-comp-code-warning" data-fst-comp-code-warning hidden></span>
         </label>
 
         <div class="fst-comp-field-row">
@@ -242,7 +299,7 @@ export function openCreateCompetitionDialog(prefillName = ''): Promise<PlatformC
 
         <div class="fst-comp-dialog-actions">
           <button type="button" class="fst-comp-btn-secondary" data-fst-comp-cancel>Cancel</button>
-          <button type="submit" class="fst-comp-btn-primary" data-fst-comp-submit>Create</button>
+          <button type="submit" class="fst-comp-btn-primary" data-fst-comp-submit>${editing ? 'Save' : 'Create'}</button>
         </div>
       </form>
     `;
@@ -254,15 +311,37 @@ export function openCreateCompetitionDialog(prefillName = ''): Promise<PlatformC
     const dateInput = form.elements.namedItem('date') as HTMLInputElement;
     const venueInput = form.elements.namedItem('venue') as HTMLInputElement;
     const errorEl = dialog.querySelector<HTMLElement>('[data-fst-comp-error]')!;
+    const warningEl = dialog.querySelector<HTMLElement>('[data-fst-comp-code-warning]')!;
     const submitBtn = dialog.querySelector<HTMLButtonElement>('[data-fst-comp-submit]')!;
 
-    // Auto-slug the code from the name until the user types their own
-    let codeEdited = false;
-    codeInput.value = normalizeCompetitionCode(prefillName);
+    codeInput.value = initial.code;
+    dateInput.value = initial.date;
+    venueInput.value = initial.venue;
+
+    // Auto-slug the code from the name until the user types their own.
+    // Editing never re-slugs: the code is an identity FSM already knows.
+    let codeEdited = editing;
     codeInput.addEventListener('input', () => { codeEdited = true; });
     nameInput.addEventListener('input', () => {
       if (!codeEdited) codeInput.value = normalizeCompetitionCode(nameInput.value);
     });
+
+    // Renaming the code moves the registry's CODE row — FS Manager keeps
+    // pushing to the old one until it is reconfigured, so say so (non-blocking)
+    if (editing) {
+      codeInput.addEventListener('input', () => {
+        const next = normalizeCompetitionCode(codeInput.value);
+        if (next && next !== initial.code) {
+          warningEl.hidden = false;
+          warningEl.innerHTML =
+            `Will be saved as <code>${esc(next)}</code>. FS Manager sends files using this ` +
+            'code — if FSM is already set up for this competition, update the code there too; ' +
+            `pushes still using <code>${esc(initial.code)}</code> will be dropped.`;
+        } else {
+          warningEl.hidden = true;
+        }
+      });
+    }
 
     let settled = false;
     const finish = (result: PlatformCompetition | null): void => {
@@ -282,6 +361,39 @@ export function openCreateCompetitionDialog(prefillName = ''): Promise<PlatformC
     form.addEventListener('submit', (e) => {
       e.preventDefault();
       if (!form.reportValidity()) return;
+
+      const original = opts.original;
+      if (editing && original) {
+        const diff: UpdateCompetitionInput = {};
+        if (nameInput.value.trim() !== initial.name.trim()) diff.name = nameInput.value;
+        if (normalizeCompetitionCode(codeInput.value) !== initial.code) diff.code = codeInput.value;
+        if (dateInput.value !== initial.date) diff.date = dateInput.value;
+        if (venueInput.value.trim() !== initial.venue.trim()) diff.venue = venueInput.value;
+
+        // Nothing touched — don't bother the registry
+        if (Object.keys(diff).length === 0) {
+          finish(original);
+          return;
+        }
+
+        errorEl.hidden = true;
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Saving…';
+
+        void updateCompetition(original.id, diff)
+          // Keep createdBy/createdUtc even if the response omits them
+          .then((updated) => finish({ ...original, ...updated }))
+          .catch((err: unknown) => {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Save';
+            errorEl.hidden = false;
+            errorEl.textContent =
+              err instanceof CompetitionApiError
+                ? err.message
+                : 'Could not save the changes. Please try again.';
+          });
+        return;
+      }
 
       errorEl.hidden = true;
       submitBtn.disabled = true;
