@@ -5,13 +5,8 @@
 #
 # NOTE: this file is only read from the default branch (main).
 # NOTE: the npm entry covers the root workspaces (site + packages/shared-ui);
-# shared-ui resolves as a workspace link, so no registry block is needed. If a
-# Dependabot npm run ever fails resolving @figureskatingtools/* because of the
-# root .npmrc scope, add a `registries:` section with a github-npm registry
-# (https://npm.pkg.github.com, token ${{ secrets.PACKAGES_READ_TOKEN }}) and a
-# Dependabot secret PACKAGES_READ_TOKEN (classic PAT with read:packages), set
-# under Settings -> Secrets and variables -> Dependabot, exactly as
-# fs-judgepapers had it.
+# shared-ui is a private workspace link, never fetched from a registry, so no
+# registries block is needed.
 version: 2
 
 updates:
