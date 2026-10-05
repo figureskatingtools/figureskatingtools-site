@@ -16,6 +16,11 @@ name: Deploy Site to Azure
 # back to ubuntu-latest. Rollback label: ubuntu-24.04.
 
 on:
+  # Flow: feature branch -> manual dispatch to `test` -> PR to main (ci.yml green,
+  # code-owner review) -> merge -> push to main auto-deploys prod. Dispatch runs
+  # from the branch whose code you want to deploy; the `prod` GitHub environment
+  # only accepts `main` (deployment branch policy), so the prod option is for
+  # redeploying main.
   push:
     branches: [main]
     paths:

@@ -1,0 +1,79 @@
+name: CI
+
+# The deploy workflow's test and build steps on every pull request, so a red
+# suite or a broken build blocks the merge instead of surfacing as a failed prod
+# deploy. The job names (`pytest`, `hovtp-pytest`, `frontend`) are the required
+# status checks in the `main` ruleset — rename them there too if they change.
+# Runner pinned like deploy-site.yml (see the note there); never ubuntu-latest.
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  pytest:
+    name: pytest
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Run platform backend tests
+        run: |
+          cd infra/functions
+          pip install -r requirements-dev.txt
+          python -m pytest -q
+
+  hovtp-pytest:
+    name: hovtp-pytest
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Python 3.13
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+
+      - name: Run HOVTP listener tests
+        run: |
+          cd infra/hovtp
+          pip install -r requirements-dev.txt
+          python -m pytest -q
+
+  frontend:
+    name: frontend
+    runs-on: ubuntu-26.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          registry-url: https://npm.pkg.github.com
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Test the router
+        run: node --test server/*.test.js
+
+      - name: Build shared-ui
+        run: npm run build --workspace=@figureskatingtools/shared-ui
+
+      - name: Build site
+        run: npm run build --workspace=site
