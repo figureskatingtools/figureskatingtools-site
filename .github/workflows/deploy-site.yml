@@ -491,12 +491,10 @@ jobs:
       - name: Generate changelog
         run: |
           chmod +x scripts/generate-changelog.sh
-          # prod tracks the main branch; the test env tracks the test branch
-          if [ "$ENV_NAME" = "prod" ]; then BRANCH=main; else BRANCH=test; fi
-          scripts/generate-changelog.sh site/public/changelog.json "$BRANCH"
+          # Both environments show the `main` feed: the repos have no `test` branch.
+          scripts/generate-changelog.sh site/public/changelog.json main
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ENV_NAME: ${{ needs.set-environment.outputs.env_name }}
 
       - name: Build site
         # One multi-entry Vite build produces the whole tree: /, /judgepapers/,
