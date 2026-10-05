@@ -39,8 +39,21 @@ function freshState(): State {
   };
 }
 
+// Bumped by every reset: a request that started before it must not write its
+// late result (or clear `busy`) into the new workflow.
+let epoch = 0;
+
+/** Skater filter text, kept across re-renders. */
+let filterText = '';
+
+/** Categories the operator has expanded, kept across re-renders. */
+const openCats = new Set<string>();
+
 function reset(): void {
+  epoch += 1;
   Object.assign(state, freshState());
+  openCats.clear();
+  filterText = '';
 }
 
 const ERROR_TEXT: Record<string, string> = {
@@ -116,16 +129,22 @@ function planValid(): boolean {
 async function doScan(url: string): Promise<void> {
   const keepUrl = url.trim();
   reset();
+  const mine = epoch;
   state.busy = 'scan';
   render();
   try {
-    state.scan = await api<ScanResponse>('/scan', { eventUrl: keepUrl });
-    state.protocolUrl = state.scan.suggestedProtocolUrl ?? '';
+    const scan = await api<ScanResponse>('/scan', { eventUrl: keepUrl });
+    if (mine !== epoch) return;
+    state.scan = scan;
+    state.protocolUrl = scan.suggestedProtocolUrl ?? '';
   } catch (e) {
+    if (mine !== epoch) return;
     state.error = (e as Error).message;
   } finally {
-    state.busy = '';
-    render();
+    if (mine === epoch) {
+      state.busy = '';
+      render();
+    }
   }
 }
 
@@ -133,6 +152,8 @@ function toggleSkater(id: string, on: boolean): void {
   const lookup = allSkaters();
   const linked = [id, ...(lookup.get(id)?.skater.alsoIn ?? [])];
   for (const sid of linked) {
+    const cat = lookup.get(sid)?.category.id;
+    if (on && cat) openCats.add(cat);
     const idx = state.selected.indexOf(sid);
     if (on && idx === -1) state.selected.push(sid);
     if (!on && idx !== -1 && sid === id) state.selected.splice(idx, 1);
@@ -152,24 +173,30 @@ function clearDerived(): void {
 
 async function doPlan(): Promise<void> {
   if (!state.scan) return;
+  const mine = epoch;
+  const forKey = selectionKey();
   state.busy = 'plan';
   state.plan = null;
-  state.planConfirmed = false;
-  state.error = '';
+  clearDerived();
   render();
   try {
-    state.plan = await api<PlanResponse>('/protocol_plan', {
+    const plan = await api<PlanResponse>('/protocol_plan', {
       eventUrl: state.scan.eventUrl,
       snapshot: state.scan.snapshot,
       selection: state.selected,
       protocolUrl: state.protocolUrl.trim(),
     });
-    state.planFor = selectionKey();
+    if (mine !== epoch) return;
+    state.plan = plan;
+    state.planFor = forKey;
   } catch (e) {
+    if (mine !== epoch) return;
     state.error = (e as Error).message;
   } finally {
-    state.busy = '';
-    render();
+    if (mine === epoch) {
+      state.busy = '';
+      render();
+    }
   }
 }
 
@@ -186,6 +213,7 @@ async function doGenerate(): Promise<void> {
     if (!planValid() || !state.planConfirmed || !state.plan) return;
     body.protocol = { url: state.plan.protocolUrl, planHash: state.plan.planHash, confirmed: true };
   }
+  const mine = epoch;
   state.busy = 'generate';
   state.result = null;
   state.zip = null;
@@ -193,15 +221,19 @@ async function doGenerate(): Promise<void> {
   render();
   try {
     const result = await api<GenerateResponse>('/generate', body);
+    if (mine !== epoch) return;
     const bytes = Uint8Array.from(atob(result.zipBase64), (c) => c.charCodeAt(0));
     state.zip = new Blob([bytes], { type: 'application/zip' });
     state.result = { ...result, zipBase64: '' };
     state.downloaded = false;
   } catch (e) {
+    if (mine !== epoch) return;
     state.error = (e as Error).message;
   } finally {
-    state.busy = '';
-    render();
+    if (mine === epoch) {
+      state.busy = '';
+      render();
+    }
   }
 }
 
@@ -231,7 +263,7 @@ function renderFetchCard(): string {
       <h2>Fetch the published results</h2>
       <p>Paste the FS Manager event page URL (the competition's results index).</p>
       <form class="gdpr-row" id="scanForm">
-        <input class="gdpr-input" id="eventUrl" type="url" required
+        <input class="gdpr-input" id="eventUrl" type="text" inputmode="url" autocomplete="off" spellcheck="false" required
           placeholder="https://www.figureskatingresults.fi/results/2627/…/index.htm"
           value="${escapeHtml(s?.eventUrl ?? '')}" ${state.busy ? 'disabled' : ''}>
         <button class="btn btn-primary" type="submit" ${state.busy ? 'disabled' : ''}>
@@ -263,7 +295,7 @@ function renderSelectCard(): string {
   const cats = s.categories.map((c) => {
     const count = c.skaters.filter((sk) => state.selected.includes(sk.id)).length;
     return `
-      <details class="gdpr-cat" ${count ? 'open' : ''}>
+      <details class="gdpr-cat" data-cat="${escapeHtml(c.id)}" ${openCats.has(c.id) ? 'open' : ''}>
         <summary>
           <span class="gdpr-cat-name">${escapeHtml(c.name)}</span>
           <span class="gdpr-cat-meta">${c.skaters.length} skaters · ${escapeHtml(c.segments.join(', '))}</span>
@@ -317,7 +349,7 @@ function renderProtocolCard(): string {
       </label>
       ${state.protocolEnabled ? `
         <div class="gdpr-row">
-          <input class="gdpr-input" id="protocolUrl" type="url" placeholder="https://…/protocol_….pdf"
+          <input class="gdpr-input" id="protocolUrl" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://…/protocol_….pdf"
             value="${escapeHtml(state.protocolUrl)}" ${state.busy ? 'disabled' : ''}>
           <button class="btn btn-secondary" id="planBtn" type="button" ${state.busy || !state.protocolUrl.trim() ? 'disabled' : ''}>
             ${state.busy === 'plan' ? 'Reading…' : 'Show plan'}
@@ -364,7 +396,7 @@ function renderResult(): string {
       ${state.downloaded
         ? '<p class="gdpr-meta">ZIP downloaded and cleared from this page. The server kept no copy.</p>'
         : `<button class="btn btn-primary" id="downloadBtn" type="button">Download ${escapeHtml(r.zipName)}</button>`}
-      <button class="btn btn-secondary" id="resetBtn" type="button">Start over</button>
+      <button class="btn btn-secondary" id="resetBtn" type="button" ${state.busy ? 'disabled' : ''}>Start over</button>
     </div>
     <ul class="gdpr-notes">${r.manifest.notes.map((n) => `<li>${escapeHtml(n)}</li>`).join('')}</ul>`;
 }
@@ -407,16 +439,52 @@ function renderPage(): string {
     </main>`;
 }
 
-let filterText = '';
+/** The control that had focus, so a re-render can hand it back: by id, or by
+ *  skater id for the checkboxes, with the caret of text inputs. */
+interface FocusMark { selector: string; start: number | null; end: number | null }
+
+function captureFocus(): FocusMark | null {
+  const el = document.activeElement as HTMLInputElement | null;
+  if (!el || el === document.body || !document.getElementById('gdprRoot')?.contains(el)) return null;
+  let selector = '';
+  if (el.dataset.skater) selector = `input[data-skater="${CSS.escape(el.dataset.skater)}"]`;
+  else if (el.id) selector = `#${CSS.escape(el.id)}`;
+  if (!selector) return null;
+  let start: number | null = null;
+  let end: number | null = null;
+  try {
+    start = el.selectionStart ?? null;
+    end = el.selectionEnd ?? null;
+  } catch {
+    // checkboxes and buttons have no selection
+  }
+  return { selector, start, end };
+}
+
+function restoreFocus(mark: FocusMark | null): void {
+  if (!mark) return;
+  const el = document.querySelector<HTMLInputElement>(mark.selector);
+  if (!el || el.disabled) return;
+  el.focus({ preventScroll: true });
+  if (mark.start !== null && typeof el.setSelectionRange === 'function') {
+    try {
+      el.setSelectionRange(mark.start, mark.end ?? mark.start);
+    } catch {
+      // not a text control
+    }
+  }
+}
 
 function render(): void {
   const main = document.getElementById('gdprRoot');
   if (!main) return;
   const scrollY = window.scrollY;
+  const focus = captureFocus();
   main.innerHTML = renderPage();
   bind();
   applyFilter();
   window.scrollTo(0, scrollY);
+  restoreFocus(focus);
 }
 
 function applyFilter(): void {
@@ -430,13 +498,24 @@ function applyFilter(): void {
   if (q) document.querySelectorAll<HTMLDetailsElement>('.gdpr-cat').forEach((d) => { d.open = true; });
 }
 
+function bindCategoryToggles(): void {
+  document.querySelectorAll<HTMLDetailsElement>('details[data-cat]').forEach((d) => {
+    d.addEventListener('toggle', () => {
+      // A filter opens everything; only the operator's own clicks are remembered.
+      if (filterText.trim()) return;
+      if (d.open) openCats.add(d.dataset.cat!);
+      else openCats.delete(d.dataset.cat!);
+    });
+  });
+}
+
 function bind(): void {
   document.getElementById('scanForm')?.addEventListener('submit', (e) => {
     e.preventDefault();
     const url = (document.getElementById('eventUrl') as HTMLInputElement).value;
-    filterText = '';
     void doScan(url);
   });
+  bindCategoryToggles();
   document.querySelectorAll<HTMLInputElement>('input[data-skater]').forEach((cb) => {
     cb.addEventListener('change', () => toggleSkater(cb.dataset.skater!, cb.checked));
   });
@@ -451,10 +530,10 @@ function bind(): void {
   });
   document.getElementById('protocolUrl')?.addEventListener('input', (e) => {
     state.protocolUrl = (e.target as HTMLInputElement).value;
+    // A different protocol: the old plan, report and archive no longer apply.
     state.plan = null;
-    state.planConfirmed = false;
-    const btn = document.getElementById('planBtn') as HTMLButtonElement | null;
-    if (btn) btn.disabled = !state.protocolUrl.trim();
+    clearDerived();
+    render();
   });
   document.getElementById('planBtn')?.addEventListener('click', () => void doPlan());
   document.getElementById('planConfirm')?.addEventListener('change', (e) => {
@@ -467,7 +546,6 @@ function bind(): void {
   document.getElementById('downloadBtn')?.addEventListener('click', doDownload);
   document.getElementById('resetBtn')?.addEventListener('click', () => {
     reset();
-    filterText = '';
     render();
   });
 }
@@ -503,5 +581,13 @@ function renderAuthenticatedView(userInfo: UserInfo) {
 
 // Leaving the page drops everything; nothing was stored anywhere but memory.
 window.addEventListener('pagehide', reset);
+// Restored from the back-forward cache, init() does not run again: the DOM still
+// shows the old workflow over the now empty state, so render the reset state.
+window.addEventListener('pageshow', (e) => {
+  if (e.persisted) {
+    reset();
+    render();
+  }
+});
 
 init();
