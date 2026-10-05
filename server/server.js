@@ -379,7 +379,11 @@ function proxy(req, res, config, tool, targetPath) {
 
 const GITHUB_API_ORIGIN = 'https://api.github.com';
 const CHANGELOG_TTL_MS = 10 * 60 * 1000;
+// Accepted for compatibility with frontends built while the test site still
+// asked for `test`; every tool repo now ships from `main` only (feature branches,
+// no long-lived `test` branch), so all of them are served the `main` feed.
 const CHANGELOG_BRANCHES = ['main', 'test'];
+const CHANGELOG_FEED_BRANCH = 'main';
 const CHANGELOG_SOURCES_FILE = 'changelog-sources.json';
 const CHANGELOG_PER_PAGE = 20; // commits requested per repo
 const CHANGELOG_MAX_ENTRIES = 20; // entries returned after merging
@@ -524,17 +528,19 @@ function refreshChangelog(config, state, branch) {
 }
 
 // GET /changelog-live?branch=main|test — merged commit feed for the home page.
+// Both values get the `main` feed (one cache entry, never `sha=test` upstream).
 // Sits behind Easy Auth like every other route; nothing here assumes anonymity.
 async function handleChangelog(res, config, state, search) {
-    const branch = new URLSearchParams(search).get('branch') || '';
+    const requested = new URLSearchParams(search).get('branch') || '';
 
-    if (!CHANGELOG_BRANCHES.includes(branch)) {
+    if (!CHANGELOG_BRANCHES.includes(requested)) {
         sendJson(res, 400, {
             error: 'invalid_branch',
             message: `branch must be one of: ${CHANGELOG_BRANCHES.join(', ')}.`,
         });
         return;
     }
+    const branch = CHANGELOG_FEED_BRANCH;
 
     const cached = state.cache.get(branch);
     if (cached && Date.now() - cached.ts < config.changelogTtlMs) {

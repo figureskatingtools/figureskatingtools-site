@@ -684,7 +684,10 @@ test('GET /changelog-live rejects any branch other than main/test', async () => 
         // Nothing invalid ever reaches GitHub.
         assert.equal(github.received.length, 0);
 
+        // `test` is still accepted (it maps to `main`), so it reaches GitHub —
+        // which has nothing for it here, hence the 502.
         assert.equal((await request(port, '/changelog-live?branch=test')).status, 502);
+        assert.match(github.received[0].url, /sha=main/);
     } finally {
         await close(server);
         await close(github.server);
@@ -741,11 +744,13 @@ test('a fresh cache entry is served without touching GitHub again', async () => 
         assert.deepEqual(json(second), json(first));
         assert.equal(github.received.length, 2, 'cache hit must not re-fetch');
 
-        // A different branch is cached separately.
+        // `test` (asked for by frontends built before the switch) is the same
+        // `main` feed: served from the same cache entry, never sha=test upstream.
         const other = await request(port, '/changelog-live?branch=test');
         assert.equal(other.status, 200);
-        assert.equal(github.received.length, 4);
-        assert.match(github.received[2].url, /sha=test/);
+        assert.deepEqual(json(other), json(first));
+        assert.equal(github.received.length, 2);
+        for (const call of github.received) assert.match(call.url, /sha=main/);
     } finally {
         await close(server);
         await close(github.server);
