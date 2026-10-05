@@ -25,9 +25,11 @@ param proxySharedSecretPlatform = readEnvironmentVariable('PROXY_SHARED_SECRET_P
 param functionAppUrlJudgepapers = readEnvironmentVariable('FUNCTION_APP_URL_JUDGEPAPERS', '')
 param functionAppUrlScoremodifier = readEnvironmentVariable('FUNCTION_APP_URL_SCOREMODIFIER', '')
 param functionAppUrlProtocolgenerator = readEnvironmentVariable('FUNCTION_APP_URL_PROTOCOLGENERATOR', '')
+param functionAppUrlGdprtool = readEnvironmentVariable('FUNCTION_APP_URL_GDPRTOOL', '')
 param proxySharedSecretJudgepapers = readEnvironmentVariable('PROXY_SHARED_SECRET_JUDGEPAPERS', '')
 param proxySharedSecretScoremodifier = readEnvironmentVariable('PROXY_SHARED_SECRET_SCOREMODIFIER', '')
 param proxySharedSecretProtocolgenerator = readEnvironmentVariable('PROXY_SHARED_SECRET_PROTOCOLGENERATOR', '')
+param proxySharedSecretGdprtool = readEnvironmentVariable('PROXY_SHARED_SECRET_GDPRTOOL', '')
 
 // System-assigned principal ids of the tool Function Apps, for read access to
 // the shared competition-data container. Empty entries are ignored, so this

@@ -17,6 +17,7 @@ export default defineConfig({
         scoremodifier: fileURLToPath(new URL('scoremodifier/index.html', import.meta.url)),
         protocolgenerator: fileURLToPath(new URL('protocolgenerator/index.html', import.meta.url)),
         banner: fileURLToPath(new URL('tools/banner/index.html', import.meta.url)),
+        gdpr: fileURLToPath(new URL('tools/gdpr/index.html', import.meta.url)),
       },
     },
   },

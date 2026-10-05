@@ -20,6 +20,7 @@ site root/
 | 3 | `/changelog-live?branch=main\|test` | Merged, server-cached GitHub commit feed for the home page's "What's New" panel (see below). |
 | 4 | `/.auth`, `/.auth/*` | `404` — Easy Auth owns these at the platform level; the router must never swallow them into the SPA fallback. |
 | 5 | `/<tool>/api/*` | Proxied to that tool's Function App with the `/<tool>` prefix **stripped**: `/judgepapers/api/upload_file` → `$FUNCTION_APP_URL_JUDGEPAPERS/api/upload_file`. Backends keep their default `/api` route prefix — zero backend route changes. |
+| 5b | `/tools/gdpr/api/*` | Proxied to the GDPR removal tool's Function App (`fs-gdpr-tool`) with `/tools/gdpr` **stripped** (`SMALL_TOOL_APIS` in `server.js`). The page itself, `/tools/gdpr/`, is a plain static document. |
 | 6 | `/api/*` | Proxied to the platform Function App (competitions registry). |
 | 7 | `/<tool>` | `301` → `/<tool>/` (query string preserved). |
 | 8 | anything else | Static file from `public/`, else a **per-prefix** SPA fallback. |
@@ -99,10 +100,12 @@ the config object (tests override them).
 | `FUNCTION_APP_URL_JUDGEPAPERS` | for `/judgepapers/api/*` | — | Base URL of `func-fs-judgepapers-*`. |
 | `FUNCTION_APP_URL_SCOREMODIFIER` | for `/scoremodifier/api/*` | — | Base URL of `func-fs-scoremodifier-*`. |
 | `FUNCTION_APP_URL_PROTOCOLGENERATOR` | for `/protocolgenerator/api/*` | — | Base URL of `func-fs-protocols-*`. |
+| `FUNCTION_APP_URL_GDPRTOOL` | for `/tools/gdpr/api/*` | — | Base URL of `func-fs-gdpr-*`. |
 | `FUNCTION_APP_URL_PLATFORM` | for `/api/*` | — | Base URL of `func-fs-platform-*`. |
 | `PROXY_SHARED_SECRET_JUDGEPAPERS` | prod | — | Sent as `x-proxy-secret` to judgepapers. |
 | `PROXY_SHARED_SECRET_SCOREMODIFIER` | prod | — | Sent as `x-proxy-secret` to scoremodifier. |
 | `PROXY_SHARED_SECRET_PROTOCOLGENERATOR` | prod | — | Sent as `x-proxy-secret` to protocolgenerator. |
+| `PROXY_SHARED_SECRET_GDPRTOOL` | prod | — | Sent as `x-proxy-secret` to the GDPR removal tool. |
 | `PROXY_SHARED_SECRET_PLATFORM` | prod | — | Sent as `x-proxy-secret` to the platform API. |
 | `NODE_ENV` | no | — | `production` hard-disables `DEV_FAKE_USER`. |
 | `DEV_FAKE_USER` | no | — | **Non-production only.** Email returned by `/userinfo` (and forwarded to backends) when no Easy Auth headers are present. |

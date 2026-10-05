@@ -30,6 +30,7 @@ const DEFAULT_TOOLS: NavTool[] = [
 /** Small tools hosted inside the main site under /tools/... */
 const SMALL_TOOLS: NavSmallTool[] = [
   { id: 'banner', label: 'Competition Banner Generator', path: '/tools/banner/' },
+  { id: 'gdpr', label: 'GDPR Removal Tool', path: '/tools/gdpr/' },
 ];
 
 /**
