@@ -3,7 +3,6 @@ import {
   renderSiteNav,
   initSiteNav,
   injectSiteNavStyles,
-  getEnvPrefix,
   initCompetitionSelector,
   openCreateCompetitionDialog,
   openEditCompetitionDialog,
@@ -745,11 +744,13 @@ const GH_PER_PAGE = 20;               // commits fetched per repo (>= CHANGELOG_
 const CHANGELOG_CACHE_KEY = 'changelog-cache-v1';
 const CHANGELOG_CACHE_TTL_MS = 5 * 60 * 1000; // be gentle on GitHub's 60 req/hr unauthenticated limit
 
-/** Branch whose commits feed "What's New": test env -> test, prod -> main, localhost -> test */
+/**
+ * Branch whose commits feed "What's New": always `main`, on prod, test and
+ * localhost alike — the repos ship from `main` only (feature branches, no
+ * long-lived `test` branch), so that is the one history every repo has.
+ */
 function changelogBranch(): string {
-  const host = window.location.hostname;
-  if (host === 'localhost' || host === '127.0.0.1') return 'test';
-  return getEnvPrefix() === 'test.' ? 'test' : 'main';
+  return 'main';
 }
 
 /**

@@ -10,7 +10,8 @@
 # Usage: generate-changelog.sh [output-file] [branch] [sources-file]
 #   output-file   defaults to site/public/changelog.json
 #   branch        git branch to read commits from (defaults to main). The deploy
-#                 workflow passes 'main' for prod and 'test' for the test env.
+#                 workflow passes 'main' for both environments — the repos have
+#                 no long-lived `test` branch.
 #   sources-file  defaults to site/public/changelog-sources.json
 set -euo pipefail
 

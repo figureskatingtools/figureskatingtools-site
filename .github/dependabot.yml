@@ -1,6 +1,7 @@
-# Dependabot version updates. Weekly, grouped into one PR per ecosystem,
-# targeting `test` so updates flow through the normal test -> verify ->
-# promote-to-main process instead of auto-deploying prod on merge.
+# Dependabot version updates. Weekly, grouped into one PR per ecosystem, opened
+# against `main` like any feature branch: ci.yml runs the tests and the build on
+# the PR, the code owner reviews it, and the branch can be dispatched to the
+# `test` environment before merging (merging deploys prod).
 #
 # NOTE: this file is only read from the default branch (main).
 # NOTE: the npm entry covers the root workspaces (site + packages/shared-ui);
@@ -21,7 +22,6 @@ updates:
       day: "monday"
       time: "07:00"
       timezone: "Europe/Helsinki"
-    target-branch: "test"
     groups:
       npm-dependencies:
         patterns:
@@ -34,7 +34,6 @@ updates:
       day: "monday"
       time: "07:00"
       timezone: "Europe/Helsinki"
-    target-branch: "test"
     groups:
       pip-dependencies:
         patterns:
@@ -47,7 +46,6 @@ updates:
       day: "monday"
       time: "07:00"
       timezone: "Europe/Helsinki"
-    target-branch: "test"
     groups:
       pip-dependencies-hovtp:
         patterns:
@@ -60,7 +58,6 @@ updates:
       day: "monday"
       time: "07:00"
       timezone: "Europe/Helsinki"
-    target-branch: "test"
     groups:
       actions-dependencies:
         patterns:
