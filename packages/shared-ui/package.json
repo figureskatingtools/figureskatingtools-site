@@ -1,5 +1,6 @@
 {
   "name": "@figureskatingtools/shared-ui",
+  "private": true,
   "version": "3.0.0",
   "description": "Shared site-level navigation and UI components for figureskatingtools.com",
   "type": "module",
@@ -10,11 +11,7 @@
   ],
   "scripts": {
     "build": "tsc",
-    "test": "vitest run",
-    "prepublishOnly": "npm run build"
-  },
-  "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "test": "vitest run"
   },
   "repository": {
     "type": "git",
