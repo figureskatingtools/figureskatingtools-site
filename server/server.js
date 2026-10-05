@@ -5,11 +5,13 @@
 //   /judgepapers/            → Judge Papers app        (SPA, own index.html)
 //   /scoremodifier/          → Score Modifier app      (SPA, own index.html)
 //   /protocolgenerator/      → Protocol Generator app  (SPA, own index.html)
+//   /tools/<name>/           → small in-site tools (static pages)
 //   /health                  → liveness probe (excluded from Easy Auth)
 //   /userinfo                → flat user object decoded from Easy Auth headers
 //   /changelog-live          → merged GitHub commits for "What's New" (cached)
 //   /api/*                   → platform Function App
 //   /<tool>/api/*            → that tool's Function App, with /<tool> stripped
+//   /tools/gdpr/api/*        → GDPR removal tool's Function App, /tools/gdpr stripped
 //
 // Node 22 built-ins only — no npm dependencies. Bodies are never buffered:
 // requests and responses are piped straight through so 100 MiB uploads and
@@ -26,6 +28,12 @@ const path = require('path');
 // Order matters only for readability; lookups are by exact first path segment.
 const TOOLS = ['judgepapers', 'scoremodifier', 'protocolgenerator'];
 const PLATFORM = 'platform';
+
+// Small tools under /tools/<name>/ that have a backend of their own. Their page
+// is a plain static document (no SPA prefix, no blob-storage CSP); only the API
+// path is proxied: /tools/gdpr/api/* → $FUNCTION_APP_URL_GDPRTOOL/api/*.
+const SMALL_TOOL_APIS = { gdprtool: '/tools/gdpr' };
+const PROXY_TARGETS = [...TOOLS, ...Object.keys(SMALL_TOOL_APIS), PLATFORM];
 
 const MIME_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -70,7 +78,7 @@ function secretEnvVar(tool) {
 
 function loadConfig(env = process.env) {
     const targets = {};
-    for (const tool of [...TOOLS, PLATFORM]) {
+    for (const tool of PROXY_TARGETS) {
         targets[tool] = {
             urlEnvVar: urlEnvVar(tool),
             secretEnvVar: secretEnvVar(tool),
@@ -699,6 +707,15 @@ function createRequestHandler(config) {
             return;
         }
 
+        // 5b. /tools/<name>/api/* → that small tool's Function App, its
+        //     /tools/<name> prefix stripped.
+        for (const [tool, prefix] of Object.entries(SMALL_TOOL_APIS)) {
+            if (pathname === prefix + '/api' || pathname.startsWith(prefix + '/api/')) {
+                proxy(req, res, config, tool, pathname.slice(prefix.length) + search);
+                return;
+            }
+        }
+
         // 6. /api/* → platform Function App (competitions registry).
         if (pathname === '/api' || pathname.startsWith('/api/')) {
             proxy(req, res, config, PLATFORM, pathname + search);
@@ -727,7 +744,7 @@ if (require.main === module) {
     const config = loadConfig();
     const server = createServer(config);
     server.listen(config.port, () => {
-        const configured = [...TOOLS, PLATFORM].filter((t) => config.targets[t].url);
+        const configured = PROXY_TARGETS.filter((t) => config.targets[t].url);
         console.log(`Router listening on port ${config.port}`);
         console.log(`Static root: ${config.publicDir}`);
         console.log(`Proxy targets configured: ${configured.join(', ') || '(none)'}`);
@@ -738,6 +755,7 @@ if (require.main === module) {
 module.exports = {
     TOOLS,
     PLATFORM,
+    SMALL_TOOL_APIS,
     loadConfig,
     createServer,
     createRequestHandler,

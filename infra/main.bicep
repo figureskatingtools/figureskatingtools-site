@@ -45,6 +45,9 @@ param functionAppUrlScoremodifier string = ''
 @description('Base URL of the protocolgenerator Function App (fs-protocolgenerator repo).')
 param functionAppUrlProtocolgenerator string = ''
 
+@description('Base URL of the GDPR removal tool Function App (fs-gdpr-tool repo) — the /tools/gdpr/api/* proxy target.')
+param functionAppUrlGdprtool string = ''
+
 @description('Shared secret the router sends to the judgepapers Function App.')
 @secure()
 param proxySharedSecretJudgepapers string = ''
@@ -56,6 +59,10 @@ param proxySharedSecretScoremodifier string = ''
 @description('Shared secret the router sends to the protocolgenerator Function App.')
 @secure()
 param proxySharedSecretProtocolgenerator string = ''
+
+@description('Shared secret the router sends to the GDPR removal tool Function App.')
+@secure()
+param proxySharedSecretGdprtool string = ''
 
 @description('System-assigned principal ids of the tool Function Apps that need read access to competition-data. May be empty on a first deploy.')
 param toolFunctionPrincipalIds array = []
@@ -120,10 +127,12 @@ module webApp 'modules/webapp.bicep' = {
     functionAppUrlJudgepapers: functionAppUrlJudgepapers
     functionAppUrlScoremodifier: functionAppUrlScoremodifier
     functionAppUrlProtocolgenerator: functionAppUrlProtocolgenerator
+    functionAppUrlGdprtool: functionAppUrlGdprtool
     proxySharedSecretPlatform: proxySharedSecretPlatform
     proxySharedSecretJudgepapers: proxySharedSecretJudgepapers
     proxySharedSecretScoremodifier: proxySharedSecretScoremodifier
     proxySharedSecretProtocolgenerator: proxySharedSecretProtocolgenerator
+    proxySharedSecretGdprtool: proxySharedSecretGdprtool
   }
 }
 

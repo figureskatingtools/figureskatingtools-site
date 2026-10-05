@@ -259,6 +259,55 @@ test('each tool gets its own secret and /api/* goes to the platform backend', as
     }
 });
 
+test('/tools/gdpr/api/* goes to the GDPR tool backend with its own secret and prefix stripped', async () => {
+    const upstream = await startUpstream((req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end('{"ok":true}');
+    });
+    const { server, port } = await startRouter({
+        targets: targets({
+            gdprtool: { url: upstream.url, secret: 'gdpr-secret' },
+            platform: { url: upstream.url, secret: 'platform-secret' },
+        }),
+    });
+    try {
+        const res = await request(port, '/tools/gdpr/api/scan', {
+            method: 'POST',
+            headers: {
+                'content-type': 'application/json',
+                'x-ms-client-principal': principalHeader(PRINCIPAL),
+            },
+            body: JSON.stringify({ eventUrl: 'https://results.example.test/x/' }),
+        });
+        assert.equal(res.status, 200);
+        const seen = upstream.received[0];
+        assert.equal(seen.url, '/api/scan');
+        assert.equal(seen.method, 'POST');
+        assert.equal(seen.headers['x-proxy-secret'], 'gdpr-secret');
+        assert.equal(seen.headers['x-forwarded-user-email'], 'skater@example.com');
+        // The static page itself is not proxied.
+        await request(port, '/tools/gdpr/');
+        await request(port, '/tools/gdprx/api/scan');
+        assert.equal(upstream.received.length, 1);
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('unconfigured GDPR tool backend returns 502 naming FUNCTION_APP_URL_GDPRTOOL', async () => {
+    const { server, port } = await startRouter();
+    try {
+        const res = await request(port, '/tools/gdpr/api/scan', { method: 'POST' });
+        assert.equal(res.status, 502);
+        const body = json(res);
+        assert.equal(body.tool, 'gdprtool');
+        assert.match(body.message, /FUNCTION_APP_URL_GDPRTOOL/);
+    } finally {
+        await close(server);
+    }
+});
+
 test('unconfigured tool backend returns 502 with a JSON error naming the env var', async () => {
     const { server, port } = await startRouter();
     try {
@@ -792,12 +841,16 @@ test('loadConfig reads the documented env-var contract', () => {
         PROXY_SHARED_SECRET_PROTOCOLGENERATOR: 'pg',
         FUNCTION_APP_URL_PLATFORM: 'https://pf.example.net',
         PROXY_SHARED_SECRET_PLATFORM: 'pf',
+        FUNCTION_APP_URL_GDPRTOOL: 'https://gdpr.example.net',
+        PROXY_SHARED_SECRET_GDPRTOOL: 'gd',
     });
     assert.equal(config.port, 3000);
     assert.equal(config.targets.judgepapers.url, 'https://jp.example.net');
     assert.equal(config.targets.scoremodifier.secret, 'sm');
     assert.equal(config.targets.protocolgenerator.url, 'https://pg.example.net');
     assert.equal(config.targets.platform.secret, 'pf');
+    assert.equal(config.targets.gdprtool.url, 'https://gdpr.example.net');
+    assert.equal(config.targets.gdprtool.secret, 'gd');
     assert.equal(loadConfig({}).port, 8080);
     assert.ok(loadConfig({}).publicDir.endsWith(path.join('server', 'public')));
 });

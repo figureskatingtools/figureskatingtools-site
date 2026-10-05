@@ -1,0 +1,279 @@
+/* ════════════════════════════════════════════════════════════════
+   GDPR Removal Tool — page-scoped styles
+   Built from the "Protocol" tokens in style.css
+   ════════════════════════════════════════════════════════════════ */
+
+.gdpr-main {
+  max-width: 1000px;
+}
+
+.gdpr-header {
+  margin-bottom: 1.5rem;
+}
+
+.gdpr-header h1 {
+  font-family: var(--font-display);
+  font-size: 2.25rem;
+  font-weight: 550;
+  font-variation-settings: 'opsz' 90;
+  letter-spacing: -0.015em;
+  line-height: 1.15;
+  margin: 0 0 0.75rem;
+}
+
+.gdpr-lead {
+  font-size: 1.02rem;
+  color: var(--ink-soft);
+  line-height: 1.65;
+  margin: 0;
+  max-width: 66ch;
+}
+
+.gdpr-step {
+  margin-bottom: 1.25rem;
+}
+
+.gdpr-step h3 {
+  font-size: 0.95rem;
+  margin: 1.5rem 0 0.5rem;
+}
+
+.gdpr-row {
+  display: flex;
+  gap: 0.6rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 0.75rem 0;
+}
+
+.gdpr-input {
+  flex: 1 1 22rem;
+  min-width: 0;
+  font: inherit;
+  font-size: 0.95rem;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.5rem;
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.gdpr-input:focus {
+  outline: 2px solid var(--rink-tint);
+  border-color: var(--rink);
+}
+
+.gdpr-filter {
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0.5rem 0 0.75rem;
+}
+
+.gdpr-meta {
+  font-size: 0.85rem;
+  color: var(--ink-muted);
+  margin: 0.5rem 0 0;
+}
+
+.gdpr-sub {
+  font-size: 0.78rem;
+  color: var(--ink-muted);
+}
+
+/* ── Categories + skaters ── */
+.gdpr-cats {
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  overflow: hidden;
+}
+
+.gdpr-cat + .gdpr-cat {
+  border-top: 1px solid var(--line);
+}
+
+.gdpr-cat summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+  padding: 0.7rem 0.9rem;
+  cursor: pointer;
+  background: var(--paper-tint);
+}
+
+.gdpr-cat-name {
+  font-weight: 600;
+}
+
+.gdpr-cat-meta {
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+
+.gdpr-skaters {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr));
+  gap: 0.15rem 1rem;
+  padding: 0.5rem 0.9rem 0.8rem;
+}
+
+.gdpr-skater {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.3rem 0.4rem;
+  border-radius: 0.35rem;
+  cursor: pointer;
+  font-size: 0.92rem;
+}
+
+.gdpr-skater:hover {
+  background: var(--rink-tint);
+}
+
+.gdpr-skater.is-selected {
+  background: var(--gold-tint);
+}
+
+.gdpr-skater-club {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+}
+
+.gdpr-tag {
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  border: 1px solid var(--line-strong);
+  border-radius: 0.25rem;
+  padding: 0.05rem 0.35rem;
+  white-space: nowrap;
+}
+
+.gdpr-tag--also {
+  color: var(--rink-deep);
+  border-color: var(--rink);
+  text-transform: none;
+}
+
+.gdpr-tag--sel {
+  color: var(--gold);
+  border-color: currentColor;
+}
+
+/* ── Checkboxes ── */
+.gdpr-check {
+  display: flex;
+  gap: 0.55rem;
+  align-items: flex-start;
+  margin: 0.6rem 0;
+  cursor: pointer;
+}
+
+.gdpr-confirm {
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--gold);
+  border-radius: 0.5rem;
+  background: var(--gold-tint);
+}
+
+/* ── Tables ── */
+.gdpr-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+  margin: 0.5rem 0;
+}
+
+.gdpr-table th {
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  padding: 0.4rem 0.5rem;
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.gdpr-table td {
+  padding: 0.45rem 0.5rem;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.gdpr-table td.num {
+  font-family: var(--font-mono);
+}
+
+.gdpr-table tr.is-remove td {
+  background: var(--error-tint);
+}
+
+.gdpr-table code,
+.gdpr-problems code,
+.gdpr-meta code {
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  word-break: break-all;
+}
+
+/* ── Result ── */
+.gdpr-verdict {
+  margin: 1.25rem 0 0.5rem;
+  padding: 0.85rem 1rem;
+  border-radius: 0.5rem;
+  font-weight: 500;
+}
+
+.gdpr-verdict.is-ok {
+  background: var(--success-tint);
+  color: var(--success);
+}
+
+.gdpr-verdict.is-bad,
+.gdpr-error {
+  background: var(--error-tint);
+  color: var(--error);
+}
+
+.gdpr-error {
+  padding: 0.85rem 1rem;
+  border-radius: 0.5rem;
+  margin-bottom: 1.25rem;
+}
+
+.gdpr-warn {
+  color: var(--error);
+}
+
+.gdpr-problems {
+  padding-left: 1.2rem;
+  font-size: 0.88rem;
+}
+
+.gdpr-download {
+  margin-top: 1rem;
+}
+
+.gdpr-notes {
+  margin: 1rem 0 0;
+  padding-left: 1.2rem;
+  font-size: 0.82rem;
+  color: var(--ink-muted);
+}
+
+@media (max-width: 640px) {
+  .gdpr-header h1 {
+    font-size: 1.8rem;
+  }
+
+  .gdpr-skaters {
+    grid-template-columns: 1fr;
+  }
+}

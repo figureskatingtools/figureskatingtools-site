@@ -31,6 +31,9 @@ param functionAppUrlScoremodifier string = ''
 @description('Base URL of the protocolgenerator Function App — the /protocolgenerator/api/* proxy target.')
 param functionAppUrlProtocolgenerator string = ''
 
+@description('Base URL of the GDPR removal tool Function App — the /tools/gdpr/api/* proxy target.')
+param functionAppUrlGdprtool string = ''
+
 @description('X-Proxy-Secret the router sends to the platform Function App. Intentionally empty by default — the backend fails open when its own secret is unset.')
 @secure()
 param proxySharedSecretPlatform string = ''
@@ -46,6 +49,10 @@ param proxySharedSecretScoremodifier string = ''
 @description('X-Proxy-Secret the router sends to the protocolgenerator Function App.')
 @secure()
 param proxySharedSecretProtocolgenerator string = ''
+
+@description('X-Proxy-Secret the router sends to the GDPR removal tool Function App.')
+@secure()
+param proxySharedSecretGdprtool string = ''
 
 @description('Paths served without an Easy Auth login redirect. /health must stay open so Azure/uptime probes get a 200 instead of a 302.')
 param authExcludedPaths array = [
@@ -142,10 +149,12 @@ resource siteAppSettings 'Microsoft.Web/sites/config@2022-09-01' = {
       FUNCTION_APP_URL_JUDGEPAPERS: functionAppUrlJudgepapers
       FUNCTION_APP_URL_SCOREMODIFIER: functionAppUrlScoremodifier
       FUNCTION_APP_URL_PROTOCOLGENERATOR: functionAppUrlProtocolgenerator
+      FUNCTION_APP_URL_GDPRTOOL: functionAppUrlGdprtool
       PROXY_SHARED_SECRET_PLATFORM: proxySharedSecretPlatform
       PROXY_SHARED_SECRET_JUDGEPAPERS: proxySharedSecretJudgepapers
       PROXY_SHARED_SECRET_SCOREMODIFIER: proxySharedSecretScoremodifier
       PROXY_SHARED_SECRET_PROTOCOLGENERATOR: proxySharedSecretProtocolgenerator
+      PROXY_SHARED_SECRET_GDPRTOOL: proxySharedSecretGdprtool
       // The zip already contains the built dist; Oryx must not try to build it.
       SCM_DO_BUILD_DURING_DEPLOYMENT: 'false'
     },

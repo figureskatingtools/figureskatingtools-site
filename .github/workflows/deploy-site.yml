@@ -105,11 +105,13 @@ jobs:
           FUNCTION_APP_URL_JUDGEPAPERS: ${{ vars.FUNCTION_APP_URL_JUDGEPAPERS }}
           FUNCTION_APP_URL_SCOREMODIFIER: ${{ vars.FUNCTION_APP_URL_SCOREMODIFIER }}
           FUNCTION_APP_URL_PROTOCOLGENERATOR: ${{ vars.FUNCTION_APP_URL_PROTOCOLGENERATOR }}
+          FUNCTION_APP_URL_GDPRTOOL: ${{ vars.FUNCTION_APP_URL_GDPRTOOL }}
           PROXY_SHARED_SECRET_PLATFORM: ${{ secrets.PROXY_SHARED_SECRET_PLATFORM }}
           PROXY_SHARED_SECRET_JUDGEPAPERS: ${{ secrets.PROXY_SHARED_SECRET_JUDGEPAPERS }}
           PROXY_SHARED_SECRET_SCOREMODIFIER: ${{ secrets.PROXY_SHARED_SECRET_SCOREMODIFIER }}
           PROXY_SHARED_SECRET_PROTOCOLGENERATOR: ${{ secrets.PROXY_SHARED_SECRET_PROTOCOLGENERATOR }}
-          # Not a router->tool secret like the three above: this is the value
+          PROXY_SHARED_SECRET_GDPRTOOL: ${{ secrets.PROXY_SHARED_SECRET_GDPRTOOL }}
+          # Not a router->tool secret like the four above: this is the value
           # API Management injects as X-Proxy-Secret when it forwards FS Manager
           # traffic to the HOVTP listener. Both environments' bicepparams read
           # it, and an unset secret arrives as '' — which leaves the listener's
@@ -136,7 +138,7 @@ jobs:
           # Empty tool secrets are valid during bootstrap (backends fail open when
           # their own secret is unset) but in a configured environment they mean
           # every proxied call 401s — surface it instead of failing silently.
-          for tool in JUDGEPAPERS SCOREMODIFIER PROTOCOLGENERATOR; do
+          for tool in JUDGEPAPERS SCOREMODIFIER PROTOCOLGENERATOR GDPRTOOL; do
             var="PROXY_SHARED_SECRET_${tool}"
             if [ -z "${!var:-}" ]; then
               echo "::warning::${var} is empty — proxied calls to that tool will 401 unless its backend's own secret is also unset."
@@ -500,7 +502,7 @@ jobs:
 
       - name: Build site
         # One multi-entry Vite build produces the whole tree: /, /judgepapers/,
-        # /scoremodifier/, /protocolgenerator/, /tools/banner/ + shared /assets/*.
+        # /scoremodifier/, /protocolgenerator/, /tools/banner/, /tools/gdpr/ + shared /assets/*.
         run: npm run build --workspace=site
 
       - name: Create deployment package
