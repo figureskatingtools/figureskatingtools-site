@@ -897,7 +897,7 @@ function renderDetails() {
         <div class="section-head-actions">
           ${autoPlaceButtonHtml()}
           <button class="btn btn-xs btn-primary" id="tray-browse">Upload files…</button>
-          <input type="file" id="tray-input" multiple accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.xml" style="display:none;">
+          <input type="file" id="tray-input" multiple accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.heic,.heif,.xml" style="display:none;">
         </div>
       </div>
       <p class="section-sub">Drop PDFs and photos here or into any slot — Figure Skating Manager exports
