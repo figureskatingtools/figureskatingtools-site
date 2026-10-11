@@ -1578,3 +1578,43 @@ dialog.send-dialog::backdrop {
 .send-error[hidden] {
   display: none;
 }
+
+dialog.send-dialog.send-dialog--preview {
+  max-width: min(720px, calc(100vw - 2rem));
+  width: 100%;
+}
+
+.send-preview-toggle {
+  margin-right: auto;
+}
+
+.send-preview[hidden],
+[data-send-fields][hidden] {
+  display: none;
+}
+
+.send-preview-meta {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 0.75rem;
+  margin: 0 0 0.75rem;
+  font-size: 0.875rem;
+}
+
+.send-preview-meta dt {
+  color: var(--ink-muted);
+}
+
+.send-preview-meta dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.send-preview-body {
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+  padding: 0.25rem 1rem;
+  background: #ffffff;
+  max-height: 55vh;
+  overflow-y: auto;
+}

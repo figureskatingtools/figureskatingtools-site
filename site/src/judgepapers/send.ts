@@ -58,6 +58,7 @@ export function openSendDialog(apiBase: string, competitionId: string, fileName:
           <strong>${escapeHtml(fileName)}</strong>. The link is valid for up to 5 days.
         </p>
 
+        <div data-send-fields>
         <label class="send-field">
           <span class="form-label">Recipient e-mail</span>
           <input type="email" name="to" class="form-input" required autocomplete="email"
@@ -86,10 +87,24 @@ export function openSendDialog(apiBase: string, competitionId: string, fileName:
           <label><input type="radio" name="language" value="fi" checked> Suomi</label>
           <label><input type="radio" name="language" value="en"> English</label>
         </fieldset>
+        </div>
+
+        <section class="send-preview" data-send-preview hidden>
+          <dl class="send-preview-meta">
+            <dt>From</dt><dd data-preview="from"></dd>
+            <dt>To</dt><dd data-preview="to"></dd>
+            <dt>Cc</dt><dd data-preview="cc"></dd>
+            <dt>Reply-To</dt><dd data-preview="replyTo"></dd>
+            <dt>Subject</dt><dd data-preview="subject"></dd>
+          </dl>
+          <div class="send-preview-body" data-send-preview-body></div>
+          <p class="send-field-note">The download link is created when the e-mail is sent.</p>
+        </section>
 
         <p class="text-error send-error" data-send-error hidden></p>
 
         <div class="modal-actions">
+          <button type="button" class="btn btn-ghost btn-sm send-preview-toggle" data-send-preview-toggle>Preview</button>
           <button type="button" class="btn btn-ghost btn-sm" data-send-cancel>Cancel</button>
           <button type="submit" class="btn btn-primary btn-sm" data-send-submit disabled>Send</button>
         </div>
@@ -103,6 +118,11 @@ export function openSendDialog(apiBase: string, competitionId: string, fileName:
     const nameInput = form.elements.namedItem('senderName') as HTMLInputElement;
     const errorEl = dialog.querySelector<HTMLElement>('[data-send-error]')!;
     const submitBtn = dialog.querySelector<HTMLButtonElement>('[data-send-submit]')!;
+    const fieldsEl = dialog.querySelector<HTMLElement>('[data-send-fields]')!;
+    const previewEl = dialog.querySelector<HTMLElement>('[data-send-preview]')!;
+    const previewBtn = dialog.querySelector<HTMLButtonElement>('[data-send-preview-toggle]')!;
+    const selectedLanguage = (): string =>
+        form.querySelector<HTMLInputElement>('input[name="language"]:checked')?.value ?? 'fi';
 
     const checks: Array<[HTMLInputElement, (v: string) => boolean]> = [
         [toInput, isValidEmail],
@@ -147,12 +167,67 @@ export function openSendDialog(apiBase: string, competitionId: string, fileName:
         else close();
     });
 
+    // Preview: the backend renders the exact e-mail (same templates as the
+    // send) without minting a link or counting toward the send limit.
+    const showFields = (): void => {
+        previewEl.hidden = true;
+        fieldsEl.hidden = false;
+        dialog.classList.remove('send-dialog--preview');
+        previewBtn.textContent = 'Preview';
+    };
+    previewBtn.addEventListener('click', async () => {
+        if (!previewEl.hidden) {
+            showFields();
+            return;
+        }
+        touched.add(nameInput);
+        refresh();
+        if (!isValidSenderName(nameInput.value)) return;
+        previewBtn.disabled = true;
+        errorEl.hidden = true;
+        try {
+            const resp = await fetch(`${apiBase}/preview_judge_papers_email`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    id: competitionId,
+                    fileName,
+                    to: toInput.value.trim(),
+                    resultsServiceEmail: ccInput.value.trim(),
+                    senderName: normalizeName(nameInput.value),
+                    language: selectedLanguage(),
+                }),
+            });
+            if (!resp.ok) {
+                errorEl.textContent = resp.status === 401
+                    ? 'Your session has expired. Reload the page and sign in again.'
+                    : (await resp.text()) || `Preview failed (HTTP ${resp.status}).`;
+                errorEl.hidden = false;
+                return;
+            }
+            renderPreview(previewEl, await resp.json());
+            fieldsEl.hidden = true;
+            previewEl.hidden = false;
+            dialog.classList.add('send-dialog--preview');
+            previewBtn.textContent = 'Edit';
+        } catch (_err) {
+            errorEl.textContent = 'Preview failed. Check your connection and try again.';
+            errorEl.hidden = false;
+        } finally {
+            previewBtn.disabled = false;
+        }
+    });
+
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
         for (const [input] of checks) touched.add(input);
-        if (!refresh() || sending) return;
+        if (!refresh()) {
+            showFields();
+            return;
+        }
+        if (sending) return;
 
-        const language = (form.querySelector<HTMLInputElement>('input[name="language"]:checked')?.value ?? 'fi');
+        const language = selectedLanguage();
         const to = toInput.value.trim();
         sending = true;
         submitBtn.textContent = 'Sending...';
@@ -199,6 +274,48 @@ export function openSendDialog(apiBase: string, competitionId: string, fileName:
     dialog.showModal();
     refresh();
     toInput.focus();
+}
+
+interface EmailPreview {
+    subject: string;
+    from: string;
+    to: string | null;
+    cc: string | null;
+    replyTo: string | null;
+    html: string;
+}
+
+/**
+ * Show the rendered e-mail. Its HTML comes from our backend with every
+ * user-supplied value escaped; it is still parsed inertly (DOMParser runs no
+ * scripts) and shown in a shadow root so the mail's styles stay isolated.
+ * Not an iframe: the site CSP (frame-ancestors 'none') applies to srcdoc too.
+ */
+function renderPreview(previewEl: HTMLElement, preview: EmailPreview): void {
+    const missing = '— (not filled in yet)';
+    const meta: Record<string, string> = {
+        from: preview.from,
+        to: preview.to || missing,
+        cc: preview.cc || missing,
+        replyTo: preview.replyTo || missing,
+        subject: preview.subject,
+    };
+    for (const [key, value] of Object.entries(meta)) {
+        previewEl.querySelector<HTMLElement>(`[data-preview="${key}"]`)!.textContent = value;
+    }
+
+    const parsed = new DOMParser().parseFromString(preview.html, 'text/html');
+    parsed.querySelectorAll('script, iframe, object, embed').forEach((el) => el.remove());
+    const host = previewEl.querySelector<HTMLElement>('[data-send-preview-body]')!;
+    const root = host.shadowRoot ?? host.attachShadow({ mode: 'open' });
+    const body = document.createElement('div');
+    body.setAttribute('style', parsed.body.getAttribute('style') ?? '');
+    body.append(...Array.from(parsed.body.childNodes, (node) => document.importNode(node, true)));
+    // The link is minted only at send time; keep preview clicks inert.
+    body.addEventListener('click', (e) => {
+        if ((e.target as Element).closest('a')) e.preventDefault();
+    });
+    root.replaceChildren(body);
 }
 
 function showSent(dialog: HTMLDialogElement, to: string, cc: string, expiry: string, dryRun: boolean,
