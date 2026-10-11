@@ -17,6 +17,8 @@ export interface UserInfo {
   userId: string;
   identityProvider: string;
   userDetails: string;
+  /** Display name from the principal's name claim; '' when unknown */
+  name: string;
   userRoles: string[];
 }
 
@@ -51,6 +53,7 @@ export async function fetchUser(): Promise<UserInfo | null> {
         userId: data.userId ?? '',
         identityProvider: data.identityProvider ?? 'aad',
         userDetails: data.userDetails ?? 'unknown',
+        name: typeof data.name === 'string' ? data.name : '',
         userRoles: Array.isArray(data.userRoles) ? data.userRoles : [],
       };
     }

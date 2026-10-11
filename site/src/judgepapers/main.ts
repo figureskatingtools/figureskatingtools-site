@@ -23,6 +23,7 @@ import {
 } from '../shell.js';
 import { validateCategory, validateCompetition } from './validate';
 import { renderHelpTrigger, filesHelpHtml, judgingMethodHelpHtml, initHelp } from './help';
+import { openSendDialog, SENDABLE_FILE_RE } from './send';
 
 // Inject the shared figureskatingtools.com nav styles once at startup
 injectSiteNavStyles();
@@ -1012,6 +1013,10 @@ async function init() {
                                         ${safeFileName}
                                     </div>
                                 </a>
+                                ${SENDABLE_FILE_RE.test(f.fileName) ? `
+                                <button class="icon-btn icon-btn--send send-papers-btn" data-filename="${safeFileName}" title="Send by E-mail">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+                                </button>` : ''}
                                 <button class="icon-btn icon-btn--copy copy-link-btn" data-url="${safeUrl}" title="Copy Link to Clipboard">
                                     <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                                 </button>
@@ -1037,6 +1042,15 @@ async function init() {
                                      el.classList.remove('is-copied');
                                  }, 2000);
                              }).catch(() => {});
+                         });
+                     });
+
+                     // Attach send-by-e-mail event listeners
+                     document.querySelectorAll('.send-papers-btn').forEach(btn => {
+                         btn.addEventListener('click', (e) => {
+                             e.stopPropagation();
+                             const fileName = (btn as HTMLElement).dataset.filename!;
+                             if (user) openSendDialog(API_BASE, id, fileName, user);
                          });
                      });
 

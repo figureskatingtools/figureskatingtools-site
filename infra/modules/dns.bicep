@@ -95,5 +95,77 @@ resource asuidTxt 'Microsoft.Network/dnsZones/TXT@2018-05-01' = if (!empty(custo
   }
 }
 
+// --- Outbound e-mail: Mailgun (EU) sends as no-reply@<zone> ----------------------
+// The judgepapers tool e-mails download links through Mailgun (fs-judgepapers
+// email_sender.py). Mailgun is the domain's ONLY sender, so SPF ends in a hard
+// `-all` and DMARC rejects unaligned mail; the aggregate/failure reports go to
+// Mailgun's DMARC monitoring. These are domain-wide, not per-environment: test and
+// prod deployments both declare the same values. The DKIM key is public (Mailgun
+// domain settings → DNS records); a 2048-bit rotation needs the value split into
+// <=255-char strings in the same `value` array. No Mailgun MX — inbound mail stays
+// on the hand-seeded Joker MX. The apex `@` TXT record set holds SPF only; any
+// future apex TXT value must be added here, as this set replaces the whole list.
+var mailgunDkimSelector = 'mta'
+var mailgunDkimValue = 'k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDdXBnsu6cy0BTR/tTiejafTspr7bDQJaw6PITZ7w+lh6zjJiVolV0ODC+GpzY0ePv3y/2XlcsQZcYjJ1aVHfYRQGGc8NE/boQnZlaL1QpvLvze89E42urRJGqZk6kAM5H3ktXuItS32J/G6eDIP+5vg5BHd/Lhap+Sn8lqGzXtPQIDAQAB'
+var dmarcReportTargets = 'mailto:ff4d1058@dmarc.mailgun.org,mailto:xg6gbnavqm5@inbox.ondmarc.com'
+
+resource spfTxt 'Microsoft.Network/dnsZones/TXT@2018-05-01' = {
+  parent: zone
+  name: '@'
+  properties: {
+    TTL: 3600
+    TXTRecords: [
+      {
+        value: [
+          'v=spf1 include:mailgun.org -all'
+        ]
+      }
+    ]
+  }
+}
+
+resource dkimTxt 'Microsoft.Network/dnsZones/TXT@2018-05-01' = {
+  parent: zone
+  name: '${mailgunDkimSelector}._domainkey'
+  properties: {
+    TTL: 3600
+    TXTRecords: [
+      {
+        value: [
+          mailgunDkimValue
+        ]
+      }
+    ]
+  }
+}
+
+resource dmarcTxt 'Microsoft.Network/dnsZones/TXT@2018-05-01' = {
+  parent: zone
+  name: '_dmarc'
+  properties: {
+    TTL: 3600
+    TXTRecords: [
+      {
+        value: [
+          'v=DMARC1; p=reject; pct=100; fo=1; ri=3600; rua=${dmarcReportTargets}; ruf=${dmarcReportTargets}'
+        ]
+      }
+    ]
+  }
+}
+
+// Mailgun's tracking hostname. Tracking is off for our mails (it would rewrite the
+// SAS download links), but Mailgun lists the record as part of the domain setup.
+resource mailgunTrackingCname 'Microsoft.Network/dnsZones/CNAME@2018-05-01' = {
+  parent: zone
+  name: 'email'
+  properties: {
+    TTL: 3600
+    CNAMERecord: {
+      cname: 'eu.mailgun.org'
+    }
+  }
+}
+
 @description('Azure-assigned name servers for the zone. Delegate these at the registrar.')
 output nameServers array = zone.properties.nameServers

@@ -148,6 +148,7 @@ test('GET /userinfo decodes a base64 X-MS-CLIENT-PRINCIPAL', async () => {
             userId: 'abc123',
             identityProvider: 'aad',
             userDetails: 'skater@example.com',
+            name: 'Skater Person',
             userRoles: ['authenticated'],
         });
     } finally {

@@ -261,6 +261,9 @@ function handleUserInfo(req, res, config) {
         userId: parsed.userId,
         identityProvider: parsed.identityProvider,
         userDetails: displayName,
+        // Display name ('' when the principal has no name claim), e.g. the
+        // judgepapers send dialog's default sender name.
+        name: findClaim(parsed, NAME_CLAIMS),
         userRoles: parsed.userRoles || [],
     });
 }
