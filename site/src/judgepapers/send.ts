@@ -70,7 +70,7 @@ export function openSendDialog(apiBase: string, competitionId: string, fileName:
           <span class="form-label">Results Service e-mail</span>
           <input type="email" name="resultsServiceEmail" class="form-input" required autocomplete="email"
                  value="${escapeHtml(userEmail)}">
-          <span class="send-field-note">Gets a copy (Cc), and replies from the recipient go here.</span>
+          <span class="send-field-note">Gets a copy (Cc).</span>
           <span class="send-field-error" data-error-for="resultsServiceEmail" hidden>Enter one valid e-mail address.</span>
         </label>
 
@@ -94,7 +94,6 @@ export function openSendDialog(apiBase: string, competitionId: string, fileName:
             <dt>From</dt><dd data-preview="from"></dd>
             <dt>To</dt><dd data-preview="to"></dd>
             <dt>Cc</dt><dd data-preview="cc"></dd>
-            <dt>Reply-To</dt><dd data-preview="replyTo"></dd>
             <dt>Subject</dt><dd data-preview="subject"></dd>
           </dl>
           <div class="send-preview-body" data-send-preview-body></div>
@@ -281,7 +280,6 @@ interface EmailPreview {
     from: string;
     to: string | null;
     cc: string | null;
-    replyTo: string | null;
     html: string;
 }
 
@@ -297,7 +295,6 @@ function renderPreview(previewEl: HTMLElement, preview: EmailPreview): void {
         from: preview.from,
         to: preview.to || missing,
         cc: preview.cc || missing,
-        replyTo: preview.replyTo || missing,
         subject: preview.subject,
     };
     for (const [key, value] of Object.entries(meta)) {
