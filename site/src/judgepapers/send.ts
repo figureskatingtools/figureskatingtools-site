@@ -62,7 +62,7 @@ export function openSendDialog(apiBase: string, competitionId: string, fileName:
         <label class="send-field">
           <span class="form-label">Recipient e-mail</span>
           <input type="email" name="to" class="form-input" required autocomplete="email"
-                 placeholder="print.shop@example.com">
+                 placeholder="competition.manager@example.com">
           <span class="send-field-error" data-error-for="to" hidden>Enter one valid e-mail address.</span>
         </label>
 
