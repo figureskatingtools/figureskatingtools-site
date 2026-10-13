@@ -54,7 +54,7 @@ param proxySharedSecretProtocolgenerator string = ''
 @secure()
 param proxySharedSecretGdprtool string = ''
 
-@description('Paths served without an Easy Auth login redirect. /health must stay open so Azure/uptime probes get a 200 instead of a 302; /judgepapers/download is the judges\'-papers link e-mailed to recipients without an account (the token is checked by the judgepapers backend); /, /index.html, /signin, /landing/* and the icons/robots.txt make up the public landing page, which the router serves at / when the request has no principal (keep in sync with LANDING_DOCUMENT_PATHS and SIGNIN_PATH in server/server.js).')
+@description('Paths served without an Easy Auth login redirect. /health must stay open so Azure/uptime probes get a 200 instead of a 302; /judgepapers/download is the judges\'-papers link e-mailed to recipients without an account (the token is checked by the judgepapers backend); /, /index.html, /signin, /landing/* and the icons, robots.txt and llms.txt make up the public landing page, which the router serves at / when the request has no principal (keep in sync with LANDING_DOCUMENT_PATHS and SIGNIN_PATH in server/server.js).')
 param authExcludedPaths array = [
   '/health'
   '/judgepapers/download'
@@ -65,6 +65,7 @@ param authExcludedPaths array = [
   '/favicon.png'
   '/apple-touch-icon.png'
   '/robots.txt'
+  '/llms.txt'
 ]
 
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
