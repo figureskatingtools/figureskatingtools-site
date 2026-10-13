@@ -148,6 +148,7 @@ test('GET /userinfo decodes a base64 X-MS-CLIENT-PRINCIPAL', async () => {
             userId: 'abc123',
             identityProvider: 'aad',
             userDetails: 'skater@example.com',
+            name: 'Skater Person',
             userRoles: ['authenticated'],
         });
     } finally {
@@ -185,6 +186,50 @@ test('GET /userinfo honours DEV_FAKE_USER when Easy Auth headers are absent', as
 test('DEV_FAKE_USER is ignored when NODE_ENV=production', () => {
     assert.equal(loadConfig({ NODE_ENV: 'production', DEV_FAKE_USER: 'dev@example.com' }).devFakeUser, '');
     assert.equal(loadConfig({ DEV_FAKE_USER: 'dev@example.com' }).devFakeUser, 'dev@example.com');
+});
+
+// ── /judgepapers/download (public e-mailed link) ──────────────────────────────
+
+test('GET /judgepapers/download proxies to download_judge_papers and passes the 302 through', async () => {
+    const upstream = await startUpstream((req, res) => {
+        res.writeHead(302, { Location: 'https://acct.blob.core.windows.net/c/f.pdf?sig=x', 'Cache-Control': 'no-store' });
+        res.end();
+    });
+    const { server, port } = await startRouter({
+        targets: targets({ judgepapers: { url: upstream.url, secret: 'jp-secret' } }),
+    });
+    try {
+        const res = await request(port, '/judgepapers/download?t=abc_DEF-123');
+        assert.equal(res.status, 302);
+        assert.equal(res.headers['location'], 'https://acct.blob.core.windows.net/c/f.pdf?sig=x');
+        const seen = upstream.received[0];
+        assert.equal(seen.url, '/api/download_judge_papers?t=abc_DEF-123');
+        assert.equal(seen.method, 'GET');
+        assert.equal(seen.headers['x-proxy-secret'], 'jp-secret');
+
+        const head = await request(port, '/judgepapers/download?t=abc', { method: 'HEAD' });
+        assert.equal(head.status, 302);
+        assert.equal(upstream.received[1].method, 'HEAD');
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('/judgepapers/download rejects other methods without calling the backend', async () => {
+    const upstream = await startUpstream((req, res) => res.end());
+    const { server, port } = await startRouter({
+        targets: targets({ judgepapers: { url: upstream.url, secret: 'jp-secret' } }),
+    });
+    try {
+        const res = await request(port, '/judgepapers/download?t=abc', { method: 'POST', body: 'x' });
+        assert.equal(res.status, 405);
+        assert.equal(res.headers['allow'], 'GET, HEAD');
+        assert.equal(upstream.received.length, 0);
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
 });
 
 // ── Proxy: prefix strip + header injection ───────────────────────────────────

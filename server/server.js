@@ -7,6 +7,7 @@
 //   /protocolgenerator/      → Protocol Generator app  (SPA, own index.html)
 //   /tools/<name>/           → small in-site tools (static pages)
 //   /health                  → liveness probe (excluded from Easy Auth)
+//   /judgepapers/download    → e-mailed judges'-papers link (excluded from Easy Auth)
 //   /userinfo                → flat user object decoded from Easy Auth headers
 //   /changelog-live          → merged GitHub commits for "What's New" (cached)
 //   /api/*                   → platform Function App
@@ -34,6 +35,10 @@ const PLATFORM = 'platform';
 // path is proxied: /tools/gdpr/api/* → $FUNCTION_APP_URL_GDPRTOOL/api/*.
 const SMALL_TOOL_APIS = { gdprtool: '/tools/gdpr' };
 const PROXY_TARGETS = [...TOOLS, ...Object.keys(SMALL_TOOL_APIS), PLATFORM];
+
+// Public (no sign-in) route for the link e-mailed by judgepapers' send dialog.
+// Must match the Easy Auth excludedPaths entry in infra/modules/webapp.bicep.
+const JUDGEPAPERS_DOWNLOAD_PATH = '/judgepapers/download';
 
 const MIME_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -261,6 +266,9 @@ function handleUserInfo(req, res, config) {
         userId: parsed.userId,
         identityProvider: parsed.identityProvider,
         userDetails: displayName,
+        // Display name ('' when the principal has no name claim), e.g. the
+        // judgepapers send dialog's default sender name.
+        name: findClaim(parsed, NAME_CLAIMS),
         userRoles: parsed.userRoles || [],
     });
 }
@@ -702,6 +710,19 @@ function createRequestHandler(config) {
         //    Node it must not be swallowed by the SPA fallback.
         if (pathname === '/.auth' || pathname.startsWith('/.auth/')) {
             notFound(res);
+            return;
+        }
+
+        // 4b. The judges'-papers link e-mailed to a recipient who has no
+        //     account (?t=<token>). Easy Auth excludes this exact path; the
+        //     backend checks the token and 302s to a short-lived blob URL.
+        if (pathname === JUDGEPAPERS_DOWNLOAD_PATH) {
+            if (req.method !== 'GET' && req.method !== 'HEAD') {
+                res.writeHead(405, { Allow: 'GET, HEAD', 'Cache-Control': 'no-store' });
+                res.end();
+                return;
+            }
+            proxy(req, res, config, 'judgepapers', '/api/download_judge_papers' + search);
             return;
         }
 
