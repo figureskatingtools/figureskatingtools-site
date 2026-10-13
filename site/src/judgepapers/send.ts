@@ -10,9 +10,10 @@ const DIALOG_ID = 'send-papers-dialog';
 /** Only the merged daily PDFs are sendable (the mail text describes them). */
 export const SENDABLE_FILE_RE = /^judgingpapers_[A-Za-z0-9_-]+\.pdf$/;
 
-// Same single-address pattern as the backend's email_sender._EMAIL_RE.
+// Same single-address pattern as the backend's email_sender._EMAIL_RE: a
+// dot-atom local part (no leading, trailing or doubled dots).
 const EMAIL_RE =
-    /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$/;
+    /^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*@(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$/;
 const SENDER_NAME_MAX = 80;
 // eslint-disable-next-line no-control-regex
 const SENDER_NAME_FORBIDDEN = /[/:@<>\\"\u0000-\u001f\u007f]/;
@@ -50,9 +51,10 @@ export function openSendDialog(apiBase: string, competitionId: string, fileName:
     const dialog = document.createElement('dialog');
     dialog.id = DIALOG_ID;
     dialog.className = 'modal send-dialog';
+    dialog.setAttribute('aria-labelledby', `${DIALOG_ID}-title`);
     dialog.innerHTML = `
       <form method="dialog" class="send-form" novalidate>
-        <h3>Send judges' papers</h3>
+        <h3 id="${DIALOG_ID}-title">Send judges' papers</h3>
         <p class="modal-message">
           E-mails a ready-made message with a fresh download link to
           <strong>${escapeHtml(fileName)}</strong>. The link is valid for up to 5 days.
@@ -117,6 +119,7 @@ export function openSendDialog(apiBase: string, competitionId: string, fileName:
     const nameInput = form.elements.namedItem('senderName') as HTMLInputElement;
     const errorEl = dialog.querySelector<HTMLElement>('[data-send-error]')!;
     const submitBtn = dialog.querySelector<HTMLButtonElement>('[data-send-submit]')!;
+    const cancelBtn = dialog.querySelector<HTMLButtonElement>('[data-send-cancel]')!;
     const fieldsEl = dialog.querySelector<HTMLElement>('[data-send-fields]')!;
     const previewEl = dialog.querySelector<HTMLElement>('[data-send-preview]')!;
     const previewBtn = dialog.querySelector<HTMLButtonElement>('[data-send-preview-toggle]')!;
@@ -142,6 +145,7 @@ export function openSendDialog(apiBase: string, competitionId: string, fileName:
             dialog.querySelector<HTMLElement>(`[data-error-for="${input.name}"]`)!.hidden = !showError;
         }
         submitBtn.disabled = sending || !allValid;
+        cancelBtn.disabled = sending;
         return allValid;
     };
     for (const [input] of checks) {
@@ -160,7 +164,11 @@ export function openSendDialog(apiBase: string, competitionId: string, fileName:
         dialog.close();
         dialog.remove();
     };
-    dialog.querySelector('[data-send-cancel]')!.addEventListener('click', close);
+    // Closing mid-send would leave the request running with nowhere to report
+    // the outcome, inviting a duplicate retry — same guard as Escape.
+    cancelBtn.addEventListener('click', () => {
+        if (!sending) close();
+    });
     dialog.addEventListener('cancel', (e) => {
         if (sending) e.preventDefault();
         else close();
