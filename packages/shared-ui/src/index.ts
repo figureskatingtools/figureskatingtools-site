@@ -28,6 +28,7 @@ export {
   serializeActiveCompetition,
   setActiveCompetition,
   subscribeActiveCompetition,
+  syncCompetitionSnapshot,
   toPlatformCompetition,
   updateCompetition,
 } from './competition.js';

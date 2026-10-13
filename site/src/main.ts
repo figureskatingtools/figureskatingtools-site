@@ -15,6 +15,7 @@ import {
   getActiveCompetition,
   setActiveCompetition,
   subscribeActiveCompetition,
+  syncCompetitionSnapshot,
   competitionLabel,
   formatDateFi,
   formatFileSize,
@@ -111,6 +112,7 @@ function renderAuthenticatedView(userInfo: UserInfo) {
   }
   void loadCompetitionPanel();
   subscribeActiveCompetition((active) => {
+    if (knownCompetitions) syncCompetitionSnapshot(knownCompetitions, active);
     renderCompetitionPanel(knownCompetitions);
     syncHovtpPolling(active);
   });

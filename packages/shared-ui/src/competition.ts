@@ -191,6 +191,27 @@ export function retentionInfo(
   };
 }
 
+/**
+ * Fold the active competition into a list snapshot (the nav selector's menu,
+ * the home panel's recent list). Without it an Extend, a rename or a change
+ * arriving from another tab leaves the snapshot stale — and picking that
+ * entry again would write the stale copy back as the active competition.
+ * Mutates `list` in place; true when an entry changed.
+ */
+export function syncCompetitionSnapshot(
+  list: PlatformCompetition[],
+  active: PlatformCompetition | null
+): boolean {
+  if (!active) return false;
+  const index = list.findIndex((c) => c.id === active.id);
+  if (index < 0) return false;
+  // Spread keeps what the stored copy lacks (createdUtc) from the list entry
+  const merged = { ...list[index], ...active };
+  if (JSON.stringify(merged) === JSON.stringify(list[index])) return false;
+  list[index] = merged;
+  return true;
+}
+
 /** Human label for a competition — name, falling back to the code */
 export function competitionLabel(competition: PlatformCompetition): string {
   return competition.name?.trim() || competition.code;

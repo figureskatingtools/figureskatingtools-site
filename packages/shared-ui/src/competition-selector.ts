@@ -20,6 +20,7 @@ import {
   retentionInfo,
   setActiveCompetition,
   subscribeActiveCompetition,
+  syncCompetitionSnapshot,
   updateCompetition,
   type PlatformCompetition,
   type UpdateCompetitionInput,
@@ -95,7 +96,12 @@ export async function initCompetitionSelector(container: HTMLElement): Promise<v
   document.addEventListener('click', () => closeMenu(container));
 
   render();
-  subscribeActiveCompetition(() => render());
+  subscribeActiveCompetition((active) => {
+    // Keep the menu's copy current (deletion date after an Extend, renames),
+    // so picking it again never writes a stale competition back
+    syncCompetitionSnapshot(competitions, active);
+    render();
+  });
 }
 
 /** Collapse the dropdown, if it is open */

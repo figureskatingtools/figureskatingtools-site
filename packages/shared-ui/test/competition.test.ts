@@ -28,6 +28,7 @@ import {
   serializeActiveCompetition,
   setActiveCompetition,
   subscribeActiveCompetition,
+  syncCompetitionSnapshot,
   toPlatformCompetition,
   updateCompetition,
   type PlatformCompetition,
@@ -567,5 +568,40 @@ describe('platform errors from the tool backends', () => {
       "The competition registry can't be reached right now, try again shortly."
     );
     expect(platformErrorMessage('platform_id_required')).toBe('Select a competition in the top bar first.');
+  });
+});
+
+describe('syncCompetitionSnapshot', () => {
+  const OTHER: PlatformCompetition = { ...COMP, id: 'other', code: 'other-cup', name: 'Other Cup' };
+
+  it('updates the matching entry in place, keeping fields the stored copy lacks', () => {
+    const list: PlatformCompetition[] = [
+      { ...COMP, createdUtc: '2026-10-01T10:00:00Z', deletionDate: '2026-11-30T00:00:00Z' },
+      OTHER,
+    ];
+    const extended = { ...COMP, deletionDate: '2026-12-07T00:00:00Z' };
+
+    expect(syncCompetitionSnapshot(list, extended)).toBe(true);
+    expect(list[0]).toEqual({
+      ...COMP, createdUtc: '2026-10-01T10:00:00Z', deletionDate: '2026-12-07T00:00:00Z',
+    });
+    expect(list[1]).toBe(OTHER);
+  });
+
+  it('so re-picking the entry no longer writes the stale date back', () => {
+    const list: PlatformCompetition[] = [{ ...COMP, deletionDate: '2026-11-30T00:00:00Z' }];
+    setActiveCompetition({ ...COMP, deletionDate: '2026-12-07T00:00:00Z' });
+    syncCompetitionSnapshot(list, getActiveCompetition());
+
+    setActiveCompetition(list[0]);   // what a click on the menu item does
+
+    expect(getActiveCompetition()?.deletionDate).toBe('2026-12-07T00:00:00Z');
+  });
+
+  it('reports no change for null, an unknown id or identical data', () => {
+    const list: PlatformCompetition[] = [{ ...COMP }];
+    expect(syncCompetitionSnapshot(list, null)).toBe(false);
+    expect(syncCompetitionSnapshot(list, OTHER)).toBe(false);
+    expect(syncCompetitionSnapshot(list, { ...COMP })).toBe(false);
   });
 });
