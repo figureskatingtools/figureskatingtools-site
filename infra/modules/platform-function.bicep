@@ -43,8 +43,6 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   kind: 'web'
   properties: {
     Application_Type: 'web'
-    // The privacy notice promises technical logs are kept at most 30 days.
-    RetentionInDays: 30
   }
 }
 
