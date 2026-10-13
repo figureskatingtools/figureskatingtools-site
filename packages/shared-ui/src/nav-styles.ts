@@ -388,6 +388,17 @@ const NAV_STYLES = `
   color: #0d5a92;
 }
 
+/* Deletion within a week (or before the event): an amber dot after the name */
+.fst-comp-item-due {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 0.4rem;
+  border-radius: 50%;
+  background-color: #e0a300;
+  vertical-align: middle;
+}
+
 .fst-comp-empty {
   margin: 0;
   padding: 0.75rem 0.9rem;

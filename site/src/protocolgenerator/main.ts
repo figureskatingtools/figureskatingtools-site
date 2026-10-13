@@ -6,6 +6,7 @@ import {
   initCompetitionSelector,
   getActiveCompetition,
   setActiveCompetition,
+  extendCompetition,
   openEditCompetitionDialog,
   competitionLabel,
   formatDateFi,
@@ -320,26 +321,49 @@ function fmtTimestamp(value?: string | null): string {
 }
 
 /**
- * Compact "Auto-deletes <date> [· Extend]" line in the competition header.
+ * Compact "Auto-deletes <date> · Extend" line in the competition header.
  *
  * Rendered only when the backend actually reports a deletion date on
  * `get_competition_details` (or hands a fresh one back from the extend route) —
- * with no date available the line stays empty. The Extend button surfaces only
- * during the last 7 days before deletion; each press pushes the date a week
- * out (no cap), so it simply reappears when the new date draws near.
+ * with no date available the line stays empty.
+ *
+ * The platform competition owns the deletion date (one clock for every tool),
+ * so a record bound to one shows the earlier of the two dates and always
+ * offers Extend, which extends the PLATFORM competition. Until this tool's
+ * backend follows the platform clock it also calls the tool's own extend route
+ * (a temporary bridge — harmless afterwards, when that route only syncs). An
+ * unbound record keeps the old behaviour: Extend only in the last 7 days.
  */
 const EXTEND_VISIBLE_MS = 7 * 24 * 3600 * 1000;
+
+/** The bound platform competition's deletion date, when the selection still matches */
+function platformDeletionDate(): string | null {
+  if (!boundPlatformId) return null;
+  const active = getActiveCompetition();
+  return active && active.id === boundPlatformId ? active.deletionDate ?? null : null;
+}
+
+/** The earlier of two ISO dates (either may be missing or unparsable) */
+function earliestDate(a: string | null | undefined, b: string | null | undefined): string | null {
+  const ta = a ? Date.parse(a) : NaN;
+  const tb = b ? Date.parse(b) : NaN;
+  if (!Number.isFinite(ta)) return Number.isFinite(tb) ? b! : (a ?? null);
+  if (!Number.isFinite(tb)) return a!;
+  return ta <= tb ? a! : b!;
+}
 
 function renderRetention(date?: string | null) {
   const el = document.getElementById('retention');
   if (!el) return;
-  const pretty = date ? fmtDate(date) : '';
+  const shown = date ? earliestDate(date, platformDeletionDate()) : null;
+  const pretty = shown ? fmtDate(shown) : '';
   if (!pretty || pretty === '-') { el.innerHTML = ''; return; }
-  const due = date ? new Date(date).getTime() : NaN;
+  const due = shown ? new Date(shown).getTime() : NaN;
   const dueSoon = Number.isFinite(due) && due - Date.now() <= EXTEND_VISIBLE_MS;
-  el.innerHTML = `<span class="retention-date">Auto-deletes ${escapeHtml(pretty)}</span>${dueSoon ? `
+  const showExtend = Boolean(boundPlatformId) || dueSoon;
+  el.innerHTML = `<span class="retention-date">Auto-deletes ${escapeHtml(pretty)}</span>${showExtend ? `
     <span class="retention-sep">·</span>
-    <button class="btn btn-xs btn-ghost" id="btn-extend">Extend</button>` : ''}`;
+    <button class="btn btn-xs btn-ghost" id="btn-extend" title="Keep the data one week longer">Extend</button>` : ''}`;
   document.getElementById('btn-extend')?.addEventListener('click', extendRetention);
 }
 
@@ -349,6 +373,13 @@ async function extendRetention() {
   const btn = document.getElementById('btn-extend') as HTMLButtonElement | null;
   if (btn) { btn.disabled = true; btn.textContent = 'Extending…'; }
   try {
+    if (boundPlatformId) {
+      const updated = await extendCompetition(boundPlatformId);
+      const active = getActiveCompetition();
+      // Every tab and tool follows through the storage event
+      if (active && active.id === updated.id) setActiveCompetition({ ...active, ...updated });
+    }
+    // Temporary bridge: the tool's own clock, until its backend follows the platform's
     const resp = await fetch(
       apiUrl(`/extend_competition_deletion?id=${encodeURIComponent(currentId)}`), { method: 'POST' });
     if (!resp.ok) throw new Error(String(resp.status));
@@ -2013,7 +2044,11 @@ async function init() {
     if (competitionSlot) void initCompetitionSelector(competitionSlot);
     // The selector never fires on subscribe, so bind once here and then on every
     // change (this tab and, through the storage event, other tabs).
-    subscribeActiveCompetition(() => void bindActiveCompetition());
+    subscribeActiveCompetition(() => {
+      void bindActiveCompetition();
+      // An extend in another tab moves the platform date under the open record
+      if (details && getActiveCompetition()?.id === boundPlatformId) renderRetention(details.deletionDate);
+    });
 
     // Header pencil — edits the platform record every tool shares.
     const editBtn = document.getElementById('detail-edit') as HTMLButtonElement | null;

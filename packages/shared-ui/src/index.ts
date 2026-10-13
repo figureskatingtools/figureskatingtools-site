@@ -12,6 +12,7 @@ export {
   competitionLabel,
   createCompetition,
   deleteCompetition,
+  extendCompetition,
   extractCompetitionList,
   getActiveCompetition,
   isPlatformCompetition,
@@ -19,6 +20,8 @@ export {
   normalizeCompetitionCode,
   parseActiveCompetition,
   refreshActiveCompetition,
+  retentionInfo,
+  RETENTION_WARN_DAYS,
   serializeActiveCompetition,
   setActiveCompetition,
   subscribeActiveCompetition,
@@ -28,6 +31,7 @@ export {
 export type {
   NewCompetitionInput,
   PlatformCompetition,
+  RetentionInfo,
   UpdateCompetitionInput,
 } from './competition.js';
 

@@ -8,6 +8,8 @@ import {
   openEditCompetitionDialog,
   listCompetitions,
   deleteCompetition,
+  extendCompetition,
+  retentionInfo,
   CompetitionApiError,
   refreshActiveCompetition,
   getActiveCompetition,
@@ -238,6 +240,13 @@ function renderCompetitionPanel(competitions: PlatformCompetition[] | null): voi
       void handleEditCompetition(target, btn);
     });
   });
+
+  if (active) {
+    const extendBtn = document.getElementById('comp-extend') as HTMLButtonElement | null;
+    extendBtn?.addEventListener('click', () => {
+      void handleExtendCompetition(active, extendBtn);
+    });
+  }
 
   document.getElementById('comp-create')?.addEventListener('click', () => {
     void openCreateCompetitionDialog().then((created) => {
@@ -611,9 +620,10 @@ async function handleHovtpDecline(
 /**
  * Remove a competition from the platform registry.
  *
- * The registry deletes softly and frees the code; each tool keeps its own
- * uploaded data until that tool's own auto-deletion window expires, which the
- * confirmation spells out.
+ * The registry frees the code at once and pulls the deletion date to the next
+ * midnight, so the nightly clean-up removes the competition's data — files,
+ * FS Manager pushes and everything the tools made from them — that night. The
+ * confirmation spells that out.
  */
 async function handleDeleteCompetition(
   competition: PlatformCompetition,
@@ -621,10 +631,11 @@ async function handleDeleteCompetition(
 ): Promise<void> {
   const label = competitionLabel(competition);
   const confirmed = window.confirm(
-    `Delete "${label}" (${competition.code}) from the competition registry?\n\n`
-    + 'It disappears from every tool\'s competition selector and the code becomes '
-    + 'free to use again. Files you already uploaded in a tool are not touched — '
-    + 'each tool keeps them until its own automatic deletion removes them.'
+    `Delete "${label}" (${competition.code})?\n\n`
+    + 'It disappears from every tool\'s competition selector at once and the code '
+    + 'becomes free to use again. Its data — uploaded files, FS Manager data and '
+    + 'everything the tools made from them — is deleted automatically tonight. '
+    + 'This cannot be undone.'
   );
   if (!confirmed) return;
 
@@ -650,6 +661,62 @@ async function handleDeleteCompetition(
     return;
   }
   renderCompetitionPanel(knownCompetitions);
+}
+
+/**
+ * Push the active competition's deletion date a week out. The registry owns
+ * the date, so the updated competition goes through `setActiveCompetition`:
+ * the panel, the nav selector, the tools and every other tab follow.
+ */
+async function handleExtendCompetition(
+  competition: PlatformCompetition,
+  trigger: HTMLButtonElement
+): Promise<void> {
+  panelError = null;
+  trigger.disabled = true;
+  trigger.textContent = 'Extending…';
+
+  let updated: PlatformCompetition;
+  try {
+    updated = { ...competition, ...(await extendCompetition(competition.id)) };
+  } catch (err: unknown) {
+    panelError = err instanceof CompetitionApiError
+      ? `Could not extend the deletion date: ${err.message}`
+      : 'Could not extend the deletion date. Please try again.';
+    renderCompetitionPanel(knownCompetitions);
+    return;
+  }
+
+  knownCompetitions = (knownCompetitions ?? []).map((c) => (c.id === updated.id ? updated : c));
+  if (getActiveCompetition()?.id === updated.id) {
+    setActiveCompetition(updated); // the subscription re-renders the panel
+    return;
+  }
+  renderCompetitionPanel(knownCompetitions);
+}
+
+/**
+ * "Data is deleted automatically on <date> · Extend by a week". Turns into a
+ * warning in the last week, or when the date falls on or before the
+ * competition itself — the clock counts from creation, so a competition set
+ * up long in advance can run out before it happens.
+ */
+function retentionLineHtml(c: PlatformCompetition): string {
+  const info = retentionInfo(c.deletionDate, c.date);
+  if (!info) return '';
+  const warn = info.dueSoon || info.beforeEvent;
+  let note = '';
+  if (info.beforeEvent) note = ' — before the competition starts';
+  else if (info.dueSoon) {
+    note = info.daysLeft === 0 ? ' — tonight'
+      : ` — in ${info.daysLeft} day${info.daysLeft === 1 ? '' : 's'}`;
+  }
+  return `
+    <p class="comp-retention${warn ? ' comp-retention--warn' : ''}"${warn ? ' role="status"' : ''}>
+      <span>Data is deleted automatically on ${escapeHtml(formatDateFi(info.day))}${escapeHtml(note)}</span>
+      <span class="comp-retention-sep" aria-hidden="true">·</span>
+      <button type="button" class="btn-link comp-extend" id="comp-extend">Extend by a week</button>
+    </p>`;
 }
 
 /**
@@ -696,6 +763,7 @@ function activeCompetitionHtml(active: PlatformCompetition): string {
     <h2 class="comp-name">${escapeHtml(competitionLabel(active))}</h2>
     <p class="comp-code"><span class="comp-code-tag">${escapeHtml(active.code)}</span>${meta ? ` ${escapeHtml(meta)}` : ''}</p>
     ${createdLineHtml(active, 'comp-created')}
+    ${retentionLineHtml(active)}
     <div class="comp-open">
       <span class="comp-open-label">Open in</span>
       <div class="comp-open-links">

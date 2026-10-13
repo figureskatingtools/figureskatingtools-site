@@ -15,11 +15,13 @@ import {
   COMPETITIONS_API,
   CompetitionApiError,
   deleteCompetition,
+  extendCompetition,
   extractCompetitionList,
   getActiveCompetition,
   isPlatformCompetition,
   normalizeCompetitionCode,
   parseActiveCompetition,
+  retentionInfo,
   serializeActiveCompetition,
   setActiveCompetition,
   subscribeActiveCompetition,
@@ -419,5 +421,109 @@ describe('updateCompetition', () => {
     await expect(updateCompetition(COMP.id, { name: 'x' })).rejects.toBeInstanceOf(
       CompetitionApiError
     );
+  });
+});
+
+describe('deletionDate', () => {
+  const DATED: PlatformCompetition = { ...COMP, deletionDate: '2026-12-12T00:00:00Z' };
+
+  it('is accepted, mapped from the API and must be a string', () => {
+    expect(isPlatformCompetition(DATED)).toBe(true);
+    expect(isPlatformCompetition({ ...COMP, deletionDate: 42 })).toBe(false);
+    expect(toPlatformCompetition({ ...COMP, deletionDate: '2026-12-12T00:00:00Z' })).toEqual(DATED);
+    expect(toPlatformCompetition({ ...COMP, deletionDate: '' })).toEqual(COMP);
+  });
+
+  it('round-trips through storage so other tabs see an extend', () => {
+    const parsed = parseActiveCompetition(serializeActiveCompetition(DATED));
+    expect(parsed).toEqual(DATED);
+
+    setActiveCompetition(DATED);
+    expect(getActiveCompetition()?.deletionDate).toBe('2026-12-12T00:00:00Z');
+    expect(JSON.parse(store.getItem(ACTIVE_COMPETITION_KEY) ?? '{}').deletionDate)
+      .toBe('2026-12-12T00:00:00Z');
+  });
+
+  it('is left out of storage when unknown', () => {
+    expect(JSON.parse(serializeActiveCompetition(COMP))).not.toHaveProperty('deletionDate');
+  });
+});
+
+describe('extendCompetition', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('POSTs the extend route and resolves with the updated competition', async () => {
+    const fetchMock = vi.fn(async () =>
+      response(200, { ...COMP, startDate: COMP.date, deletionDate: '2026-12-19T00:00:00Z' })
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    const extended = await extendCompetition('a/b');
+
+    expect(extended).toEqual({ ...COMP, deletionDate: '2026-12-19T00:00:00Z' });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe(`${COMPETITIONS_API}/a%2Fb/extend`);
+    expect(init.method).toBe('POST');
+  });
+
+  it('surfaces the API error message and status', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => response(404, { error: 'not_found', message: 'Competition not found.' }))
+    );
+
+    const error = await extendCompetition(COMP.id).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(CompetitionApiError);
+    expect((error as CompetitionApiError).status).toBe(404);
+    expect((error as CompetitionApiError).message).toBe('Competition not found.');
+  });
+
+  it('maps a network failure to status 0 and a bad body to an error', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+    const offline = await extendCompetition(COMP.id).catch((e: unknown) => e);
+    expect((offline as CompetitionApiError).status).toBe(0);
+
+    vi.stubGlobal('fetch', vi.fn(async () => response(200, {})));
+    await expect(extendCompetition(COMP.id)).rejects.toBeInstanceOf(CompetitionApiError);
+
+    vi.stubGlobal('fetch', vi.fn(async () => response(500)));
+    const failed = await extendCompetition(COMP.id).catch((e: unknown) => e);
+    expect((failed as CompetitionApiError).status).toBe(500);
+  });
+});
+
+describe('retentionInfo', () => {
+  const NOW = new Date('2026-12-01T10:00:00Z');
+
+  it('returns null without a usable date', () => {
+    expect(retentionInfo(undefined, '', NOW)).toBeNull();
+    expect(retentionInfo('', '', NOW)).toBeNull();
+    expect(retentionInfo('not a date', '', NOW)).toBeNull();
+  });
+
+  it('counts whole days and flags the last week', () => {
+    expect(retentionInfo('2026-12-31T00:00:00Z', '', NOW)).toEqual({
+      day: '2026-12-31', daysLeft: 30, dueSoon: false, beforeEvent: false,
+    });
+    expect(retentionInfo('2026-12-09T00:00:00Z', '', NOW)?.dueSoon).toBe(false);
+    expect(retentionInfo('2026-12-08T00:00:00Z', '', NOW)).toMatchObject({ daysLeft: 7, dueSoon: true });
+    expect(retentionInfo('2026-12-02T00:00:00Z', '', NOW)).toMatchObject({ daysLeft: 1, dueSoon: true });
+  });
+
+  it('never goes negative once the date has passed', () => {
+    expect(retentionInfo('2026-11-01T00:00:00Z', '', NOW)).toMatchObject({ daysLeft: 0, dueSoon: true });
+  });
+
+  it('flags a deletion date on or before the competition start', () => {
+    expect(retentionInfo('2026-12-31T00:00:00Z', '2027-01-10', NOW)?.beforeEvent).toBe(true);
+    expect(retentionInfo('2026-12-31T00:00:00Z', '2026-12-31', NOW)?.beforeEvent).toBe(true);
+    expect(retentionInfo('2026-12-31T00:00:00Z', '2026-12-30', NOW)?.beforeEvent).toBe(false);
+    expect(retentionInfo('2026-12-31T00:00:00Z', 'TBA', NOW)?.beforeEvent).toBe(false);
+  });
+
+  it('uses the UTC calendar day of the deletion instant', () => {
+    expect(retentionInfo('2026-12-31T00:00:00Z', '', NOW)?.day).toBe('2026-12-31');
   });
 });

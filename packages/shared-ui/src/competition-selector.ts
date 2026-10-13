@@ -17,6 +17,7 @@ import {
   getActiveCompetition,
   listCompetitions,
   normalizeCompetitionCode,
+  retentionInfo,
   setActiveCompetition,
   subscribeActiveCompetition,
   updateCompetition,
@@ -113,8 +114,13 @@ function buildSelectorHtml(
   const items = competitions.slice(0, MENU_MAX_ITEMS).map((c) => {
     const selected = active && active.id === c.id ? ' fst-comp-item--selected' : '';
     const meta = [c.code, formatDateFi(c.date), c.venue].filter(Boolean).join(' · ');
+    const retention = retentionInfo(c.deletionDate, c.date);
+    const due = retention && (retention.dueSoon || retention.beforeEvent)
+      ? `<span class="fst-comp-item-due" title="Data is deleted on ${esc(formatDateFi(retention.day))}" ` +
+        `aria-label="Data is deleted on ${esc(formatDateFi(retention.day))}"></span>`
+      : '';
     return `<button type="button" class="fst-comp-item${selected}" data-competition-id="${esc(c.id)}">
-      <span class="fst-comp-item-name">${esc(competitionLabel(c))}</span>
+      <span class="fst-comp-item-name">${esc(competitionLabel(c))}${due}</span>
       ${meta ? `<span class="fst-comp-item-meta">${esc(meta)}</span>` : ''}
     </button>`;
   }).join('');
@@ -209,6 +215,14 @@ interface CompetitionDialogOptions {
   original?: PlatformCompetition;
 }
 
+/** Edit mode: the server-owned deletion date, shown read-only */
+function deletionNoteHtml(competition: PlatformCompetition | undefined): string {
+  const retention = retentionInfo(competition?.deletionDate, competition?.date);
+  if (!retention) return '';
+  return `<p class="fst-comp-field-note">Data is deleted automatically on ` +
+    `${esc(formatDateFi(retention.day))}. Use Extend to keep it a week longer.</p>`;
+}
+
 /**
  * Open the shared "New competition" dialog.
  *
@@ -294,6 +308,8 @@ function openCompetitionDialog(
             <input type="text" name="venue" autocomplete="off" placeholder="Ice Arena, Helsinki">
           </label>
         </div>
+
+        ${editing ? deletionNoteHtml(opts.original) : ''}
 
         <p class="fst-comp-dialog-error" data-fst-comp-error hidden></p>
 
@@ -381,7 +397,7 @@ function openCompetitionDialog(
         submitBtn.textContent = 'Saving…';
 
         void updateCompetition(original.id, diff)
-          // Keep createdBy/createdUtc even if the response omits them
+          // Keep createdBy/createdUtc/deletionDate even if the response omits them
           .then((updated) => finish({ ...original, ...updated }))
           .catch((err: unknown) => {
             submitBtn.disabled = false;
