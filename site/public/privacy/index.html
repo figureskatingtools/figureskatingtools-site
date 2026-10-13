@@ -97,14 +97,14 @@
             </tr>
             <tr>
               <th scope="row">People who ask for their name to be removed from published results</th>
-              <td data-label="Data">Name and club as shown on the published result pages and PDF files</td>
-              <td data-label="Source">The operator, based on the person's request</td>
-              <td data-label="Legal basis" class="basis">Legitimate interest: carrying out the person's own removal request</td>
+              <td data-label="Data">Full name and club as shown on the published result pages and PDF files</td>
+              <td data-label="Source">The person's own request, sent to markus@lintuala.fi</td>
+              <td data-label="Legal basis" class="basis">Legal obligation: carrying out the person's erasure or objection request (Articles 17 and 21)</td>
             </tr>
           </tbody>
         </table>
       </div>
-      <p>Legitimate interest refers to the EU General Data Protection Regulation, Article 6(1)(f), and consent to Article 6(1)(a).</p>
+      <p>Legitimate interest refers to the EU General Data Protection Regulation, Article 6(1)(f), consent to Article 6(1)(a) and legal obligation to Article 6(1)(c).</p>
 
       <h3>Podium and team photos</h3>
       <p>A photo is used only if the person in it has a valid photography consent through their club. For a minor, consent is given by a parent or guardian. Consent can be withdrawn at any time (section 6). Location data and other metadata are removed from the photos in every PDF the tools produce, and HEIC photos (the iPhone format) are converted to a clean JPEG as soon as they are uploaded. Other uploaded photos are stored as they were uploaded, metadata included, until the competition's data is deleted (section 4).</p>
@@ -113,7 +113,7 @@
       <p>Participant files from FS Manager use the ODF data format, which has room for further details such as date of birth, gender and nationality. Whatever FS Manager fills in there is kept in the file until the competition's data is deleted, but the tools read only names and clubs and never print the rest.</p>
 
       <h3>GDPR Removal Tool and Banner Generator</h3>
-      <p>The GDPR Removal Tool fetches the published result pages and PDF files the operator points it to, replaces the person's name and club and hands back a ZIP file. The pages are processed in memory only, and nothing about the request is stored. The Competition Banner Generator runs entirely in your browser: the logos you add never leave your device.</p>
+      <p>When someone asks for their name to be removed from results that have already been published, Markus Lintuala carries out the request with the GDPR Removal Tool. The tool fetches the published result pages and PDF files, replaces the person's name and club and hands back the corrected files as a ZIP file. The pages are processed in memory only, and the tool stores nothing about the request. The Competition Banner Generator runs entirely in your browser: the logos you add never leave your device.</p>
 
       <p>The data is not used for automated decision-making or profiling.</p>
     </section>
@@ -131,13 +131,13 @@
 
     <section id="retention" aria-labelledby="h-retention">
       <h2 id="h-retention"><span class="num">4</span>How long data is kept</h2>
-      <p>All of a competition's data is deleted automatically <strong>60 days after the competition is created</strong>. This covers the uploaded files and the files sent from FS Manager, rosters, photos, the generated judges' papers and protocols, the e-mail send log and the FS Manager sender records. The operator may extend the period one week at a time when there is a reason to, for example when the competition takes place later than that.</p>
-      <p>If the operator deletes a competition, its data is removed the following night. After deletion, only the competition's name, dates and usage counts remain, as statistics without personal data.</p>
+      <p>Each competition has one deletion date, and all of its data, in every tool, is deleted automatically on that date: <strong>60 days after the competition is created</strong>. This covers the uploaded files and the files sent from FS Manager, rosters, photos, the generated judges' papers and protocols, the e-mail send log and the FS Manager sender records. The operator may move the date one week later at a time when there is a reason to, for example when the competition takes place later than that, and the new date applies to every tool alike.</p>
+      <p>If the operator deletes a competition, its data is removed from every tool the following night. After deletion, only the competition's name, dates and usage counts remain, as statistics without personal data.</p>
       <ul>
         <li>Judges' papers download links: at most 5 days.</li>
-        <li>Technical logs (errors and request traces of the service, and Microsoft's sign-in logs, which can include IP addresses and e-mail addresses): at most 30 days.</li>
+        <li>Technical logs (errors and request traces of the service, and Microsoft's sign-in logs, which can include IP addresses and e-mail addresses): at most 90 days.</li>
         <li>FS Manager transfer session records: deleted after 30 days without activity.</li>
-        <li>Mailgun's delivery log of each message (recipient address, time and delivery status): up to 30 days. Depending on the service plan, Mailgun may also keep a copy of the message for at most 7 days.</li>
+        <li>Mailgun: the service uses Mailgun's free plan, which keeps no copies of the messages and shows the delivery log (recipient address, time and delivery status) for 1 day. According to Mailgun's documentation, it keeps the delivery event data for 30 days, so the record is gone after 30 days at the latest.</li>
         <li>Your user account: for as long as you have access to the service. It is removed when you no longer need access, or when you ask for it.</li>
       </ul>
     </section>
@@ -152,7 +152,7 @@
       <h2 id="h-rights"><span class="num">6</span>Your rights</h2>
       <p>You have the right to access the data concerning you, to have inaccurate data corrected or deleted, to restrict its processing and to object to it. If a photo of you has been used on the basis of consent, you can withdraw that consent at any time. A parent or guardian can make a request on behalf of a minor.</p>
       <p>Send your request to <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>. We reply within one month.</p>
-      <p>If your name has already been published on a results site, ask that site to remove it. With the GDPR Removal Tool its operator replaces your name and club with the text “Nimi poistettu pyynnöstä” (name removed on request), while placements and scores stay in place so that the other skaters' results remain correct.</p>
+      <p>If you want your name removed from results that have already been published, send your request to <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>. Your name and club are replaced with the text “Nimi poistettu pyynnöstä” (name removed on request) using the GDPR Removal Tool, and a podium page showing you is removed. Placements and scores stay in place so that the other skaters' results remain correct.</p>
     </section>
 
     <section id="complaint" aria-labelledby="h-complaint">
