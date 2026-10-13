@@ -11,16 +11,18 @@
 //          holds the platform app's deployment zip).
 //   table  the platform retention clock — each tool reads the PK=COMPETITION
 //          row (DeletionDate, Status, PurgedUtc) of the competitions it is
-//          linked to and deletes its own records on the same night. Storage
-//          Table Data Reader on the `competitions` table only.
+//          linked to and deletes its own records on the platform's verdict.
+//          Storage Table Data Reader on the `retentionclock` table only: that
+//          table holds nothing else, while the registry's `competitions` table
+//          (operators' e-mails, FS Manager sender IPs) stays out of reach.
 //
 // Read-only on purpose: the platform Function App is the only writer.
 //
 // Same child-resource pattern as hovtp-data-access.bicep. The assignment names
-// are seeded from the CHILD resource ids, so they never collide with the old
-// account-scoped Blob Data Reader assignments this module used to create —
-// which incremental deployment does NOT delete. See infra/MIGRATION.md for the
-// manual cleanup that actually narrows the tools' access.
+// are seeded from the CHILD resource ids, so they never collide with older
+// assignments this module used to create (account-scoped Blob Data Reader, and
+// briefly a Table Data Reader on `competitions`) — which incremental deployment
+// does NOT delete. See infra/MIGRATION.md §2d for the manual cleanup.
 //
 // NOTE: table-scoped role assignments do NOT show up in the portal's IAM blade.
 // Inspect them with:
@@ -34,8 +36,8 @@ param storageAccountName string
 @description('Shared blob container holding the per-competition file pool.')
 param dataContainerName string = 'competition-data'
 
-@description('Table holding the platform COMPETITION rows (the retention clock).')
-param competitionsTableName string = 'competitions'
+@description('Table holding the platform retention clock (DeletionDate / Status / PurgedUtc only).')
+param clockTableName string = 'retentionclock'
 
 @description('System-assigned principal ids of the tool Function Apps. Empty strings are ignored.')
 param toolPrincipalIds array = []
@@ -54,8 +56,8 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' existing 
   resource tableService 'tableServices' existing = {
     name: 'default'
 
-    resource competitionsTable 'tables' existing = {
-      name: competitionsTableName
+    resource clockTable 'tables' existing = {
+      name: clockTableName
     }
   }
 }
@@ -81,8 +83,8 @@ resource toolContainerBlobReader 'Microsoft.Authorization/roleAssignments@2022-0
 
 resource toolTableReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
   for principalId in validPrincipalIds: {
-    name: guid(storageAccount::tableService::competitionsTable.id, string(principalId), storageTableDataReaderId)
-    scope: storageAccount::tableService::competitionsTable
+    name: guid(storageAccount::tableService::clockTable.id, string(principalId), storageTableDataReaderId)
+    scope: storageAccount::tableService::clockTable
     properties: {
       roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageTableDataReaderId)
       principalId: string(principalId)

@@ -113,10 +113,14 @@ shared `competition-data` container keyed by GUID:
                                  accept attaches it into <guid>/fsm/
 
 Retention — ONE clock for the whole platform. The COMPETITION row owns
-`DeletionDate` (midnight UTC of creation + RETENTION_DAYS); the tool Function
-Apps read that same row (PK "COMPETITION", columns `DeletionDate`, `Status`,
-`PurgedUtc` — keep the names, the tools' platform_clock.py depends on them) and
-delete their own linked records on the same night. The operator's only lever is
+`DeletionDate` (midnight UTC of creation + RETENTION_DAYS). Its non-personal
+part is mirrored into a separate table, `retentionclock` (PK "COMPETITION",
+RK <guid lowercase>, columns `DeletionDate`, `Status`, `PurgedUtc` and nothing
+else — keep the names, the tools' platform_clock.py depends on them): the tool
+Function Apps can read only that table, never the registry rows with their
+e-mail addresses and sender IPs, and delete their own linked records once the
+clock says `Status == "deleted"` or `PurgedUtc`. Every write that changes one
+of those values updates the mirror; the nightly sweep reconciles it in full. The operator's only lever is
 POST …/extend (+EXTENSION_DAYS from max(current date, today), no cap). A manual
 DELETE pulls the date to the next midnight. The nightly `retention_sweep`:
 
@@ -126,10 +130,12 @@ DELETE pulls the date to the next midnight. The nightly `retention_sweep`:
      deleted, then the row is replaced by a TOMBSTONE — no e-mail addresses,
      PurgedUtc set — so the tools can tell "purged" from "never existed";
   3. re-sweeps `<guid>/` for two days after a purge (in-flight HOVTP writes);
-  4. deletes HOVTPSESSION rows idle for HOVTP_SESSION_IDLE_DAYS.
+  4. deletes HOVTPSESSION rows idle for HOVTP_SESSION_IDLE_DAYS;
+  5. reconciles every COMPETITION row into the clock table.
 
-RETENTION_PURGE_ENABLED (app setting, Bicep-owned) must be "true" for steps
-2–4 to delete anything; otherwise they only log what they would do.
+RETENTION_PURGE_ENABLED (app setting, Bicep-owned, on by default) must be
+"true" for steps 2–4 to delete anything; "false" is the kill switch — they
+then only log what they would do.
 """
 
 import base64
@@ -158,6 +164,9 @@ from azure.storage.blob import BlobServiceClient, ContentSettings
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
 COMPETITIONS_TABLE = "competitions"
+# The retention clock as the tools see it — see the module docstring.
+CLOCK_TABLE_DEFAULT = "retentionclock"
+CLOCK_COLUMNS = ("DeletionDate", "Status", "PurgedUtc")
 PK_COMPETITION = "COMPETITION"
 PK_CODE = "CODE"
 # Written by the HOVTP listener (infra/hovtp/); read — and, for the status
@@ -566,6 +575,84 @@ def _release_code_row(table_client, code: str, competition_id: str) -> bool:
 def _entity_etag(entity):
     metadata = getattr(entity, "metadata", None) or {}
     return metadata.get("etag")
+
+
+def _clock_table_name() -> str:
+    return os.environ.get("RETENTION_CLOCK_TABLE") or CLOCK_TABLE_DEFAULT
+
+
+def _clock_row(entity) -> dict:
+    """COMPETITION row -> its clock row: the three columns, nothing personal."""
+    row = {
+        "PartitionKey": PK_COMPETITION,
+        "RowKey": str(entity.get("RowKey") or "").strip().lower(),
+        "DeletionDate": _utc_text(_effective_deletion_date(entity)),
+        "Status": entity.get("Status") or STATUS_ACTIVE,
+    }
+    if entity.get("PurgedUtc"):
+        row["PurgedUtc"] = entity.get("PurgedUtc")
+    return row
+
+
+def _clock_differs(wanted: dict, existing) -> bool:
+    if existing is None:
+        return True
+    return any((wanted.get(c) or "") != (existing.get(c) or "") for c in CLOCK_COLUMNS)
+
+
+def _sync_clock(entity, clock_client=None) -> bool:
+    """Mirror one competition into the clock table (replace, so no stray
+    column survives). Best effort: the API call that changed the competition
+    has already succeeded, and the nightly reconcile heals a missed write."""
+    try:
+        client = clock_client or get_table_client(_clock_table_name())
+        if client is None:
+            return False
+        row = _clock_row(entity)
+        if not row["RowKey"]:
+            return False
+        try:
+            client.upsert_entity(row, mode=UpdateMode.REPLACE)
+        except ResourceNotFoundError:
+            # Table missing (local dev); Bicep creates it in Azure.
+            _ensure_table(client)
+            client.upsert_entity(row, mode=UpdateMode.REPLACE)
+        return True
+    except Exception as e:
+        logging.warning(f"Could not update the retention clock of '{entity.get('RowKey')}': {e}")
+        return False
+
+
+def _reconcile_clock(table_client, clock_client) -> tuple[int, bool]:
+    """Bring every clock row in line with its COMPETITION row; write only the
+    ones that differ. -> (rows written, all succeeded)."""
+    try:
+        competitions = list(table_client.query_entities(f"PartitionKey eq '{PK_COMPETITION}'"))
+    except Exception as e:
+        logging.error(f"Retention: could not list competitions for the clock reconcile: {e}")
+        return 0, False
+    try:
+        existing = {
+            row.get("RowKey"): row
+            for row in clock_client.query_entities(f"PartitionKey eq '{PK_COMPETITION}'")
+        }
+    except ResourceNotFoundError:
+        _ensure_table(clock_client)   # first run against a fresh table (local dev)
+        existing = {}
+    except Exception as e:
+        logging.error(f"Retention: could not read the clock table: {e}")
+        return 0, False
+    written = 0
+    ok = True
+    for entity in competitions:
+        wanted = _clock_row(entity)
+        if not wanted["RowKey"] or not _clock_differs(wanted, existing.get(wanted["RowKey"])):
+            continue
+        if _sync_clock(entity, clock_client):
+            written += 1
+        else:
+            ok = False
+    return written, ok
 
 
 def _delete_code_row(table_client, code: str) -> None:
@@ -1004,6 +1091,7 @@ def _create_competition(req: func.HttpRequest) -> func.HttpResponse:
         _delete_code_row(table_client, code)
         return _error("internal_error", "Could not create the competition.", 500)
 
+    _sync_clock(entity)
     return _json(entity_to_competition(entity), 201)
 
 
@@ -1186,6 +1274,8 @@ def _delete_competition(req: func.HttpRequest) -> func.HttpResponse:
 
     merged = dict(entity)
     merged.update(updates)
+    # Status=deleted reaches the tools now; they delete on their next run.
+    _sync_clock(merged)
     return _json(entity_to_competition(merged))
 
 
@@ -1249,6 +1339,7 @@ def _extend_competition(req: func.HttpRequest) -> func.HttpResponse:
 
         merged = dict(entity)
         merged.update(updates)
+        _sync_clock(merged)
         return _json(entity_to_competition(merged))
 
     return _error("conflict", "The competition kept changing; please try again.", 409)
@@ -1735,6 +1826,7 @@ def _purge_competition(table_client, container, entity, now: datetime) -> bool:
         except Exception as e:
             logging.error(f"Retention: could not mark '{competition_id}' deleted: {e}")
             return False
+        _sync_clock({**entity, **updates})
 
     code_ok = _release_code_row(table_client, entity.get("Code", ""), competition_id)
     _sources, sources_ok = _delete_hovtp_sources(table_client, competition_id)
@@ -1747,10 +1839,20 @@ def _purge_competition(table_client, container, entity, now: datetime) -> bool:
         return False
 
     # 2. Tombstone — replace (not merge), so no e-mail column can survive.
+    #    A code rename that was already in flight when the row was marked
+    #    deleted can have claimed a NEW CODE row since step 1 released the old
+    #    one: release whatever code the row holds now, and replace only that
+    #    exact version — a later change fails the ETag and the next night
+    #    retries the whole purge.
     try:
         fresh = table_client.get_entity(partition_key=PK_COMPETITION, row_key=competition_id)
+        if not _release_code_row(table_client, fresh.get("Code", ""), competition_id):
+            logging.error(f"Retention: could not release the code of '{competition_id}'; "
+                          "retried next night")
+            return False
+        stone = _tombstone(fresh, now_text)
         table_client.update_entity(
-            _tombstone(fresh, now_text),
+            stone,
             mode=UpdateMode.REPLACE,
             etag=_entity_etag(fresh),
             match_condition=MatchConditions.IfNotModified,
@@ -1758,6 +1860,10 @@ def _purge_competition(table_client, container, entity, now: datetime) -> bool:
     except Exception as e:
         logging.error(f"Retention: could not write the tombstone of '{competition_id}': {e}")
         return False
+
+    # The tools' verdict: Status=deleted + PurgedUtc. A failed write here is
+    # caught by the reconcile at the end of this same sweep.
+    _sync_clock(stone)
 
     logging.info(f"Retention: purged competition '{competition_id}' "
                  f"(code '{entity.get('Code', '')}', {blobs} blob(s))")
@@ -1778,7 +1884,8 @@ def _run_retention_sweep(now: datetime, purge_enabled: bool) -> dict:
     by the tests). With purge disabled it still backfills DeletionDate but
     deletes nothing — it only logs what it would have purged."""
     summary = {"backfilled": 0, "purged": 0, "would_purge": 0, "failed": 0,
-               "resweeps": 0, "sessions_deleted": 0, "sessions_would_delete": 0}
+               "resweeps": 0, "sessions_deleted": 0, "sessions_would_delete": 0,
+               "clock_synced": 0}
 
     table_client = get_table_client()
     if not table_client:
@@ -1816,6 +1923,7 @@ def _run_retention_sweep(now: datetime, purge_enabled: bool) -> dict:
                 entity = table_client.get_entity(
                     partition_key=PK_COMPETITION, row_key=competition_id)
                 summary["backfilled"] += 1
+                _sync_clock(entity)
             except ResourceModifiedError:
                 # Someone (an extend) wrote the row meanwhile; tomorrow's run sees it.
                 continue
@@ -1868,6 +1976,14 @@ def _run_retention_sweep(now: datetime, purge_enabled: bool) -> dict:
             pass
         except Exception as e:
             logging.error(f"Retention: could not delete HOVTP session '{session.get('RowKey')}': {e}")
+
+    # 5. The clock table follows the registry — self-healing for any missed
+    #    write (also in dry-run: it only mirrors state, it deletes nothing).
+    clock_client = get_table_client(_clock_table_name())
+    if clock_client is None:
+        logging.error("Retention: clock table unavailable; reconcile skipped")
+    else:
+        summary["clock_synced"], _ok = _reconcile_clock(table_client, clock_client)
 
     logging.info(f"Retention sweep ({'purge' if purge_enabled else 'dry-run'}): {summary}")
     return summary

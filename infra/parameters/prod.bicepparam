@@ -52,10 +52,11 @@ param toolFunctionPrincipalIds = [
 // in test — set the GitHub environment variable HOVTP_ENABLED=true to turn it on.
 param hovtpEnabled = readEnvironmentVariable('HOVTP_ENABLED', 'false') == 'true'
 
-// Platform retention sweep: dry-run in prod until a few nights of "would purge"
-// logs have been read — then set the GitHub environment variable
-// RETENTION_PURGE_ENABLED=true and redeploy.
-param retentionPurgeEnabled = readEnvironmentVariable('RETENTION_PURGE_ENABLED', 'false') == 'true'
+// Platform retention sweep: purges from day one — the privacy notice promises
+// deletion 60 days after creation. The GitHub environment variable
+// RETENTION_PURGE_ENABLED=false is the kill switch (dry-run logging only); the
+// workflow always exports it, so an unset variable arrives as '' and stays on.
+param retentionPurgeEnabled = readEnvironmentVariable('RETENTION_PURGE_ENABLED', 'true') != 'false'
 param hovtpEnvironment = 'Production'
 
 // Prod is published as https://api.figureskatingtools.com — Front Door Premium

@@ -20,10 +20,14 @@ param dataContainerName string = 'competition-data'
 param proxySharedSecret string = ''
 
 // The nightly retention_sweep only DELETES when this is true; false = dry-run
-// (it still backfills DeletionDate and logs what it would purge). Bicep-owned
-// like HOVTP_ENABLED, so it survives redeploys.
+// (it still backfills DeletionDate, reconciles the clock table and logs what it
+// would purge) — a kill switch, on by default. Bicep-owned like HOVTP_ENABLED,
+// so it survives redeploys.
 @description('true = retention_sweep purges expired competitions; false = dry-run logging only.')
-param retentionPurgeEnabled bool = false
+param retentionPurgeEnabled bool = true
+
+@description('Table the platform mirrors each competition retention state into for the tools.')
+param clockTableName string = 'retentionclock'
 
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: appServicePlanName
@@ -87,6 +91,10 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'RETENTION_PURGE_ENABLED'
           value: string(retentionPurgeEnabled)
+        }
+        {
+          name: 'RETENTION_CLOCK_TABLE'
+          value: clockTableName
         }
       ]
     }

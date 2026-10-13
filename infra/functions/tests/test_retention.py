@@ -466,3 +466,137 @@ def test_purge_is_off_unless_the_setting_says_true(monkeypatch, value, expected)
     else:
         monkeypatch.setenv("RETENTION_PURGE_ENABLED", value)
     assert fa._purge_enabled() is expected
+
+
+# ── the clock table the tools read ────────────────────────────────────────────
+# The tools' only window on the platform: `retentionclock` holds DeletionDate,
+# Status and PurgedUtc per competition and nothing else (no e-mails, no IPs).
+
+CLOCK_KEYS = {"PartitionKey", "RowKey", "DeletionDate", "Status", "PurgedUtc"}
+
+
+def clock(table, competition_id):
+    return table.clock_rows().get(competition_id.lower())
+
+
+def test_create_mirrors_only_the_three_clock_columns(table):
+    created = create()
+
+    assert clock(table, created["id"]) == {
+        "PartitionKey": "COMPETITION", "RowKey": created["id"],
+        "DeletionDate": created["deletionDate"], "Status": "active",
+    }
+
+
+def test_extend_and_delete_update_the_clock(table):
+    created = create()
+
+    extend(created["id"])
+    assert clock(table, created["id"])["DeletionDate"] == utc(today() + timedelta(days=67))
+
+    delete(created["id"])
+    mirrored = clock(table, created["id"])
+    assert mirrored["Status"] == "deleted"
+    assert mirrored["DeletionDate"] == utc(today() + timedelta(days=1))
+    assert "PurgedUtc" not in mirrored
+
+
+def test_purge_gives_the_tools_their_verdict(table, blobs):
+    seed_competition(table, "gone", DeletionDate=EXPIRED, DeletedBy=USER_EMAIL)
+
+    sweep()
+
+    mirrored = clock(table, "gone")
+    assert mirrored["Status"] == "deleted"
+    assert mirrored["PurgedUtc"] == row(table, "gone")["PurgedUtc"]
+    assert set(mirrored) <= CLOCK_KEYS
+    assert no_email_anywhere(mirrored)
+
+
+def test_the_sweep_reconciles_missing_and_drifted_clock_rows(table, blobs):
+    seed_competition(table, "old")                                       # no date, no clock row
+    seed_competition(table, "live", DeletionDate="2099-01-01T00:00:00Z")
+    table.clock.upsert_entity({"PartitionKey": "COMPETITION", "RowKey": "live",
+                               "DeletionDate": "2000-01-01T00:00:00Z", "Status": "deleted",
+                               "Stray": "x"})
+    tonight = datetime(2026, 10, 14, 3, 0, tzinfo=timezone.utc)
+
+    summary = sweep(tonight, purge=False)
+
+    # "old" is mirrored by its backfill; the reconcile fixes the drifted "live".
+    assert (summary["backfilled"], summary["clock_synced"]) == (1, 1)
+    assert clock(table, "old") == {"PartitionKey": "COMPETITION", "RowKey": "old",
+                                   "DeletionDate": fa.LEGACY_DELETION_FLOOR, "Status": "active"}
+    # Replaced, not merged: the stray column is gone too.
+    assert clock(table, "live") == {"PartitionKey": "COMPETITION", "RowKey": "live",
+                                    "DeletionDate": "2099-01-01T00:00:00Z", "Status": "active"}
+    # Nothing left to fix: the next run writes nothing.
+    assert sweep(tonight + timedelta(minutes=5), purge=False)["clock_synced"] == 0
+
+
+def test_a_failed_clock_write_never_fails_the_api_and_is_healed_nightly(table, blobs):
+    real_upsert = table.clock.upsert_entity
+    broken = {"on": True}
+
+    def flaky_upsert(*args, **kwargs):
+        if broken["on"]:
+            raise RuntimeError("table storage exploded")
+        return real_upsert(*args, **kwargs)
+
+    table.clock.upsert_entity = flaky_upsert
+    response = fa._create_competition(make_request("POST", body={"name": "Winter Cup"}))
+
+    assert response.status_code == 201
+    created = payload(response)
+    assert table.clock_rows() == {}
+
+    broken["on"] = False
+    sweep()
+
+    assert clock(table, created["id"])["DeletionDate"] == created["deletionDate"]
+
+
+def test_a_rename_racing_the_purge_does_not_leak_a_code_row(table, blobs, monkeypatch):
+    seed_competition(table, "gone", code="old-code", DeletionDate=EXPIRED)
+    real_delete_sources = fa._delete_hovtp_sources
+
+    def rename_lands_mid_purge(client, competition_id):
+        # A PATCH that read the row before it was marked deleted claims a new
+        # code and merges it in after the purge already released the old one.
+        client.create_entity({"PartitionKey": fa.PK_CODE, "RowKey": "new-code",
+                              "CompetitionId": competition_id})
+        client.update_entity({"PartitionKey": fa.PK_COMPETITION, "RowKey": competition_id,
+                              "Code": "new-code"})
+        return real_delete_sources(client, competition_id)
+
+    monkeypatch.setattr(fa, "_delete_hovtp_sources", rename_lands_mid_purge)
+
+    assert sweep()["purged"] == 1
+    assert table.code_rows() == {}
+    assert row(table, "gone")["Code"] == "new-code"
+
+
+def test_a_change_between_the_fresh_read_and_the_tombstone_retries_next_night(
+        table, blobs, monkeypatch):
+    seed_competition(table, "gone", code="gone-code", DeletionDate=EXPIRED)
+    real_delete_blobs = fa._delete_competition_blobs
+
+    def arm_race(container, competition_id):
+        def late_write(client, key):
+            client.update_entity({"PartitionKey": key[0], "RowKey": key[1], "Venue": "Tampere"})
+        # The next ETag-conditional write is the tombstone replace.
+        table.before_conditional_update = late_write
+        return real_delete_blobs(container, competition_id)
+
+    monkeypatch.setattr(fa, "_delete_competition_blobs", arm_race)
+    first = sweep()
+
+    assert (first["purged"], first["failed"]) == (0, 1)
+    assert "PurgedUtc" not in row(table, "gone")
+    assert "PurgedUtc" not in clock(table, "gone")
+
+    monkeypatch.setattr(fa, "_delete_competition_blobs", real_delete_blobs)
+
+    assert sweep()["purged"] == 1
+    assert row(table, "gone")["PurgedUtc"]
+    assert clock(table, "gone")["PurgedUtc"] == row(table, "gone")["PurgedUtc"]

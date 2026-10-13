@@ -51,8 +51,9 @@ param toolFunctionPrincipalIds = [
 // — anything but the literal 'false' keeps the listener on.
 param hovtpEnabled = readEnvironmentVariable('HOVTP_ENABLED', 'true') != 'false'
 
-// Platform retention sweep: purges for real in test by default; set the GitHub
-// environment variable RETENTION_PURGE_ENABLED=false for dry-run logging only.
+// Platform retention sweep: purges for real by default (same as prod); set the
+// GitHub environment variable RETENTION_PURGE_ENABLED=false as the kill switch
+// (dry-run logging only).
 param retentionPurgeEnabled = readEnvironmentVariable('RETENTION_PURGE_ENABLED', 'true') != 'false'
 param hovtpEnvironment = 'Test'
 

@@ -44,6 +44,10 @@ class FakeTableClient(_FakeTableClient):
     def hovtp_source_rows(self):
         return self.rows_with_pk(fa.PK_HOVTP_SOURCE)
 
+    def clock_rows(self):
+        """The `retentionclock` mirror (a separate table — see the fixture)."""
+        return {rk: row for (pk, rk), row in self.clock.rows.items() if pk == fa.PK_COMPETITION}
+
 
 @pytest.fixture
 def blobs(monkeypatch):
@@ -57,7 +61,14 @@ def blobs(monkeypatch):
 def table(monkeypatch):
     """A fresh fake table wired into function_app.get_table_client."""
     client = FakeTableClient()
-    monkeypatch.setattr(fa, "get_table_client", lambda *a, **kw: client)
+    # The retention clock lives in its own table; same PK/RK shape as the
+    # COMPETITION rows, so it must not share the registry's fake.
+    client.clock = _FakeTableClient()
+
+    def pick(table_name=fa.COMPETITIONS_TABLE, *a, **kw):
+        return client.clock if table_name == fa._clock_table_name() else client
+
+    monkeypatch.setattr(fa, "get_table_client", pick)
     # Enforce the proxy gate in tests — the real deployment always sets it.
     monkeypatch.setenv("PROXY_SHARED_SECRET", PROXY_SECRET)
     return client
