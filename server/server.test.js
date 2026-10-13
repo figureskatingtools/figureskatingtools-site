@@ -8,7 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const { createServer, loadConfig, buildCsp, safeReturnPath, CHANGELOG_MAX_ENTRIES } = require('./server.js');
+const { createServer, loadConfig, buildCsp, safeReturnPath, isHiddenFromChangelog, CHANGELOG_MAX_ENTRIES } = require('./server.js');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -825,6 +825,39 @@ test('GET /changelog-live merges repos, maps commit shape, sorts newest-first an
         await close(github.server);
         fs.rmSync(publicDir, { recursive: true, force: true });
     }
+});
+
+test('commits tagged #nowhatsnew or #nowhatnew stay out of /changelog-live', async () => {
+    const github = await startFakeGitHub({
+        'figureskatingtools/fs-alpha': [
+            commitFixture('a000000000000001', '2026-08-03T10:00:00Z', 'Bump deps\n\n- internal #nowhatsnew'),
+            commitFixture('a000000000000002', '2026-08-03T09:00:00Z', 'CI tweak #NoWhatNew'),
+            commitFixture('a000000000000003', '2026-08-03T08:00:00Z', 'Visible change\n\n- shown'),
+        ],
+        'figureskatingtools/fs-beta': [
+            commitFixture('b000000000000001', '2026-08-03T07:00:00Z', '#NOWHATSNEW refactor'),
+            commitFixture('b000000000000002', '2026-08-03T06:00:00Z', 'Mentions #nowhatsnewer, so it stays'),
+        ],
+    });
+    const { server, port, publicDir } = await startChangelogRouter(github);
+    try {
+        const entries = json(await request(port, '/changelog-live?branch=main'));
+        assert.deepEqual(entries.map((e) => e.sha), ['a000000', 'b000000']);
+        assert.deepEqual(entries.map((e) => e.title), ['Visible change', 'Mentions #nowhatsnewer, so it stays']);
+    } finally {
+        await close(server);
+        await close(github.server);
+        fs.rmSync(publicDir, { recursive: true, force: true });
+    }
+});
+
+test('isHiddenFromChangelog matches the tag anywhere in the message, any case', () => {
+    const c = (message) => ({ commit: { message } });
+    assert.equal(isHiddenFromChangelog(c('Title #nowhatsnew')), true);
+    assert.equal(isHiddenFromChangelog(c('Title\n\n- x\n#NoWhatNew')), true);
+    assert.equal(isHiddenFromChangelog(c('Title')), false);
+    assert.equal(isHiddenFromChangelog(c('#nowhatsnewer')), false);
+    assert.equal(isHiddenFromChangelog({}), false);
 });
 
 test('GET /changelog-live rejects any branch other than main/test', async () => {

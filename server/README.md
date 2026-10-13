@@ -75,7 +75,8 @@ budget. The router does it instead.
   reads — re-read on every refresh (it is a few hundred bytes).
 - Per repo: `GET /repos/<repo>/commits?sha=<branch>&per_page=20` with
   `Accept: application/vnd.github+json` and a `User-Agent` (GitHub rejects calls
-  without one). Commits are mapped to the entry shape the frontend renders
+  without one). Commits whose message contains `#nowhatsnew` or `#nowhatnew`
+  (anywhere, any case) are dropped. The rest are mapped to the entry shape the frontend renders
   (`sha` first 7, `date`, `iso`, `title`, `description`, `author`, `tool`),
   merged, sorted newest-first and sliced to 20.
 - `branch` must be `main` or `test`; anything else (including a missing value)
@@ -196,7 +197,7 @@ with, without and with a malformed principal, plus `DEV_FAKE_USER`; prefix
 stripping and per-tool header injection; a 6 MiB upload / 4 MiB download
 streamed through the proxy and hash-compared; root statics vs per-prefix SPA
 fallback; per-prefix CSP; the `/<tool>` → `/<tool>/` redirect; the `502`
-for an unconfigured backend; and `/changelog-live` (mapping/sorting/slice,
+for an unconfigured backend; and `/changelog-live` (mapping/sorting/slice, `#nowhatsnew` filtering,
 branch validation, cache hit, stale-on-failure, in-flight dedup, `502` with an
 empty cache) against a stub GitHub.
 

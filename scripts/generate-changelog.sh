@@ -28,10 +28,11 @@ ALL_ENTRIES="[]"
 while IFS=$'\t' read -r repo label; do
   echo "  Fetching from $repo ($label)..."
 
-  # Fetch commits using gh api (works with GITHUB_TOKEN)
+  # Fetch commits using gh api (works with GITHUB_TOKEN). Commits tagged
+  # #nowhatsnew / #nowhatnew are skipped, as in server/server.js.
   COMMITS=$(gh api \
     "repos/${repo}/commits?sha=${BRANCH}&per_page=${MAX_COMMITS}" \
-    --jq '.[] | {
+    --jq '.[] | select(.commit.message | test("#nowhats?new\\b"; "i") | not) | {
       sha: .sha[0:7],
       date: (.commit.committer.date[0:10]),
       iso: .commit.committer.date,

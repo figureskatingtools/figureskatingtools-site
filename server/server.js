@@ -448,6 +448,16 @@ const CHANGELOG_TIMEOUT_MS = 10000;
 const CHANGELOG_USER_AGENT = 'figureskatingtools-site-router';
 // Guards the interpolation into the upstream URL; the source list is ours, but
 // a typo must not turn into a path escape.
+// A commit whose message carries #nowhatsnew (or the #nowhatnew typo) anywhere,
+// any case, stays out of "What's New". Keep in sync with HIDDEN_COMMIT_TAG in
+// site/src/main.ts and the jq filter in scripts/generate-changelog.sh.
+const CHANGELOG_HIDE_TAG = /#nowhats?new\b/i;
+
+function isHiddenFromChangelog(commit) {
+    const message = (commit && commit.commit && commit.commit.message) || '';
+    return CHANGELOG_HIDE_TAG.test(message);
+}
+
 const REPO_PATTERN = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 
 // GET returning parsed JSON. Uses the same http/https modules as the proxy so
@@ -543,7 +553,7 @@ async function fetchRepoCommits(config, source, branch) {
     });
     // Rate-limit and error payloads are objects ({message, ...}), not arrays.
     if (!Array.isArray(commits)) throw new Error(`Unexpected GitHub payload for ${source.repo}`);
-    return commits.map((c) => toChangelogEntry(c, source.tool));
+    return commits.filter((c) => !isHiddenFromChangelog(c)).map((c) => toChangelogEntry(c, source.tool));
 }
 
 // All-or-nothing: one failing repo fails the whole refresh, so a partial feed
@@ -868,6 +878,7 @@ module.exports = {
     buildCsp,
     cacheControlFor,
     safeReturnPath,
+    isHiddenFromChangelog,
     urlEnvVar,
     secretEnvVar,
     CHANGELOG_BRANCHES,
