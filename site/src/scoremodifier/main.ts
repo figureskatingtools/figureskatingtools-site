@@ -13,6 +13,7 @@ import {
     platformErrorMessage,
     competitionLabel,
     formatDateFi,
+    type PlatformCompetition,
 } from '@figureskatingtools/shared-ui';
 import { escapeHtml, fetchUser, loginUrl, setupUserMenu, type UserInfo } from '../shell.js';
 
@@ -214,10 +215,8 @@ function downloadLink(url: string, fileName: string, label: string, primary = tr
  * platform competition's deletion date. Required (400 `platform_id_required`
  * without it), which is why the tool is only shown with a competition selected.
  */
-function withPlatformId(params: URLSearchParams): URLSearchParams {
-    const platformId = getActiveCompetition()?.id;
-    if (!platformId) throw new NoCompetitionError();
-    params.set('platformId', platformId);
+function withPlatformId(params: URLSearchParams, competition: PlatformCompetition): URLSearchParams {
+    params.set('platformId', competition.id);
     return params;
 }
 
@@ -235,14 +234,20 @@ class NoCompetitionError extends Error {
  * says why; other platform codes get the shared wording; anything else is the
  * backend's own text.
  */
-async function showFailure(resp: Response): Promise<void> {
+async function showFailure(resp: Response, requested: PlatformCompetition): Promise<void> {
     const text = (await resp.text()).trim();
     const code = readPlatformError(resp.status, text);
-    const active = getActiveCompetition();
-    const label = active ? competitionLabel(active) : '';
+    // Name the competition the request was made for — the selection may have
+    // changed while it was in flight
+    const label = competitionLabel(requested);
     if (isGoneCompetitionError(code)) {
-        showPickNotice(platformErrorMessage(code!, label));
-        clearActiveCompetition();   // → the pick card
+        const message = platformErrorMessage(code!, label);
+        if (getActiveCompetition()?.id === requested.id) {
+            showPickNotice(message);
+            clearActiveCompetition();   // → the pick card
+        } else {
+            showError(message);         // another competition is selected by now: keep it
+        }
         return;
     }
     showError(code ? platformErrorMessage(code, label) : text || `Error ${resp.status}`);
@@ -256,17 +261,17 @@ function showPickNotice(message: string | null) {
     el.classList.toggle('hidden', !message);
 }
 
-async function runPerSkater() {
+async function runPerSkater(requested: PlatformCompetition) {
     const resultArea = document.getElementById('result-area')!;
     const includeRanks = (document.getElementById('include-ranks') as HTMLInputElement).checked;
-    const query = withPlatformId(new URLSearchParams({ includeRanks: String(includeRanks) }));
+    const query = withPlatformId(new URLSearchParams({ includeRanks: String(includeRanks) }), requested);
     const resp = await fetch(`${API_BASE}/generate?${query.toString()}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/pdf' },
         body: selectedFile,
     });
     if (!resp.ok) {
-        await showFailure(resp);
+        await showFailure(resp, requested);
         return;
     }
     const data: GenerateResult = await resp.json();
@@ -282,7 +287,7 @@ async function runPerSkater() {
         </div>`;
 }
 
-async function runResults() {
+async function runResults(requested: PlatformCompetition) {
     const resultArea = document.getElementById('result-area')!;
     const val = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLSelectElement).value.trim();
     const customFilename = (document.getElementById('r-custom-filename') as HTMLInputElement).checked;
@@ -297,14 +302,14 @@ async function runResults() {
         // Blank → backend applies the category default (Tulokkaat = FSM name)
         pdfFile: customFilename ? val('r-filename') : '',
     });
-    withPlatformId(params);
+    withPlatformId(params, requested);
     const resp = await fetch(`${API_BASE}/generate_results?${params.toString()}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/pdf' },
         body: selectedFile,
     });
     if (!resp.ok) {
-        await showFailure(resp);
+        await showFailure(resp, requested);
         return;
     }
     const data: GenerateResult = await resp.json();
@@ -337,10 +342,14 @@ async function runGenerate() {
     resultArea.innerHTML = `<p class="text-muted">Processing your PDF…</p>`;
 
     try {
+        // The competition this request is for, fixed now — a selection change
+        // while it is in flight must not redirect or clear the wrong one
+        const requested = getActiveCompetition();
+        if (!requested) throw new NoCompetitionError();
         if (activeTool === 'results') {
-            await runResults();
+            await runResults(requested);
         } else {
-            await runPerSkater();
+            await runPerSkater(requested);
         }
     } catch (e) {
         if (e instanceof NoCompetitionError) {
