@@ -54,10 +54,22 @@ param proxySharedSecretProtocolgenerator string = ''
 @secure()
 param proxySharedSecretGdprtool string = ''
 
-@description('Paths served without an Easy Auth login redirect. /health must stay open so Azure/uptime probes get a 200 instead of a 302; /judgepapers/download is the judges\'-papers link e-mailed to recipients without an account (the token is checked by the judgepapers backend).')
+@description('Easy Auth provider segment the router\'s /signin redirects to (/.auth/login/<provider>). Written to the AUTH_LOGIN_PROVIDER app setting; empty means aad. Changes together with the authsettingsV2 identity provider (e.g. the move to Entra External ID).')
+param authLoginProvider string = 'aad'
+
+@description('Paths served without an Easy Auth login redirect. /health must stay open so Azure/uptime probes get a 200 instead of a 302; /judgepapers/download is the judges\'-papers link e-mailed to recipients without an account (the token is checked by the judgepapers backend); /, /index.html, /signin, /landing/* and the icons, robots.txt and llms.txt make up the public landing page, which the router serves at / unless the request carries an Easy Auth session (keep in sync with LANDING_DOCUMENT_PATHS and SIGNIN_PATH in server/server.js); /assets/* holds the Vite bundles (open-source code, no data), public so the home page served at / by session cookie can always load and fall back to its sign-in view when the session has expired.')
 param authExcludedPaths array = [
   '/health'
   '/judgepapers/download'
+  '/'
+  '/index.html'
+  '/signin'
+  '/landing/*'
+  '/assets/*'
+  '/favicon.png'
+  '/apple-touch-icon.png'
+  '/robots.txt'
+  '/llms.txt'
 ]
 
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
@@ -156,6 +168,7 @@ resource siteAppSettings 'Microsoft.Web/sites/config@2022-09-01' = {
       PROXY_SHARED_SECRET_SCOREMODIFIER: proxySharedSecretScoremodifier
       PROXY_SHARED_SECRET_PROTOCOLGENERATOR: proxySharedSecretProtocolgenerator
       PROXY_SHARED_SECRET_GDPRTOOL: proxySharedSecretGdprtool
+      AUTH_LOGIN_PROVIDER: empty(authLoginProvider) ? 'aad' : authLoginProvider
       // The zip already contains the built dist; Oryx must not try to build it.
       SCM_DO_BUILD_DURING_DEPLOYMENT: 'false'
     },

@@ -8,7 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const { createServer, loadConfig, buildCsp, CHANGELOG_MAX_ENTRIES } = require('./server.js');
+const { createServer, loadConfig, buildCsp, safeReturnPath, isHiddenFromChangelog, CHANGELOG_MAX_ENTRIES } = require('./server.js');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -500,6 +500,132 @@ test('static serving: root statics win, SPA fallback is per prefix', async () =>
     }
 });
 
+// ── Public landing page + /signin ────────────────────────────────────────────
+
+function addLanding(dir) {
+    fs.mkdirSync(path.join(dir, 'landing'));
+    fs.writeFileSync(path.join(dir, 'landing', 'index.html'), '<html>LANDING</html>');
+    fs.writeFileSync(path.join(dir, 'landing', 'landing.css'), 'body{}');
+}
+
+test('/ serves the landing page without a principal and the home page with one', async () => {
+    const publicDir = makePublicFixture();
+    addLanding(publicDir);
+    const { server, port } = await startRouter({ publicDir });
+    try {
+        for (const p of ['/', '/index.html']) {
+            const anon = await request(port, p);
+            assert.equal(anon.status, 200);
+            assert.match(anon.text, /LANDING/);
+            assert.match(anon.headers['content-type'], /text\/html/);
+            assert.equal(anon.headers['cache-control'], 'no-cache');
+            assert.equal(anon.headers.vary, 'Cookie');
+        }
+
+        const signedIn = await request(port, '/', {
+            headers: { 'x-ms-client-principal': principalHeader(PRINCIPAL) },
+        });
+        assert.match(signedIn.text, /ROOT_INDEX/);
+
+        const byName = await request(port, '/', { headers: { 'x-ms-client-principal-name': 'skater@example.com' } });
+        assert.match(byName.text, /ROOT_INDEX/);
+
+        // / is an Easy Auth excluded path: the platform passes the session
+        // cookie but no principal headers, so the cookie alone means home.
+        for (const cookie of [
+            'AppServiceAuthSession=abc123',
+            'theme=light; AppServiceAuthSession=abc123; other=1',
+            'AppServiceAuthSession1=part1; AppServiceAuthSession2=part2',
+        ]) {
+            const bySession = await request(port, '/', { headers: { cookie } });
+            assert.match(bySession.text, /ROOT_INDEX/, cookie);
+            assert.equal(bySession.headers.vary, 'Cookie');
+        }
+        for (const cookie of ['AppServiceAuthSession=', 'NotAppServiceAuthSession=abc', 'theme=light']) {
+            assert.match((await request(port, '/', { headers: { cookie } })).text, /LANDING/, cookie);
+        }
+
+        // A garbage principal is no principal.
+        const garbage = await request(port, '/', { headers: { 'x-ms-client-principal': '%%%' } });
+        assert.match(garbage.text, /LANDING/);
+
+        // Only the root document switches; other root routes and the landing's
+        // own files are untouched.
+        assert.match((await request(port, '/something/else')).text, /ROOT_INDEX/);
+        const css = await request(port, '/landing/landing.css');
+        assert.equal(css.status, 200);
+        assert.match(css.headers['content-type'], /text\/css/);
+        assert.match((await request(port, '/judgepapers/')).text, /JUDGEPAPERS_INDEX/);
+
+        // The landing page gets the plain root CSP.
+        assert.equal((await request(port, '/')).headers['content-security-policy'], buildCsp(''));
+    } finally {
+        await close(server);
+        fs.rmSync(publicDir, { recursive: true, force: true });
+    }
+});
+
+test('/ shows the home page when DEV_FAKE_USER is set, or when the build has no landing page', async () => {
+    const withLanding = makePublicFixture();
+    addLanding(withLanding);
+    const bare = makePublicFixture();
+    const dev = await startRouter({ publicDir: withLanding, devFakeUser: 'dev@example.com' });
+    const plain = await startRouter({ publicDir: bare });
+    try {
+        assert.match((await request(dev.port, '/')).text, /ROOT_INDEX/);
+        assert.match((await request(plain.port, '/')).text, /ROOT_INDEX/);
+    } finally {
+        await close(dev.server);
+        await close(plain.server);
+        fs.rmSync(withLanding, { recursive: true, force: true });
+        fs.rmSync(bare, { recursive: true, force: true });
+    }
+});
+
+test('GET /signin redirects to the Easy Auth login with a same-origin return path', async () => {
+    const { server, port } = await startRouter();
+    try {
+        const root = await request(port, '/signin');
+        assert.equal(root.status, 302);
+        assert.equal(root.headers.location, '/.auth/login/aad?post_login_redirect_url=%2F');
+        assert.equal(root.headers['cache-control'], 'no-store');
+
+        const app = await request(port, '/signin?return=%2Fjudgepapers%2F%3Fx%3D1');
+        assert.equal(app.headers.location, '/.auth/login/aad?post_login_redirect_url=%2Fjudgepapers%2F%3Fx%3D1');
+
+        for (const evil of ['//evil.example', 'https%3A%2F%2Fevil.example', '%2F%5Cevil.example', '%2F%2Fevil', 'judgepapers', '%2Fa%0d%0aSet-Cookie:x']) {
+            const res = await request(port, `/signin?return=${evil}`);
+            assert.equal(res.headers.location, '/.auth/login/aad?post_login_redirect_url=%2F', evil);
+        }
+
+        const post = await request(port, '/signin', { method: 'POST' });
+        assert.equal(post.status, 405);
+    } finally {
+        await close(server);
+    }
+});
+
+test('/signin follows AUTH_LOGIN_PROVIDER', async () => {
+    assert.equal(loadConfig({}).loginProvider, 'aad');
+    const config = loadConfig({ AUTH_LOGIN_PROVIDER: 'externalid' });
+    assert.equal(config.loginProvider, 'externalid');
+    const { server, port } = await startRouter({ loginProvider: config.loginProvider });
+    try {
+        const res = await request(port, '/signin?return=%2Fscoremodifier%2F');
+        assert.equal(res.headers.location, '/.auth/login/externalid?post_login_redirect_url=%2Fscoremodifier%2F');
+    } finally {
+        await close(server);
+    }
+});
+
+test('safeReturnPath only lets same-origin paths through', () => {
+    assert.equal(safeReturnPath('/tools/gdpr/'), '/tools/gdpr/');
+    assert.equal(safeReturnPath('/'), '/');
+    for (const bad of [undefined, '', 'x', '//evil', '/\\evil', 'https://evil', '/a\nb', '/a\\b']) {
+        assert.equal(safeReturnPath(bad), '/', String(bad));
+    }
+});
+
 test('301 redirects /<tool> to /<tool>/ preserving the query string', async () => {
     const publicDir = makePublicFixture();
     const { server, port } = await startRouter({ publicDir });
@@ -714,6 +840,39 @@ test('GET /changelog-live merges repos, maps commit shape, sorts newest-first an
         await close(github.server);
         fs.rmSync(publicDir, { recursive: true, force: true });
     }
+});
+
+test('commits tagged #nowhatsnew or #nowhatnew stay out of /changelog-live', async () => {
+    const github = await startFakeGitHub({
+        'figureskatingtools/fs-alpha': [
+            commitFixture('a000000000000001', '2026-08-03T10:00:00Z', 'Bump deps\n\n- internal #nowhatsnew'),
+            commitFixture('a000000000000002', '2026-08-03T09:00:00Z', 'CI tweak #NoWhatNew'),
+            commitFixture('a000000000000003', '2026-08-03T08:00:00Z', 'Visible change\n\n- shown'),
+        ],
+        'figureskatingtools/fs-beta': [
+            commitFixture('b000000000000001', '2026-08-03T07:00:00Z', '#NOWHATSNEW refactor'),
+            commitFixture('b000000000000002', '2026-08-03T06:00:00Z', 'Mentions #nowhatsnewer, so it stays'),
+        ],
+    });
+    const { server, port, publicDir } = await startChangelogRouter(github);
+    try {
+        const entries = json(await request(port, '/changelog-live?branch=main'));
+        assert.deepEqual(entries.map((e) => e.sha), ['a000000', 'b000000']);
+        assert.deepEqual(entries.map((e) => e.title), ['Visible change', 'Mentions #nowhatsnewer, so it stays']);
+    } finally {
+        await close(server);
+        await close(github.server);
+        fs.rmSync(publicDir, { recursive: true, force: true });
+    }
+});
+
+test('isHiddenFromChangelog matches the tag anywhere in the message, any case', () => {
+    const c = (message) => ({ commit: { message } });
+    assert.equal(isHiddenFromChangelog(c('Title #nowhatsnew')), true);
+    assert.equal(isHiddenFromChangelog(c('Title\n\n- x\n#NoWhatNew')), true);
+    assert.equal(isHiddenFromChangelog(c('Title')), false);
+    assert.equal(isHiddenFromChangelog(c('#nowhatsnewer')), false);
+    assert.equal(isHiddenFromChangelog({}), false);
 });
 
 test('GET /changelog-live rejects any branch other than main/test', async () => {

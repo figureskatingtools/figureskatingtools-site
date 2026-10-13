@@ -742,6 +742,9 @@ const CHANGELOG_DISPLAY_INITIAL = 4;  // entries shown before "Show more"
 const CHANGELOG_DISPLAY_MAX = 20;     // entries shown after "Show more"
 const GH_PER_PAGE = 20;               // commits fetched per repo (>= CHANGELOG_DISPLAY_MAX)
 const CHANGELOG_CACHE_KEY = 'changelog-cache-v1';
+// Commits tagged #nowhatsnew (or #nowhatnew) anywhere in the message are left
+// out of the panel. Keep in sync with CHANGELOG_HIDE_TAG in server/server.js.
+const HIDDEN_COMMIT_TAG = /#nowhats?new\b/i;
 const CHANGELOG_CACHE_TTL_MS = 5 * 60 * 1000; // be gentle on GitHub's 60 req/hr unauthenticated limit
 
 /**
@@ -776,7 +779,7 @@ async function fetchRepoCommits(source: ChangelogSource, branch: string): Promis
   const commits = await resp.json();
   // Rate-limit responses are a JSON object {message, ...}, not an array
   if (!Array.isArray(commits)) throw new Error(`Unexpected GitHub payload for ${source.repo}`);
-  return commits.map((c: any) => {
+  return commits.filter((c: any) => !HIDDEN_COMMIT_TAG.test(c?.commit?.message ?? '')).map((c: any) => {
     const message: string = c?.commit?.message ?? '';
     const lines = message.split('\n');
     const iso: string = c?.commit?.committer?.date ?? c?.commit?.author?.date ?? '';

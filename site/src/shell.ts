@@ -23,13 +23,15 @@ export interface UserInfo {
 }
 
 /**
- * Sign-in URL for App Service Easy Auth.
+ * Sign-in URL. The router's `/signin` redirects to the identity provider's
+ * Easy Auth login, so a provider change (Entra External ID) never touches the
+ * frontends.
  *
  * `appPath` is where the user lands after the round-trip, so each app passes
  * its own path (`/judgepapers/`, `/tools/banner/`, …) and login returns into it.
  */
 export function loginUrl(appPath = '/'): string {
-  return `/.auth/login/aad?post_login_redirect_url=${encodeURIComponent(appPath)}`;
+  return `/signin?return=${encodeURIComponent(appPath)}`;
 }
 
 /** Sign-out URL for App Service Easy Auth */

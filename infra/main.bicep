@@ -45,6 +45,9 @@ param functionAppUrlScoremodifier string = ''
 @description('Base URL of the protocolgenerator Function App (fs-protocolgenerator repo).')
 param functionAppUrlProtocolgenerator string = ''
 
+@description('Easy Auth provider for the router\'s /signin redirect (AUTH_LOGIN_PROVIDER app setting). Default aad.')
+param authLoginProvider string = 'aad'
+
 @description('Base URL of the GDPR removal tool Function App (fs-gdpr-tool repo) — the /tools/gdpr/api/* proxy target.')
 param functionAppUrlGdprtool string = ''
 
@@ -116,6 +119,7 @@ module webApp 'modules/webapp.bicep' = {
     webAppName: 'app-fs-site-${uniqueString(rg.id)}'
     appServicePlanName: 'asp-fs-site-web'
     authClientId: authClientId
+    authLoginProvider: authLoginProvider
     authManagedIdentityClientId: authManagedIdentity.outputs.clientId
     authManagedIdentityResourceId: authManagedIdentity.outputs.resourceId
     tenantId: !empty(tenantId) ? tenantId : subscription().tenantId

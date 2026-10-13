@@ -134,6 +134,9 @@ jobs:
           # 'false' keeps the app deployed but makes it answer 503. Unset means
           # the per-environment default in the bicepparam (test on, prod off).
           HOVTP_ENABLED: ${{ vars.HOVTP_ENABLED }}
+          # Easy Auth provider for the router's /signin (AUTH_LOGIN_PROVIDER app
+          # setting). Unset means aad.
+          AUTH_LOGIN_PROVIDER: ${{ vars.AUTH_LOGIN_PROVIDER }}
         run: |
           set -euo pipefail
           ENV_NAME="${{ needs.set-environment.outputs.env_name }}"

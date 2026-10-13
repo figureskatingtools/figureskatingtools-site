@@ -1,0 +1,19 @@
+# Figure Skating Tools
+
+> figureskatingtools.com is a set of open-source web tools that help figure skating result services, competition organisers and officials with competition paperwork, built from Figure Skating Manager (FS Manager) data. Supporting the figure skating community.
+
+Only the front page is public. The tools themselves require sign-in, and access is by invitation; there is no public content to crawl behind the login.
+
+## Tools
+
+- Judge Paper Creator: builds each judge's set of papers from FS Manager PDF exports, in Finnish or English, and sends them by e-mail with a secure download link.
+- Protocol Generator: produces the complete official protocol book (cover, competition info, time schedule, podiums, results, judges' details, synchronized skating team pages).
+- Score Modifier: splits the FS Manager "Judges Details per Skater" export into one readable page per skater or team.
+- GDPR Removal Tool: handles skaters' data-removal requests by replacing the name and club in published FS Manager result pages and PDFs, keeping placements and scores.
+- Competition Banner Generator: creates a branded competition banner with name, dates, venue and federation and club logos.
+- Live FS Manager link: FS Manager can push schedules, entries and PDFs to the platform while the event runs.
+
+## Links
+
+- [Source code on GitHub](https://github.com/figureskatingtools): all tools are open source
+- [Request access](mailto:markus@lintuala.fi)

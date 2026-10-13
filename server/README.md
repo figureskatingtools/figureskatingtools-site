@@ -20,6 +20,8 @@ site root/
 | 3 | `/changelog-live?branch=main\|test` | Merged, server-cached GitHub commit feed for the home page's "What's New" panel (see below). |
 | 4 | `/.auth`, `/.auth/*` | `404` — Easy Auth owns these at the platform level; the router must never swallow them into the SPA fallback. |
 | 4b | `/judgepapers/download?t=<token>` | `GET`/`HEAD` proxied to `$FUNCTION_APP_URL_JUDGEPAPERS/api/download_judge_papers?t=<token>` (other methods `405`). The judges'-papers link e-mailed to recipients who have no account: listed in Easy Auth `excludedPaths`, the backend checks the token and `302`s to a short-lived blob URL. |
+| 4c | `/signin[?return=/path]` | `302` → `/.auth/login/$AUTH_LOGIN_PROVIDER?post_login_redirect_url=<path>` (other methods `405`). Every "Sign in" link uses it (shared `loginUrl()`, the landing page), so a provider change (Entra External ID) is one app setting. `return` must be a same-origin path; anything else (`//host`, `https://…`, backslashes, control characters) becomes `/`. Listed in Easy Auth `excludedPaths`. |
+| 4d | `/`, `/index.html` | Signed in — an Easy Auth principal header, the Easy Auth session cookie `AppServiceAuthSession*`, or `DEV_FAKE_USER` — gets the home page; anyone else the static public landing page `public/landing/index.html` (falls back to the home page if the build has none). Both carry `Vary: Cookie`. The cookie check is needed because these are Easy Auth `excludedPaths`, where the platform injects no principal headers. Only decides which document is shown: the home page's `/userinfo` and the APIs stay gated, so a stale or forged cookie ends on its sign-in view. `/`, `/index.html`, `/landing/*`, `/assets/*` (open-source bundles, no data), `/favicon.png`, `/apple-touch-icon.png`, `/robots.txt` and `/llms.txt` are `excludedPaths`. |
 | 5 | `/<tool>/api/*` | Proxied to that tool's Function App with the `/<tool>` prefix **stripped**: `/judgepapers/api/upload_file` → `$FUNCTION_APP_URL_JUDGEPAPERS/api/upload_file`. Backends keep their default `/api` route prefix — zero backend route changes. |
 | 5b | `/tools/gdpr/api/*` | Proxied to the GDPR removal tool's Function App (`fs-gdpr-tool`) with `/tools/gdpr` **stripped** (`SMALL_TOOL_APIS` in `server.js`). The page itself, `/tools/gdpr/`, is a plain static document. |
 | 6 | `/api/*` | Proxied to the platform Function App (competitions registry). |
@@ -73,7 +75,8 @@ budget. The router does it instead.
   reads — re-read on every refresh (it is a few hundred bytes).
 - Per repo: `GET /repos/<repo>/commits?sha=<branch>&per_page=20` with
   `Accept: application/vnd.github+json` and a `User-Agent` (GitHub rejects calls
-  without one). Commits are mapped to the entry shape the frontend renders
+  without one). Commits whose message contains `#nowhatsnew` or `#nowhatnew`
+  (anywhere, any case) are dropped. The rest are mapped to the entry shape the frontend renders
   (`sha` first 7, `date`, `iso`, `title`, `description`, `author`, `tool`),
   merged, sorted newest-first and sliced to 20.
 - `branch` must be `main` or `test`; anything else (including a missing value)
@@ -109,6 +112,7 @@ the config object (tests override them).
 | `PROXY_SHARED_SECRET_GDPRTOOL` | prod | — | Sent as `x-proxy-secret` to the GDPR removal tool. |
 | `PROXY_SHARED_SECRET_PLATFORM` | prod | — | Sent as `x-proxy-secret` to the platform API. |
 | `NODE_ENV` | no | — | `production` hard-disables `DEV_FAKE_USER`. |
+| `AUTH_LOGIN_PROVIDER` | no | `aad` | Easy Auth provider segment `/signin` redirects to (`/.auth/login/<provider>`). Bicep-owned: set the GitHub environment variable `AUTH_LOGIN_PROVIDER`, never the app setting by hand (infra deploys replace all app settings). |
 | `DEV_FAKE_USER` | no | — | **Non-production only.** Email returned by `/userinfo` (and forwarded to backends) when no Easy Auth headers are present. |
 
 Trailing slashes on the `FUNCTION_APP_URL_*` values are ignored. A secret left
@@ -193,7 +197,7 @@ with, without and with a malformed principal, plus `DEV_FAKE_USER`; prefix
 stripping and per-tool header injection; a 6 MiB upload / 4 MiB download
 streamed through the proxy and hash-compared; root statics vs per-prefix SPA
 fallback; per-prefix CSP; the `/<tool>` → `/<tool>/` redirect; the `502`
-for an unconfigured backend; and `/changelog-live` (mapping/sorting/slice,
+for an unconfigured backend; and `/changelog-live` (mapping/sorting/slice, `#nowhatsnew` filtering,
 branch validation, cache hit, stale-on-failure, in-flight dedup, `502` with an
 empty cache) against a stub GitHub.
 
