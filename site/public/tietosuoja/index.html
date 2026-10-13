@@ -41,7 +41,7 @@
 
     <div class="intro">
       <p>Tämä seloste kertoo, miten henkilötietoja käsitellään figureskatingtools.com-palvelussa. Palvelu on joukko työkaluja taitoluistelun tulospalvelulle: Judge Paper Creator (tuomaripaperit), Protocol Generator (pöytäkirja), Score Modifier (luettavat pistepaperit), Competition Banner Generator (kilpailun banneri), GDPR Removal Tool (nimen poistaminen julkaistuista tuloksista) sekä yhteys, jonka kautta FS Manager -tulospalveluohjelma lähettää kilpailun tietoja suoraan palveluun. Työkaluja käyttävät kirjautuneet tulospalvelun tekijät ja järjestäjien edustajat, ja käyttöoikeus annetaan kutsusta.</p>
-      <p>Palvelu ei itse julkaise mitään. Työkalujen tuottamat aineistot (tuomaripaperit, pöytäkirjat, pistepaperit ja bannerit) lataa tulospalvelun tekijä. Jos aineisto julkaistaan myöhemmin tulossivustolla, kuten fs.lintuala.fi, julkaisuun sovelletaan kyseisen sivuston omaa tietosuojaselostetta.</p>
+      <p><strong>figureskatingtools.com ei ylläpidä eikä julkaise tuloksia, eikä täällä ole mitään julkista sisältöä.</strong> Työkalujen tuottamat aineistot (tuomaripaperit, pöytäkirjat, pistepaperit ja bannerit) lataa tulospalvelun tekijä. Tulokset julkaistaan muilla sivustoilla, kuten fs.lintuala.fi, ja kukin sivusto vastaa julkaisemastaan sisällöstä oman tietosuojaselosteensa mukaisesti.</p>
     </div>
 
     <section id="rekisterinpitaja" aria-labelledby="h-controller">
@@ -52,7 +52,7 @@
 
     <section id="tiedot" aria-labelledby="h-data">
       <h2 id="h-data"><span class="num">2</span>Mitä tietoja käsitellään, mistä ne tulevat ja miksi</h2>
-      <p>Tietoja käsitellään kilpailun asiakirjojen tuottamiseksi (tuomaripaperit, pöytäkirja, luettavat pistepaperit ja julkaistujen tulosten versiot, joista nimi on poistettu) sekä palvelun toiminnan ja tietoturvan ylläpitämiseksi.</p>
+      <p>Tietoja käsitellään kilpailun asiakirjojen tuottamiseksi (tuomaripaperit, pöytäkirja, luettavat pistepaperit ja tarvittaessa tulospalvelun omista julkaistuista tulostiedostoista versiot, joista nimi on poistettu) sekä palvelun toiminnan ja tietoturvan ylläpitämiseksi.</p>
       <div class="table-wrap">
         <table class="data-table">
           <thead>
@@ -96,10 +96,10 @@
               <td data-label="Käsittelyperuste" class="basis">Oikeutettu etu: tietoturva, jotta vain tulospalvelun tekijän hyväksymät tietokoneet voivat toimittaa tietoja</td>
             </tr>
             <tr>
-              <th scope="row">Nimensä poistamista julkaistuista tuloksista pyytäneet</th>
-              <td data-label="Tiedot">Koko nimi ja seura sellaisina kuin ne näkyvät julkaistuilla tulossivuilla ja PDF-tiedostoissa</td>
-              <td data-label="Lähde">Henkilön oma pyyntö osoitteeseen markus@lintuala.fi</td>
-              <td data-label="Käsittelyperuste" class="basis">Lakisääteinen velvoite: henkilön poisto- tai vastustamispyynnön toteuttaminen (17 ja 21 artikla)</td>
+              <th scope="row">Henkilöt, joiden nimen tulospalvelu poistaa omista julkaistuista tuloksistaan (GDPR Removal Tool)</th>
+              <td data-label="Tiedot">Koko nimi ja seura sellaisina kuin ne näkyvät tulospalvelun omilla julkaistuilla tulossivuilla ja PDF-tiedostoissa</td>
+              <td data-label="Lähde">Tulospalvelun julkaistut sivut</td>
+              <td data-label="Käsittelyperuste" class="basis">Julkaisevan sivuston lakisääteinen velvoite toteuttaa poisto- tai vastustamispyyntö (17 ja 21 artikla). Pyynnöstä vastaa julkaiseva sivusto; tämä palvelu tarjoaa vain työkalun eikä säilytä mitään.</td>
             </tr>
           </tbody>
         </table>
@@ -113,7 +113,7 @@
       <p>FS Managerin osallistujatiedostot noudattavat ODF-tietomuotoa, jossa on kentät myös esimerkiksi syntymäajalle, sukupuolelle ja kansalaisuudelle. Se, mitä FS Manager niihin täyttää, säilyy tiedostossa, kunnes kilpailun tiedot poistetaan, mutta työkalut lukevat tiedostoista vain nimet ja seurat eivätkä tulosta muita tietoja.</p>
 
       <h3>GDPR Removal Tool ja Banner Generator</h3>
-      <p>Kun joku pyytää nimensä poistamista jo julkaistuista tuloksista, Markus Lintuala toteuttaa pyynnön GDPR Removal Toolilla. Työkalu hakee julkaistut tulossivut ja PDF-tiedostot, korvaa henkilön nimen ja seuran ja palauttaa korjatut tiedostot ZIP-tiedostona. Sivuja käsitellään vain muistissa, eikä työkalu tallenna pyynnöstä mitään. Competition Banner Generator toimii kokonaan selaimessasi: lisäämäsi logot eivät lähde laitteeltasi.</p>
+      <p>GDPR Removal Tool on työkalu, jolla kuka tahansa tulospalvelun tekijä voi muokata omia julkaistuja tulostiedostojaan, kun se on tarpeen, esimerkiksi kun luistelija on pyytänyt julkaisevalta sivustolta nimensä poistamista. Työkalu hakee jo julkiset sivut ja PDF-tiedostot, korvaa henkilön nimen ja seuran tekstillä ”Nimi poistettu pyynnöstä” niin, että sijoitus ja pisteet jäävät paikalleen, ja palauttaa muutetut tiedostot tulospalvelun tekijälle ZIP-tiedostona. Sivuja käsitellään vain muistissa, eikä työkalu tallenna mitään. Muutettujen tiedostojen julkaisemisesta päättää tulospalvelun tekijä. Competition Banner Generator toimii kokonaan selaimessasi: lisäämäsi logot eivät lähde laitteeltasi.</p>
 
       <p>Tietoja ei käytetä automaattiseen päätöksentekoon eikä profilointiin.</p>
     </section>
@@ -131,8 +131,8 @@
 
     <section id="sailytys" aria-labelledby="h-retention">
       <h2 id="h-retention"><span class="num">4</span>Kuinka kauan tietoja säilytetään</h2>
-      <p>Jokaisella kilpailulla on yksi poistopäivä, ja kaikki kilpailun tiedot kaikissa työkaluissa poistetaan automaattisesti sinä päivänä: <strong>60 päivän kuluttua kilpailun luomisesta</strong>. Tämä koskee ladattuja ja FS Managerin lähettämiä tiedostoja, joukkueiden kokoonpanoja, kuvia, tuotettuja tuomaripapereita ja pöytäkirjoja, sähköpostien lähetyslokia ja FS Manager -lähettäjien tietoja. Tulospalvelun tekijä voi siirtää poistopäivää viikon kerrallaan myöhemmäksi, kun siihen on syy, esimerkiksi kun kilpailu pidetään myöhemmin, ja uusi päivä koskee kaikkia työkaluja samalla tavalla.</p>
-      <p>Jos tulospalvelun tekijä poistaa kilpailun, sen tiedot poistetaan kaikista työkaluista seuraavana yönä. Poiston jälkeen kilpailusta jäävät vain nimi, päivämäärät ja käyttömäärät tilastoksi, jossa ei ole henkilötietoja.</p>
+      <p>Kaikki kilpailusta tallennettu poistetaan kilpailun jälkeen: ladatut ja FS Managerin lähettämät tiedostot, joukkueiden kokoonpanot, kuvat, tuotetut tuomaripaperit ja pöytäkirjat, sähköpostien lähetysloki ja FS Manager -lähettäjien tiedot. Tulospalvelun tekijä voi poistaa kilpailun aiemmin, jolloin sen tiedot poistetaan kaikista työkaluista seuraavana yönä. Viimeistään tiedot poistaa automaattinen poisto: jokaisella kilpailulla on yksi poistopäivä, joka koskee kaikkia sen tietoja kaikissa työkaluissa, <strong>60 päivän kuluttua kilpailun luomisesta</strong>. Tulospalvelun tekijä voi siirtää poistopäivää viikon kerrallaan myöhemmäksi, kun siihen on syy, esimerkiksi kun kilpailu pidetään myöhemmin, ja uusi päivä koskee kaikkia työkaluja samalla tavalla.</p>
+      <p>Poiston jälkeen kilpailusta jäävät vain nimi, päivämäärät ja käyttömäärät tilastoksi, jossa ei ole henkilötietoja.</p>
       <ul>
         <li>Tuomaripapereiden latauslinkit: enintään 5 päivää.</li>
         <li>Tekniset lokit (palvelun virhe- ja pyyntölokit sekä Microsoftin kirjautumislokit, joissa voi olla IP- ja sähköpostiosoitteita): enintään 90 päivää.</li>
@@ -151,8 +151,8 @@
     <section id="oikeudet" aria-labelledby="h-rights">
       <h2 id="h-rights"><span class="num">6</span>Oikeutesi</h2>
       <p>Sinulla on oikeus tarkastaa itseäsi koskevat tiedot, vaatia virheellisten tietojen korjaamista tai tietojen poistamista, rajoittaa niiden käsittelyä ja vastustaa sitä. Jos kuvaasi on käytetty suostumuksella, voit perua suostumuksen milloin tahansa. Alaikäisen puolesta pyynnön voi tehdä huoltaja.</p>
-      <p>Lähetä pyyntö osoitteeseen <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>. Vastaamme kuukauden kuluessa.</p>
-      <p>Jos haluat nimesi poistettavan jo julkaistuista tuloksista, lähetä pyyntö osoitteeseen <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>. Nimesi ja seurasi korvataan GDPR Removal Toolilla tekstillä ”Nimi poistettu pyynnöstä”, ja podiumsivu, jolla olet, poistetaan. Sijoitus ja pisteet jäävät paikalleen, jotta muiden luistelijoiden tulokset pysyvät oikeina.</p>
+      <p>Lähetä figureskatingtools.com-palveluun tallennettuja tietoja koskevat pyynnöt osoitteeseen <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>. Vastaamme kuukauden kuluessa.</p>
+      <p>Julkaistuja tuloksia koskevat pyynnöt, kuten nimen poistaminen tulosluettelosta, tehdään tulokset julkaisevalle sivustolle, koska se päättää julkaisemastaan sisällöstä ja vastaa siitä. figureskatingtools.com ei julkaise tuloksia eikä voi muuttaa muiden sivustojen sisältöä.</p>
     </section>
 
     <section id="valitusoikeus" aria-labelledby="h-complaint">
