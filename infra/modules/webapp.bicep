@@ -54,9 +54,10 @@ param proxySharedSecretProtocolgenerator string = ''
 @secure()
 param proxySharedSecretGdprtool string = ''
 
-@description('Paths served without an Easy Auth login redirect. /health must stay open so Azure/uptime probes get a 200 instead of a 302.')
+@description('Paths served without an Easy Auth login redirect. /health must stay open so Azure/uptime probes get a 200 instead of a 302; /judgepapers/download is the judges\'-papers link e-mailed to recipients without an account (the token is checked by the judgepapers backend).')
 param authExcludedPaths array = [
   '/health'
+  '/judgepapers/download'
 ]
 
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {

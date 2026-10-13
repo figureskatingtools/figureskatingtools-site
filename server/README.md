@@ -19,6 +19,7 @@ site root/
 | 2 | `/userinfo` | Flat user object decoded from the Easy Auth `X-MS-CLIENT-PRINCIPAL` header (no tokens are ever exposed). |
 | 3 | `/changelog-live?branch=main\|test` | Merged, server-cached GitHub commit feed for the home page's "What's New" panel (see below). |
 | 4 | `/.auth`, `/.auth/*` | `404` — Easy Auth owns these at the platform level; the router must never swallow them into the SPA fallback. |
+| 4b | `/judgepapers/download?t=<token>` | `GET`/`HEAD` proxied to `$FUNCTION_APP_URL_JUDGEPAPERS/api/download_judge_papers?t=<token>` (other methods `405`). The judges'-papers link e-mailed to recipients who have no account: listed in Easy Auth `excludedPaths`, the backend checks the token and `302`s to a short-lived blob URL. |
 | 5 | `/<tool>/api/*` | Proxied to that tool's Function App with the `/<tool>` prefix **stripped**: `/judgepapers/api/upload_file` → `$FUNCTION_APP_URL_JUDGEPAPERS/api/upload_file`. Backends keep their default `/api` route prefix — zero backend route changes. |
 | 5b | `/tools/gdpr/api/*` | Proxied to the GDPR removal tool's Function App (`fs-gdpr-tool`) with `/tools/gdpr` **stripped** (`SMALL_TOOL_APIS` in `server.js`). The page itself, `/tools/gdpr/`, is a plain static document. |
 | 6 | `/api/*` | Proxied to the platform Function App (competitions registry). |
