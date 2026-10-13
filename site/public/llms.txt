@@ -2,7 +2,7 @@
 
 > figureskatingtools.com is a set of open-source web tools that help figure skating result services, competition organisers and officials with competition paperwork, built from Figure Skating Manager (FS Manager) data. Supporting the figure skating community.
 
-Only the front page is public. The tools themselves require sign-in, and access is by invitation; there is no public content to crawl behind the login.
+Only the front page and the privacy notice are public. The tools themselves require sign-in, and access is by invitation; there is no public content to crawl behind the login.
 
 ## Tools
 
@@ -15,5 +15,7 @@ Only the front page is public. The tools themselves require sign-in, and access 
 
 ## Links
 
+- [Privacy notice](https://figureskatingtools.com/privacy/): how the service processes personal data (English)
+- [Tietosuojaseloste](https://figureskatingtools.com/tietosuoja/): the same privacy notice in Finnish
 - [Source code on GitHub](https://github.com/figureskatingtools): all tools are open source
 - [Request access](mailto:markus@lintuala.fi)

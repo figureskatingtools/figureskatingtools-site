@@ -26,7 +26,7 @@ site root/
 | 5b | `/tools/gdpr/api/*` | Proxied to the GDPR removal tool's Function App (`fs-gdpr-tool`) with `/tools/gdpr` **stripped** (`SMALL_TOOL_APIS` in `server.js`). The page itself, `/tools/gdpr/`, is a plain static document. |
 | 6 | `/api/*` | Proxied to the platform Function App (competitions registry). |
 | 7 | `/<tool>` | `301` → `/<tool>/` (query string preserved). |
-| 8 | anything else | Static file from `public/`, else a **per-prefix** SPA fallback. |
+| 8 | anything else | Static file from `public/`, else a **per-prefix** SPA fallback. This is also how the public privacy notice (`/privacy/`, `/tietosuoja/`) and the self-hosted fonts (`/fonts/*`) are served: plain static files, the same for everyone, reachable signed out because `/privacy`, `/privacy/*`, `/tietosuoja`, `/tietosuoja/*` and `/fonts/*` are Easy Auth `excludedPaths`. |
 
 `<tool>` ∈ `judgepapers`, `scoremodifier`, `protocolgenerator`.
 
@@ -139,13 +139,13 @@ Referrer-Policy: strict-origin-when-cross-origin
 Content-Security-Policy: <per-prefix, see below>
 ```
 
-Base policy (all paths — Google Fonts is allowed everywhere so the
-protocolgenerator document's font links work):
+Base policy (all paths — the fonts are self-hosted under `/fonts/`, so no
+third-party font host is allowed):
 
 ```
 default-src 'self'; script-src 'self';
-style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
-img-src 'self' data: blob:; font-src 'self' https://fonts.gstatic.com;
+style-src 'self' 'unsafe-inline';
+img-src 'self' data: blob:; font-src 'self';
 connect-src 'self'; frame-ancestors 'none'
 ```
 
@@ -156,8 +156,10 @@ connect-src 'self'; frame-ancestors 'none'
   `worker-src 'self' blob:` and `blob:` in `connect-src` — pdf.js runs a WASM
   decoder in a blob worker.
 
-Caching: `assets/` paths get `public, max-age=31536000, immutable` (Vite emits
-content-hashed names); everything else — HTML, JSON, images — gets `no-cache`.
+Caching: `assets/` paths and `/fonts/*.woff2` get `public, max-age=31536000,
+immutable` (Vite emits content-hashed names; the font files carry a version
+suffix, bumped whenever a font changes); everything else — HTML, CSS outside
+`assets/`, JSON, images — gets `no-cache`.
 
 ## Local dev
 
