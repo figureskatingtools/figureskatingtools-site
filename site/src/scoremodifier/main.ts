@@ -193,10 +193,22 @@ function downloadLink(url: string, fileName: string, label: string, primary = tr
     return `<a class="${cls}" href="${escapeAttr(url)}" download="${escapeAttr(fileName)}">${escapeHtml(label)}</a>`;
 }
 
+/**
+ * The selected platform competition, sent as `platformId` so the backend can
+ * link what it generates to it and delete it on the platform's deletion date.
+ * Older backends ignore the parameter. Omitted when nothing is selected.
+ */
+function withPlatformId(params: URLSearchParams): URLSearchParams {
+    const platformId = getActiveCompetition()?.id;
+    if (platformId) params.set('platformId', platformId);
+    return params;
+}
+
 async function runPerSkater() {
     const resultArea = document.getElementById('result-area')!;
     const includeRanks = (document.getElementById('include-ranks') as HTMLInputElement).checked;
-    const resp = await fetch(`${API_BASE}/generate?includeRanks=${includeRanks}`, {
+    const query = withPlatformId(new URLSearchParams({ includeRanks: String(includeRanks) }));
+    const resp = await fetch(`${API_BASE}/generate?${query.toString()}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/pdf' },
         body: selectedFile,
@@ -233,6 +245,7 @@ async function runResults() {
         // Blank → backend applies the category default (Tulokkaat = FSM name)
         pdfFile: customFilename ? val('r-filename') : '',
     });
+    withPlatformId(params);
     const resp = await fetch(`${API_BASE}/generate_results?${params.toString()}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/pdf' },
