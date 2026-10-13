@@ -1,7 +1,9 @@
 // Zero-dependency router/server for figureskatingtools.com on Azure App Service.
 //
 // One Web App fronts the whole domain:
-//   /                        → landing page (SPA)
+//   /                        → signed in: home page (SPA); signed out: the
+//                              static public landing page (excluded from Easy Auth)
+//   /signin                  → 302 to the identity provider's login (excluded from Easy Auth)
 //   /judgepapers/            → Judge Papers app        (SPA, own index.html)
 //   /scoremodifier/          → Score Modifier app      (SPA, own index.html)
 //   /protocolgenerator/      → Protocol Generator app  (SPA, own index.html)
@@ -39,6 +41,18 @@ const PROXY_TARGETS = [...TOOLS, ...Object.keys(SMALL_TOOL_APIS), PLATFORM];
 // Public (no sign-in) route for the link e-mailed by judgepapers' send dialog.
 // Must match the Easy Auth excludedPaths entry in infra/modules/webapp.bicep.
 const JUDGEPAPERS_DOWNLOAD_PATH = '/judgepapers/download';
+
+// The public landing page: a static document (no JS bundle, so /assets/* stays
+// behind sign-in) served at / to visitors without an Easy Auth principal.
+// LANDING_DOCUMENT_PATHS, SIGNIN_PATH and the landing files must all be listed
+// in the Easy Auth excludedPaths in infra/modules/webapp.bicep.
+const LANDING_DIR = 'landing';
+const LANDING_DOCUMENT_PATHS = ['/', '/index.html'];
+
+// Every sign-in link goes through /signin, so a change of identity provider
+// (e.g. Entra External ID) is one app setting instead of a frontend change.
+const SIGNIN_PATH = '/signin';
+const DEFAULT_LOGIN_PROVIDER = 'aad';
 
 const MIME_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -102,6 +116,8 @@ function loadConfig(env = process.env) {
         // Local dev only: pretend a user is signed in when Easy Auth headers are
         // absent. Hard-disabled in production so it can never leak into a real env.
         devFakeUser: isProduction ? '' : (env.DEV_FAKE_USER || '').trim(),
+        // Easy Auth provider segment of /.auth/login/<provider> used by /signin.
+        loginProvider: (env.AUTH_LOGIN_PROVIDER || '').trim() || DEFAULT_LOGIN_PROVIDER,
         // Changelog knobs. Not env-driven — they exist as config so tests can
         // point the fetch at a stub GitHub and shrink the cache window.
         githubApiOrigin: GITHUB_API_ORIGIN,
@@ -271,6 +287,38 @@ function handleUserInfo(req, res, config) {
         name: findClaim(parsed, NAME_CLAIMS),
         userRoles: parsed.userRoles || [],
     });
+}
+
+// Whether the request carries a signed-in user (or DEV_FAKE_USER stands in).
+// Only decides which document / gets; it never gates data — everything behind
+// it is still protected by Easy Auth and the backends' proxy-secret gate.
+function isSignedIn(req, config) {
+    return Boolean(decodePrincipal(req) || req.headers['x-ms-client-principal-name'] || config.devFakeUser);
+}
+
+// Where /signin may send the user back to: a same-origin absolute path only.
+// Anything else (//evil.example, /\evil, https://…, control characters) → '/'.
+function safeReturnPath(value) {
+    if (typeof value !== 'string' || !value.startsWith('/')) return '/';
+    if (value.startsWith('//') || value.startsWith('/\\')) return '/';
+    if (/[\u0000-\u001f\u007f\\]/.test(value)) return '/';
+    return value;
+}
+
+// GET /signin[?return=/path] → the provider's login, returning to that path.
+function handleSignIn(req, res, config, search) {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.writeHead(405, { Allow: 'GET, HEAD', 'Cache-Control': 'no-store' });
+        res.end();
+        return;
+    }
+    const returnPath = safeReturnPath(new URLSearchParams(search).get('return') || '/');
+    const provider = encodeURIComponent(config.loginProvider);
+    res.writeHead(302, {
+        Location: `/.auth/login/${provider}?post_login_redirect_url=${encodeURIComponent(returnPath)}`,
+        'Cache-Control': 'no-store',
+    });
+    res.end();
 }
 
 // Email forwarded to the Function Apps. Keeps the existing contract: the
@@ -582,11 +630,12 @@ function cacheControlFor(urlPath) {
         : 'no-cache';
 }
 
-function sendFile(res, filePath, urlPath, status = 200) {
+function sendFile(res, filePath, urlPath, status = 200, extraHeaders = {}) {
     const ext = path.extname(filePath).toLowerCase();
     res.writeHead(status, {
         'Content-Type': MIME_TYPES[ext] || 'application/octet-stream',
         'Cache-Control': cacheControlFor(urlPath),
+        ...extraHeaders,
     });
     fs.createReadStream(filePath).pipe(res);
 }
@@ -666,6 +715,24 @@ function serveStatic(req, res, config, pathname) {
     });
 }
 
+// / for a visitor without a principal → the public landing page. The answer
+// depends on the session, so shared caches must not hand one to the other.
+function serveRootDocument(req, res, config, pathname) {
+    if (isSignedIn(req, config)) {
+        serveStatic(req, res, config, pathname);
+        return;
+    }
+    const landingPath = path.join(config.publicDir, LANDING_DIR, 'index.html');
+    fs.stat(landingPath, (err, stats) => {
+        if (err || !stats.isFile()) {
+            // No landing page in this build: the home page's own sign-in view.
+            serveStatic(req, res, config, pathname);
+            return;
+        }
+        sendFile(res, landingPath, '/landing/index.html', 200, { Vary: 'Cookie' });
+    });
+}
+
 // ── Router ───────────────────────────────────────────────────────────────────
 function createRequestHandler(config) {
     const changelogState = createChangelogState();
@@ -723,6 +790,18 @@ function createRequestHandler(config) {
                 return;
             }
             proxy(req, res, config, 'judgepapers', '/api/download_judge_papers' + search);
+            return;
+        }
+
+        // 4c. Sign-in entry point used by every "Sign in" link.
+        if (pathname === SIGNIN_PATH) {
+            handleSignIn(req, res, config, search);
+            return;
+        }
+
+        // 4d. The root document: home page or public landing page.
+        if (LANDING_DOCUMENT_PATHS.includes(pathname)) {
+            serveRootDocument(req, res, config, pathname);
             return;
         }
 
@@ -788,6 +867,7 @@ module.exports = {
     createRequestHandler,
     buildCsp,
     cacheControlFor,
+    safeReturnPath,
     urlEnvVar,
     secretEnvVar,
     CHANGELOG_BRANCHES,

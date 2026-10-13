@@ -8,7 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const { createServer, loadConfig, buildCsp, CHANGELOG_MAX_ENTRIES } = require('./server.js');
+const { createServer, loadConfig, buildCsp, safeReturnPath, CHANGELOG_MAX_ENTRIES } = require('./server.js');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -497,6 +497,117 @@ test('static serving: root statics win, SPA fallback is per prefix', async () =>
     } finally {
         await close(server);
         fs.rmSync(publicDir, { recursive: true, force: true });
+    }
+});
+
+// ── Public landing page + /signin ────────────────────────────────────────────
+
+function addLanding(dir) {
+    fs.mkdirSync(path.join(dir, 'landing'));
+    fs.writeFileSync(path.join(dir, 'landing', 'index.html'), '<html>LANDING</html>');
+    fs.writeFileSync(path.join(dir, 'landing', 'landing.css'), 'body{}');
+}
+
+test('/ serves the landing page without a principal and the home page with one', async () => {
+    const publicDir = makePublicFixture();
+    addLanding(publicDir);
+    const { server, port } = await startRouter({ publicDir });
+    try {
+        for (const p of ['/', '/index.html']) {
+            const anon = await request(port, p);
+            assert.equal(anon.status, 200);
+            assert.match(anon.text, /LANDING/);
+            assert.match(anon.headers['content-type'], /text\/html/);
+            assert.equal(anon.headers['cache-control'], 'no-cache');
+            assert.equal(anon.headers.vary, 'Cookie');
+        }
+
+        const signedIn = await request(port, '/', {
+            headers: { 'x-ms-client-principal': principalHeader(PRINCIPAL) },
+        });
+        assert.match(signedIn.text, /ROOT_INDEX/);
+
+        const byName = await request(port, '/', { headers: { 'x-ms-client-principal-name': 'skater@example.com' } });
+        assert.match(byName.text, /ROOT_INDEX/);
+
+        // A garbage principal is no principal.
+        const garbage = await request(port, '/', { headers: { 'x-ms-client-principal': '%%%' } });
+        assert.match(garbage.text, /LANDING/);
+
+        // Only the root document switches; other root routes and the landing's
+        // own files are untouched.
+        assert.match((await request(port, '/something/else')).text, /ROOT_INDEX/);
+        const css = await request(port, '/landing/landing.css');
+        assert.equal(css.status, 200);
+        assert.match(css.headers['content-type'], /text\/css/);
+        assert.match((await request(port, '/judgepapers/')).text, /JUDGEPAPERS_INDEX/);
+
+        // The landing page gets the plain root CSP.
+        assert.equal((await request(port, '/')).headers['content-security-policy'], buildCsp(''));
+    } finally {
+        await close(server);
+        fs.rmSync(publicDir, { recursive: true, force: true });
+    }
+});
+
+test('/ shows the home page when DEV_FAKE_USER is set, or when the build has no landing page', async () => {
+    const withLanding = makePublicFixture();
+    addLanding(withLanding);
+    const bare = makePublicFixture();
+    const dev = await startRouter({ publicDir: withLanding, devFakeUser: 'dev@example.com' });
+    const plain = await startRouter({ publicDir: bare });
+    try {
+        assert.match((await request(dev.port, '/')).text, /ROOT_INDEX/);
+        assert.match((await request(plain.port, '/')).text, /ROOT_INDEX/);
+    } finally {
+        await close(dev.server);
+        await close(plain.server);
+        fs.rmSync(withLanding, { recursive: true, force: true });
+        fs.rmSync(bare, { recursive: true, force: true });
+    }
+});
+
+test('GET /signin redirects to the Easy Auth login with a same-origin return path', async () => {
+    const { server, port } = await startRouter();
+    try {
+        const root = await request(port, '/signin');
+        assert.equal(root.status, 302);
+        assert.equal(root.headers.location, '/.auth/login/aad?post_login_redirect_url=%2F');
+        assert.equal(root.headers['cache-control'], 'no-store');
+
+        const app = await request(port, '/signin?return=%2Fjudgepapers%2F%3Fx%3D1');
+        assert.equal(app.headers.location, '/.auth/login/aad?post_login_redirect_url=%2Fjudgepapers%2F%3Fx%3D1');
+
+        for (const evil of ['//evil.example', 'https%3A%2F%2Fevil.example', '%2F%5Cevil.example', '%2F%2Fevil', 'judgepapers', '%2Fa%0d%0aSet-Cookie:x']) {
+            const res = await request(port, `/signin?return=${evil}`);
+            assert.equal(res.headers.location, '/.auth/login/aad?post_login_redirect_url=%2F', evil);
+        }
+
+        const post = await request(port, '/signin', { method: 'POST' });
+        assert.equal(post.status, 405);
+    } finally {
+        await close(server);
+    }
+});
+
+test('/signin follows AUTH_LOGIN_PROVIDER', async () => {
+    assert.equal(loadConfig({}).loginProvider, 'aad');
+    const config = loadConfig({ AUTH_LOGIN_PROVIDER: 'externalid' });
+    assert.equal(config.loginProvider, 'externalid');
+    const { server, port } = await startRouter({ loginProvider: config.loginProvider });
+    try {
+        const res = await request(port, '/signin?return=%2Fscoremodifier%2F');
+        assert.equal(res.headers.location, '/.auth/login/externalid?post_login_redirect_url=%2Fscoremodifier%2F');
+    } finally {
+        await close(server);
+    }
+});
+
+test('safeReturnPath only lets same-origin paths through', () => {
+    assert.equal(safeReturnPath('/tools/gdpr/'), '/tools/gdpr/');
+    assert.equal(safeReturnPath('/'), '/');
+    for (const bad of [undefined, '', 'x', '//evil', '/\\evil', 'https://evil', '/a\nb', '/a\\b']) {
+        assert.equal(safeReturnPath(bad), '/', String(bad));
     }
 });
 

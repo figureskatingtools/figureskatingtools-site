@@ -20,6 +20,8 @@ site root/
 | 3 | `/changelog-live?branch=main\|test` | Merged, server-cached GitHub commit feed for the home page's "What's New" panel (see below). |
 | 4 | `/.auth`, `/.auth/*` | `404` — Easy Auth owns these at the platform level; the router must never swallow them into the SPA fallback. |
 | 4b | `/judgepapers/download?t=<token>` | `GET`/`HEAD` proxied to `$FUNCTION_APP_URL_JUDGEPAPERS/api/download_judge_papers?t=<token>` (other methods `405`). The judges'-papers link e-mailed to recipients who have no account: listed in Easy Auth `excludedPaths`, the backend checks the token and `302`s to a short-lived blob URL. |
+| 4c | `/signin[?return=/path]` | `302` → `/.auth/login/$AUTH_LOGIN_PROVIDER?post_login_redirect_url=<path>` (other methods `405`). Every "Sign in" link uses it (shared `loginUrl()`, the landing page), so a provider change (Entra External ID) is one app setting. `return` must be a same-origin path; anything else (`//host`, `https://…`, backslashes, control characters) becomes `/`. Listed in Easy Auth `excludedPaths`. |
+| 4d | `/`, `/index.html` | With an Easy Auth principal (or `DEV_FAKE_USER`): the home page as before. Without one: the static public landing page `public/landing/index.html` (`Vary: Cookie`; falls back to the home page if the build has none). Only decides which document is shown — the landing page has no JS bundle, so `/assets/*` stays behind sign-in. `/`, `/index.html`, `/landing/*`, `/favicon.png`, `/apple-touch-icon.png` and `/robots.txt` are Easy Auth `excludedPaths`. |
 | 5 | `/<tool>/api/*` | Proxied to that tool's Function App with the `/<tool>` prefix **stripped**: `/judgepapers/api/upload_file` → `$FUNCTION_APP_URL_JUDGEPAPERS/api/upload_file`. Backends keep their default `/api` route prefix — zero backend route changes. |
 | 5b | `/tools/gdpr/api/*` | Proxied to the GDPR removal tool's Function App (`fs-gdpr-tool`) with `/tools/gdpr` **stripped** (`SMALL_TOOL_APIS` in `server.js`). The page itself, `/tools/gdpr/`, is a plain static document. |
 | 6 | `/api/*` | Proxied to the platform Function App (competitions registry). |
@@ -109,6 +111,7 @@ the config object (tests override them).
 | `PROXY_SHARED_SECRET_GDPRTOOL` | prod | — | Sent as `x-proxy-secret` to the GDPR removal tool. |
 | `PROXY_SHARED_SECRET_PLATFORM` | prod | — | Sent as `x-proxy-secret` to the platform API. |
 | `NODE_ENV` | no | — | `production` hard-disables `DEV_FAKE_USER`. |
+| `AUTH_LOGIN_PROVIDER` | no | `aad` | Easy Auth provider segment `/signin` redirects to (`/.auth/login/<provider>`). |
 | `DEV_FAKE_USER` | no | — | **Non-production only.** Email returned by `/userinfo` (and forwarded to backends) when no Easy Auth headers are present. |
 
 Trailing slashes on the `FUNCTION_APP_URL_*` values are ignored. A secret left
