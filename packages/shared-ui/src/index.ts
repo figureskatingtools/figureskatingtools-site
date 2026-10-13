@@ -15,10 +15,13 @@ export {
   extendCompetition,
   extractCompetitionList,
   getActiveCompetition,
+  isGoneCompetitionError,
   isPlatformCompetition,
   listCompetitions,
   normalizeCompetitionCode,
   parseActiveCompetition,
+  platformErrorMessage,
+  readPlatformError,
   refreshActiveCompetition,
   retentionInfo,
   RETENTION_WARN_DAYS,
@@ -31,6 +34,7 @@ export {
 export type {
   NewCompetitionInput,
   PlatformCompetition,
+  PlatformErrorCode,
   RetentionInfo,
   UpdateCompetitionInput,
 } from './competition.js';

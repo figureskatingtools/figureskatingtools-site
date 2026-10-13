@@ -7,6 +7,10 @@ import {
     getActiveCompetition,
     subscribeActiveCompetition,
     refreshActiveCompetition,
+    clearActiveCompetition,
+    readPlatformError,
+    isGoneCompetitionError,
+    platformErrorMessage,
     competitionLabel,
     formatDateFi,
 } from '@figureskatingtools/shared-ui';
@@ -77,6 +81,7 @@ appElement.innerHTML = `
       <div id="pick-view" class="card reveal hidden" style="max-width: 860px; margin: 0 auto;">
         <span class="micro-label">Score Modifier</span>
         <h2 style="margin-bottom: 0.75rem;">No competition selected</h2>
+        <p id="pick-notice" class="status-error hidden" role="status"></p>
         <p class="lead">Choose or create a competition from the selector in the top bar —
           every tool works on the same selected competition, and what you generate here is
           kept with it and deleted together with its data.</p>
@@ -224,11 +229,31 @@ class NoCompetitionError extends Error {
     }
 }
 
-/** Readable text for a failed generate call */
-async function errorText(resp: Response): Promise<string> {
+/**
+ * Show a failed generate call readably. A competition that was deleted or no
+ * longer exists is dropped from the selection everywhere, and the pick card
+ * says why; other platform codes get the shared wording; anything else is the
+ * backend's own text.
+ */
+async function showFailure(resp: Response): Promise<void> {
     const text = (await resp.text()).trim();
-    if (text.includes('platform_id_required')) return 'Select a competition in the top bar first.';
-    return text || `Error ${resp.status}`;
+    const code = readPlatformError(resp.status, text);
+    const active = getActiveCompetition();
+    const label = active ? competitionLabel(active) : '';
+    if (isGoneCompetitionError(code)) {
+        showPickNotice(platformErrorMessage(code!, label));
+        clearActiveCompetition();   // → the pick card
+        return;
+    }
+    showError(code ? platformErrorMessage(code, label) : text || `Error ${resp.status}`);
+}
+
+/** One-off explanation on the pick card (cleared once a competition is chosen) */
+function showPickNotice(message: string | null) {
+    const el = document.getElementById('pick-notice');
+    if (!el) return;
+    el.textContent = message ?? '';
+    el.classList.toggle('hidden', !message);
 }
 
 async function runPerSkater() {
@@ -241,7 +266,7 @@ async function runPerSkater() {
         body: selectedFile,
     });
     if (!resp.ok) {
-        showError(await errorText(resp));
+        await showFailure(resp);
         return;
     }
     const data: GenerateResult = await resp.json();
@@ -279,7 +304,7 @@ async function runResults() {
         body: selectedFile,
     });
     if (!resp.ok) {
-        showError(await errorText(resp));
+        await showFailure(resp);
         return;
     }
     const data: GenerateResult = await resp.json();
@@ -485,7 +510,10 @@ function showForActiveCompetition() {
     const active = getActiveCompetition();
     document.getElementById('pick-view')!.classList.toggle('hidden', Boolean(active));
     document.getElementById('tool-view')!.classList.toggle('hidden', !active);
-    if (active) prefillFromActiveCompetition();
+    if (active) {
+        showPickNotice(null);
+        prefillFromActiveCompetition();
+    }
 }
 
 init();

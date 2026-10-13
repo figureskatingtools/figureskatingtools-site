@@ -527,6 +527,68 @@ export async function extendCompetition(id: string): Promise<PlatformCompetition
   return extended;
 }
 
+/* ════════════════════════════════════════════════════════════════
+   Tool backend errors about the platform competition
+   ════════════════════════════════════════════════════════════════ */
+
+/**
+ * Machine codes the tool backends answer when the platform competition behind
+ * a request is the problem (they read the platform's clock row directly).
+ */
+export type PlatformErrorCode =
+  | 'platform_id_required'
+  | 'platform_not_found'
+  | 'platform_deleted'
+  | 'platform_unavailable';
+
+const PLATFORM_ERROR_STATUS: Record<PlatformErrorCode, number> = {
+  platform_id_required: 400,
+  platform_not_found: 404,
+  platform_deleted: 410,
+  platform_unavailable: 503,
+};
+
+/**
+ * Recognise one of those codes in a failed tool response. Tools answer either
+ * a plain-text body that starts with the code (Judge Papers, Score Modifier)
+ * or JSON `{"error": "<code>"}` (Protocol Generator); the HTTP status must
+ * match too, so free text that merely mentions a code is not misread.
+ */
+export function readPlatformError(status: number, body: string): PlatformErrorCode | null {
+  const text = String(body ?? '').trim();
+  let code = '';
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed.error === 'string') code = parsed.error;
+  } catch (_e) {
+    code = text.split(/[^a-z_]/, 1)[0];
+  }
+  if (!(code in PLATFORM_ERROR_STATUS)) return null;
+  const known = code as PlatformErrorCode;
+  return PLATFORM_ERROR_STATUS[known] === status ? known : null;
+}
+
+/** True for the codes after which the selection should be dropped */
+export function isGoneCompetitionError(code: PlatformErrorCode | null): boolean {
+  return code === 'platform_deleted' || code === 'platform_not_found';
+}
+
+/** The one wording every tool shows for these codes */
+export function platformErrorMessage(code: PlatformErrorCode, label = ''): string {
+  const name = label.trim() ? `“${label.trim()}”` : 'The selected competition';
+  switch (code) {
+    case 'platform_deleted':
+      return `${name} has been deleted, together with its data. ` +
+        'Choose or create another competition in the top bar.';
+    case 'platform_not_found':
+      return `${name} no longer exists. Choose or create another competition in the top bar.`;
+    case 'platform_unavailable':
+      return "The competition registry can't be reached right now, try again shortly.";
+    case 'platform_id_required':
+      return 'Select a competition in the top bar first.';
+  }
+}
+
 /**
  * Re-read the active competition from the registry on app init: keeps a
  * renamed competition current and drops one that has been deleted.

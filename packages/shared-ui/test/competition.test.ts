@@ -20,7 +20,10 @@ import {
   getActiveCompetition,
   isPlatformCompetition,
   normalizeCompetitionCode,
+  isGoneCompetitionError,
   parseActiveCompetition,
+  platformErrorMessage,
+  readPlatformError,
   retentionInfo,
   serializeActiveCompetition,
   setActiveCompetition,
@@ -525,5 +528,44 @@ describe('retentionInfo', () => {
 
   it('uses the UTC calendar day of the deletion instant', () => {
     expect(retentionInfo('2026-12-31T00:00:00Z', '', NOW)?.day).toBe('2026-12-31');
+  });
+});
+
+describe('platform errors from the tool backends', () => {
+  it('reads plain-text and JSON bodies', () => {
+    expect(readPlatformError(410, 'platform_deleted')).toBe('platform_deleted');
+    expect(readPlatformError(410, 'platform_deleted: competition was purged')).toBe('platform_deleted');
+    expect(readPlatformError(410, '{"error":"platform_deleted"}')).toBe('platform_deleted');
+    expect(readPlatformError(404, '{"error": "platform_not_found", "message": "x"}')).toBe('platform_not_found');
+    expect(readPlatformError(404, 'platform_not_found')).toBe('platform_not_found');
+    expect(readPlatformError(503, ' platform_unavailable\n')).toBe('platform_unavailable');
+    expect(readPlatformError(400, 'platform_id_required')).toBe('platform_id_required');
+  });
+
+  it('ignores other codes, free text and a status that does not match', () => {
+    expect(readPlatformError(404, 'Competition not found')).toBeNull();
+    expect(readPlatformError(404, '{"error":"not_found"}')).toBeNull();
+    expect(readPlatformError(500, 'platform_deleted')).toBeNull();
+    expect(readPlatformError(410, 'the platform_deleted flag')).toBeNull();
+    expect(readPlatformError(410, '')).toBeNull();
+  });
+
+  it('marks deleted and not-found as gone', () => {
+    expect(isGoneCompetitionError('platform_deleted')).toBe(true);
+    expect(isGoneCompetitionError('platform_not_found')).toBe(true);
+    expect(isGoneCompetitionError('platform_unavailable')).toBe(false);
+    expect(isGoneCompetitionError(null)).toBe(false);
+  });
+
+  it('words every code readably', () => {
+    expect(platformErrorMessage('platform_deleted', 'Winter Cup')).toBe(
+      '“Winter Cup” has been deleted, together with its data. '
+      + 'Choose or create another competition in the top bar.'
+    );
+    expect(platformErrorMessage('platform_not_found')).toMatch(/^The selected competition no longer exists/);
+    expect(platformErrorMessage('platform_unavailable')).toBe(
+      "The competition registry can't be reached right now, try again shortly."
+    );
+    expect(platformErrorMessage('platform_id_required')).toBe('Select a competition in the top bar first.');
   });
 });

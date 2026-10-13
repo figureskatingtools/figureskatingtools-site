@@ -8,6 +8,9 @@ import {
   setActiveCompetition,
   clearActiveCompetition,
   refreshActiveCompetition,
+  readPlatformError,
+  isGoneCompetitionError,
+  platformErrorMessage,
   extendCompetition,
   retentionInfo,
   openEditCompetitionDialog,
@@ -64,22 +67,8 @@ let boundLabel: string | null = null;
 /** Guards against an out-of-order resolve when the selection changes mid-flight. */
 let bindToken = 0;
 let details: CompetitionDetails | null = null;
-/** Label of a competition the platform has deleted — shown once on the pick card */
+/** Why the selection was dropped (deleted / no longer exists) — shown once on the pick card */
 let deletedNotice: string | null = null;
-
-/**
- * `resolve_competition` answers 410 `{"error": "platform_deleted"}` when the
- * platform competition was deleted (its data is gone or about to be).
- */
-function isPlatformDeleted(status: number, body: string): boolean {
-  if (status !== 410) return false;
-  if (body.startsWith('platform_deleted')) return true;
-  try {
-    return JSON.parse(body)?.error === 'platform_deleted';
-  } catch {
-    return false;
-  }
-}
 /** Files in the platform competition pool; null = unbound or pool unavailable. */
 let poolFiles: PoolFile[] | null = null;
 /** Set once the pool proves unusable for this competition (unbound, off, down). */
@@ -188,8 +177,7 @@ function showPickCompetition() {
   renderBindCard(`
     <span class="micro-label">Protocol Generator</span>
     <h2 style="margin-bottom: 0.75rem;">No competition selected</h2>
-    ${deletedNotice ? `<p class="bind-lead text-error" role="status">“${escapeHtml(deletedNotice)}” has been deleted,
-      together with its data. Choose or create another competition in the top bar.</p>` : ''}
+    ${deletedNotice ? `<p class="bind-lead text-error" role="status">${escapeHtml(deletedNotice)}</p>` : ''}
     <p class="bind-lead">Choose or create a competition from the selector in the top bar —
       every tool works on the same selected competition.</p>
     <ol class="howto-list">
@@ -290,16 +278,19 @@ async function bindActiveCompetition(force = false): Promise<void> {
     });
     if (!resp.ok) {
       const text = (await resp.text()).trim();
-      if (isPlatformDeleted(resp.status, text)) {
+      const code = readPlatformError(resp.status, text);
+      if (isGoneCompetitionError(code)) {
         if (token !== bindToken) return;
-        // Deleted elsewhere (another user, or the nightly clean-up): drop the
-        // stale selection everywhere and say why, instead of a raw error.
+        // Deleted or gone elsewhere (another user, or the nightly clean-up): drop
+        // the stale selection everywhere and say why, instead of a raw error.
         boundPlatformId = null;
         boundLabel = null;
-        deletedNotice = label;
+        deletedNotice = platformErrorMessage(code!, label);
         clearActiveCompetition();   // re-binds → the pick card with the notice
         return;
       }
+      // platform_unavailable etc.: a readable message with the Retry button
+      if (code) throw new Error(platformErrorMessage(code, label));
       throw new Error(text || `The tool API returned ${resp.status}.`);
     }
     const data = await resp.json() as { id?: string; name?: string };
