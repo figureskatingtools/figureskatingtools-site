@@ -47,6 +47,7 @@ after teardown (step 7).
 | `TOOL_PRINCIPAL_ID_PROTOCOLGENERATOR` | ditto | **new**, optional at first |
 | `SKIP_CUSTOM_DOMAIN` | `true` during step 3, unset/empty afterwards | **new** |
 | `HOVTP_ENABLED` | `false` to kill the HOVTP listener, unset/empty for the environment default | **new**, optional (test defaults on, prod off) |
+| `RETENTION_PURGE_ENABLED` | `true` = the platform `retention_sweep` deletes expired competitions; anything else = dry-run logs only | **new**, optional (test defaults on, prod off until the dry-run logs have been read) |
 
 The URLs and principal ids come from each tool repo's own deployment:
 
@@ -58,6 +59,10 @@ az functionapp show -g <tool-rg> -n <func-app> \
 `TOOL_PRINCIPAL_ID_*` may be left unset on the first deploys —
 `shared-data-access.bicep` filters empty entries, so the role assignments simply
 aren't created yet. Fill them in and re-run once the tool repos are reduced.
+Each principal gets **Storage Blob Data Reader on the `competition-data`
+container** (the file pool) and **Storage Table Data Reader on the
+`competitions` table** (the platform retention clock the tools follow) — see
+§2d for removing the older account-scoped grant.
 
 `RESOURCE_GROUP_NAME` / `CUSTOM_DOMAIN` are **not** used by this repo; both live
 in `infra/parameters/<env>.bicepparam`.
@@ -265,6 +270,36 @@ confirm it lands in `competition-data/<guid>/fsm-pending/<ip>/`. A
 `451 unknown competition code` for a competition that plainly exists means
 `COMPETITION_DATA_ACCOUNT` is not reaching the app and it is talking to its own
 empty host account.
+
+### d. Tool Function Apps — narrow the old account-scoped blob grant
+
+**Required once per environment, after the deploy that makes
+`shared-data-access.bicep` container-/table-scoped.** The tools used to get
+`Storage Blob Data Reader` on the **whole** platform account — which includes
+`app-package`, the platform Function App's deployment zip. The deploy adds the
+narrow grants but, being incremental, leaves the old one alive. For each
+`TOOL_PRINCIPAL_ID_*` value:
+
+```bash
+PLATFORM_ID=$(az storage account show -g rg-fs-site-<env> \
+  -n <stfsplat-account> --query id -o tsv)
+
+az role assignment delete --assignee "<tool principal id>" --scope "$PLATFORM_ID" \
+  --role "Storage Blob Data Reader"
+```
+
+**Acceptance check** — each tool principal has exactly these two rows on the
+platform account and nothing scoped to the account itself:
+
+```bash
+az role assignment list --assignee "<tool principal id>" --all \
+  --query "[?contains(scope, '<stfsplat-account>')].{role:roleDefinitionName, scope:scope}" -o table
+```
+
+| Role                       | Scope |
+| -------------------------- | ----- |
+| Storage Blob Data Reader   | `.../storageAccounts/<stfsplat-account>/blobServices/default/containers/competition-data` |
+| Storage Table Data Reader  | `.../storageAccounts/<stfsplat-account>/tableServices/default/tables/competitions` |
 
 ---
 

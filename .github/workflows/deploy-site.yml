@@ -134,6 +134,10 @@ jobs:
           # 'false' keeps the app deployed but makes it answer 503. Unset means
           # the per-environment default in the bicepparam (test on, prod off).
           HOVTP_ENABLED: ${{ vars.HOVTP_ENABLED }}
+          # Platform retention sweep: 'true' purges competitions past their
+          # deletion date, anything else is dry-run. Unset means the
+          # per-environment default in the bicepparam (test purges, prod dry-run).
+          RETENTION_PURGE_ENABLED: ${{ vars.RETENTION_PURGE_ENABLED }}
           # Easy Auth provider for the router's /signin (AUTH_LOGIN_PROVIDER app
           # setting). Unset means aad.
           AUTH_LOGIN_PROVIDER: ${{ vars.AUTH_LOGIN_PROVIDER }}
@@ -178,7 +182,8 @@ jobs:
             echo "$OUTPUT" | jq -r '.dnsNameServers.value[]'
             echo '```'
             echo "Apex A record target (Web App inbound IP): \`$(echo "$OUTPUT" | jq -r '.webAppInboundIpAddress.value')\`"
-            echo "Tool Function App principals granted read on competition-data: $(echo "$OUTPUT" | jq -r '.toolPrincipalsGranted.value')"
+            echo "Tool Function App principals granted read on competition-data + the competitions table: $(echo "$OUTPUT" | jq -r '.toolPrincipalsGranted.value')"
+            echo "Retention purge enabled: $(echo "$OUTPUT" | jq -r '.retentionPurgeEnabled.value')"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Easy Auth uses a federated managed identity instead of a client secret,

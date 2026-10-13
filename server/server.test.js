@@ -304,6 +304,33 @@ test('each tool gets its own secret and /api/* goes to the platform backend', as
     }
 });
 
+test('POST /api/competitions/{id}/extend reaches the platform backend with its secret and the user', async () => {
+    const upstream = await startUpstream((req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end('{"id":"x","deletionDate":"2026-12-19T00:00:00Z"}');
+    });
+    const { server, port } = await startRouter({
+        targets: targets({ platform: { url: upstream.url, secret: 'platform-secret' } }),
+    });
+    try {
+        const res = await request(port, '/api/competitions/x/extend', {
+            method: 'POST',
+            headers: { 'x-ms-client-principal': principalHeader(PRINCIPAL) },
+        });
+
+        assert.equal(res.status, 200);
+        assert.equal(json(res).deletionDate, '2026-12-19T00:00:00Z');
+        const seen = upstream.received[0];
+        assert.equal(seen.url, '/api/competitions/x/extend');
+        assert.equal(seen.method, 'POST');
+        assert.equal(seen.headers['x-proxy-secret'], 'platform-secret');
+        assert.equal(seen.headers['x-forwarded-user-email'], 'skater@example.com');
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
 test('/tools/gdpr/api/* goes to the GDPR tool backend with its own secret and prefix stripped', async () => {
     const upstream = await startUpstream((req, res) => {
         res.writeHead(200, { 'Content-Type': 'application/json' });

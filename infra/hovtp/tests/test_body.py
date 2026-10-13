@@ -168,3 +168,47 @@ def test_a_deleted_competition_is_451(table, blobs):
     assert response.status_code == 451
     assert head(response, "X-HOVTP-Error-Reason") == f"competition {COMPETITION_CODE} is deleted"
     assert blobs.blobs == {}
+
+
+def test_a_purged_competition_is_451(table, blobs):
+    # The platform's retention sweep leaves a tombstone and releases the CODE
+    # row; a CODE row it failed to release must not resurrect the competition.
+    table.rows[(fa.PK_COMPETITION, COMPETITION_ID)] = {
+        "PartitionKey": fa.PK_COMPETITION, "RowKey": COMPETITION_ID,
+        "Code": COMPETITION_CODE, "Name": "Youth League Helsinki",
+        "Status": fa.STATUS_DELETED, "DeletionDate": "2026-01-01T00:00:00Z",
+        "PurgedUtc": "2026-01-01T03:00:00Z",
+    }
+
+    response = _post()
+
+    assert response.status_code == 451
+    assert blobs.blobs == {}
+    assert table.rows_in(fa.PK_HOVTP_SOURCE) == {}
+
+    del table.rows[(fa.PK_CODE, COMPETITION_CODE)]
+    response = _post()
+
+    assert response.status_code == 451
+    assert head(response, "X-HOVTP-Error-Reason") == \
+        f"unknown competition code {COMPETITION_CODE}"
+    assert blobs.blobs == {}
+
+
+def test_a_competition_past_its_deletion_date_is_451_before_the_sweep(table, blobs):
+    table.rows[(fa.PK_COMPETITION, COMPETITION_ID)]["DeletionDate"] = "2026-01-01T00:00:00Z"
+
+    response = _post()
+
+    assert response.status_code == 451
+    assert head(response, "X-HOVTP-Error-Reason") == \
+        f"competition {COMPETITION_CODE} is past its deletion date"
+    assert blobs.blobs == {}
+
+
+def test_a_future_or_missing_deletion_date_does_not_block(table, blobs):
+    table.rows[(fa.PK_COMPETITION, COMPETITION_ID)]["DeletionDate"] = "2099-01-01T00:00:00Z"
+    assert _post().status_code == 200
+
+    table.rows[(fa.PK_COMPETITION, COMPETITION_ID)]["DeletionDate"] = "not a date"
+    assert _post().status_code == 200

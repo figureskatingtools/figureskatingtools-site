@@ -19,6 +19,12 @@ param dataContainerName string = 'competition-data'
 @secure()
 param proxySharedSecret string = ''
 
+// The nightly retention_sweep only DELETES when this is true; false = dry-run
+// (it still backfills DeletionDate and logs what it would purge). Bicep-owned
+// like HOVTP_ENABLED, so it survives redeploys.
+@description('true = retention_sweep purges expired competitions; false = dry-run logging only.')
+param retentionPurgeEnabled bool = false
+
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: appServicePlanName
   location: location
@@ -37,6 +43,8 @@ resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   kind: 'web'
   properties: {
     Application_Type: 'web'
+    // The privacy notice promises technical logs are kept at most 30 days.
+    RetentionInDays: 30
   }
 }
 
@@ -77,6 +85,10 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'COMPETITION_DATA_CONTAINER'
           value: dataContainerName
+        }
+        {
+          name: 'RETENTION_PURGE_ENABLED'
+          value: string(retentionPurgeEnabled)
         }
       ]
     }

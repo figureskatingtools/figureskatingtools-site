@@ -19,7 +19,11 @@ literal URLs the router proxies to — and the URLs
     PUT    /api/competitions/{id}       -> 200 Competition | 404
     PATCH  /api/competitions/{id}       -> 200 Competition | 404 | 409
     DELETE /api/competitions/{id}       -> 200 Competition (status "deleted") | 404
+    POST   /api/competitions/{id}/extend -> 200 Competition (deletionDate + 7 days) | 404
     GET    /api/health                  -> 200 {"status": "ok"}
+
+    timer  retention_sweep (03:00 UTC)  -> purges every competition past its
+                                           deletionDate (see "Retention" below)
 
     GET    /api/competitions/{id}/files          -> 200 {"files": [FileInfo, ...]}
     POST   /api/competitions/{id}/files          -> 201 FileInfo
@@ -47,6 +51,7 @@ Competition JSON (both directions; server-owned fields are ignored on input):
       "createdBy": "user@example.com",
       "createdUtc":"2026-01-02T10:00:00Z",
       "updatedUtc":"2026-01-02T10:00:00Z",
+      "deletionDate":"2026-03-04T00:00:00Z",  server-owned, see "Retention"
       "status":    "active" | "deleted"
     }
 
@@ -106,6 +111,25 @@ shared `competition-data` container keyed by GUID:
     <guid>/fsm-pending/<ip>/...  quarantine for a source that is not accepted
                                  (yet); invisible to the file pool until an
                                  accept attaches it into <guid>/fsm/
+
+Retention — ONE clock for the whole platform. The COMPETITION row owns
+`DeletionDate` (midnight UTC of creation + RETENTION_DAYS); the tool Function
+Apps read that same row (PK "COMPETITION", columns `DeletionDate`, `Status`,
+`PurgedUtc` — keep the names, the tools' platform_clock.py depends on them) and
+delete their own linked records on the same night. The operator's only lever is
+POST …/extend (+EXTENSION_DAYS from max(current date, today), no cap). A manual
+DELETE pulls the date to the next midnight. The nightly `retention_sweep`:
+
+  1. backfills DeletionDate on rows that predate it (even in dry-run);
+  2. purges each expired row: Status=deleted, CODE row released (only if it
+     still points here), HOVTPSOURCE rows and every blob under `<guid>/`
+     deleted, then the row is replaced by a TOMBSTONE — no e-mail addresses,
+     PurgedUtc set — so the tools can tell "purged" from "never existed";
+  3. re-sweeps `<guid>/` for two days after a purge (in-flight HOVTP writes);
+  4. deletes HOVTPSESSION rows idle for HOVTP_SESSION_IDLE_DAYS.
+
+RETENTION_PURGE_ENABLED (app setting, Bicep-owned) must be "true" for steps
+2–4 to delete anything; otherwise they only log what they would do.
 """
 
 import base64
@@ -121,7 +145,12 @@ from uuid import uuid4
 from urllib.parse import quote
 
 import azure.functions as func
-from azure.core.exceptions import ResourceExistsError, ResourceNotFoundError
+from azure.core import MatchConditions
+from azure.core.exceptions import (
+    ResourceExistsError,
+    ResourceModifiedError,
+    ResourceNotFoundError,
+)
 from azure.data.tables import TableClient, UpdateMode
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient, ContentSettings
@@ -138,6 +167,27 @@ PK_HOVTP_SESSION = "HOVTPSESSION"
 
 STATUS_ACTIVE = "active"
 STATUS_DELETED = "deleted"
+
+# ── retention (one platform clock) ──
+RETENTION_DAYS = 60
+EXTENSION_DAYS = 7
+# Rows created before DeletionDate existed get max(created + 60 d, this floor):
+# no extension already granted in a tool may be cut short by the switch to the
+# platform clock. Fixed on purpose — see CLAUDE.md "Competition registry".
+LEGACY_DELETION_FLOOR = "2026-11-10T00:00:00Z"
+AUTO_CLEANUP_ACTOR = "auto-cleanup"
+DELETE_REASON_USER = "user"
+HOVTP_SESSION_IDLE_DAYS = 30
+# How long after a purge the sweep re-deletes `<guid>/`: a HOVTP push that had
+# already resolved the competition can still land a blob after the purge.
+RESWEEP_DAYS = 2
+EXTEND_RETRIES = 5
+_UTC_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
+# Columns a purged competition keeps — none of them is personal data.
+TOMBSTONE_COLUMNS = (
+    "Code", "Name", "StartDate", "EndDate", "Venue", "CreatedUtc", "DeletedUtc",
+    "DeleteReason", "DeletionDate", "ExtendedCount", "LastExtendedUtc",
+)
 
 MAX_NAME_LENGTH = 200
 MAX_CODE_LENGTH = 64
@@ -354,6 +404,48 @@ def _now_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _utc_text(moment: datetime) -> str:
+    return moment.astimezone(timezone.utc).strftime(_UTC_FORMAT)
+
+
+def _parse_utc(value) -> datetime | None:
+    """'2026-01-02T10:00:00Z' (or any ISO timestamp) -> aware datetime, else None."""
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _midnight(moment: datetime) -> datetime:
+    """00:00 UTC of the moment's UTC calendar day."""
+    moment = moment.astimezone(timezone.utc)
+    return datetime(moment.year, moment.month, moment.day, tzinfo=timezone.utc)
+
+
+def _initial_deletion_date(created: datetime) -> datetime:
+    """Midnight UTC of (creation day + RETENTION_DAYS)."""
+    return _midnight(created) + timedelta(days=RETENTION_DAYS)
+
+
+def _effective_deletion_date(entity) -> datetime:
+    """The row's DeletionDate, or — for a row that predates the column —
+    max(created + RETENTION_DAYS, LEGACY_DELETION_FLOOR)."""
+    stored = _parse_utc(entity.get("DeletionDate"))
+    if stored is not None:
+        return stored
+    floor = _parse_utc(LEGACY_DELETION_FLOOR)
+    created = _parse_utc(entity.get("CreatedUtc"))
+    if created is None:
+        return floor
+    return max(_initial_deletion_date(created), floor)
+
+
 def normalize_code(value: str) -> str:
     """
     Slugify a competition code into something that is both human-typable and a
@@ -406,6 +498,7 @@ def entity_to_competition(entity) -> dict:
         "createdBy": entity.get("CreatedBy", ""),
         "createdUtc": entity.get("CreatedUtc", ""),
         "updatedUtc": entity.get("UpdatedUtc", ""),
+        "deletionDate": _utc_text(_effective_deletion_date(entity)),
         "status": entity.get("Status", STATUS_ACTIVE),
     }
 
@@ -437,6 +530,42 @@ def _get_competition_entity(table_client, competition_id: str):
         return table_client.get_entity(partition_key=PK_COMPETITION, row_key=competition_id)
     except ResourceNotFoundError:
         return None
+
+
+def _release_code_row(table_client, code: str, competition_id: str) -> bool:
+    """Free a code — but only while its CODE row still points at this
+    competition: after a delete the code may already be reused, and that new
+    owner's reservation must survive. -> False when storage failed (retry)."""
+    if not code:
+        return True
+    try:
+        row = table_client.get_entity(partition_key=PK_CODE, row_key=code)
+    except ResourceNotFoundError:
+        return True
+    except Exception as e:
+        logging.warning(f"Could not read CODE row '{code}': {e}")
+        return False
+    if (row.get("CompetitionId") or "") != competition_id:
+        return True
+    try:
+        table_client.delete_entity(
+            partition_key=PK_CODE, row_key=code,
+            etag=_entity_etag(row), match_condition=MatchConditions.IfNotModified,
+        )
+    except ResourceNotFoundError:
+        pass
+    except ResourceModifiedError:
+        # Re-claimed between the read and the delete — not ours any more.
+        pass
+    except Exception as e:
+        logging.warning(f"Could not release CODE row '{code}': {e}")
+        return False
+    return True
+
+
+def _entity_etag(entity):
+    metadata = getattr(entity, "metadata", None) or {}
+    return metadata.get("etag")
 
 
 def _delete_code_row(table_client, code: str) -> None:
@@ -865,6 +994,8 @@ def _create_competition(req: func.HttpRequest) -> func.HttpResponse:
         "CreatedUtc": now,
         "UpdatedUtc": now,
         "Status": STATUS_ACTIVE,
+        "DeletionDate": _utc_text(_initial_deletion_date(_parse_utc(now))),
+        "ExtendedCount": 0,
     }
     try:
         table_client.create_entity(entity)
@@ -1000,9 +1131,10 @@ def _update_competition(req: func.HttpRequest) -> func.HttpResponse:
 
 def _delete_competition(req: func.HttpRequest) -> func.HttpResponse:
     """
-    Soft delete: the row survives (history, and any tool that stored the GUID
-    keeps resolving it) but drops out of the list. The CODE row IS removed so
-    the code can be reused — a deleted competition must not squat on it.
+    Soft delete now, purge tonight: the row drops out of the list and its CODE
+    row is freed for reuse at once, and DeletionDate is pulled forward to the
+    next midnight so the nightly sweep purges the data (and the tools follow)
+    that same night. Who deleted it is NOT recorded — only that a user did.
     """
     email = get_user_email_from_header(req)
     if not email:
@@ -1029,11 +1161,15 @@ def _delete_competition(req: func.HttpRequest) -> func.HttpResponse:
         # Idempotent: deleting twice is not an error.
         return _json(entity_to_competition(entity))
 
+    now = datetime.now(timezone.utc)
+    next_midnight = _midnight(now) + timedelta(days=1)
     updates = {
         "Status": STATUS_DELETED,
-        "DeletedBy": email,
-        "DeletedUtc": _now_utc(),
-        "UpdatedUtc": _now_utc(),
+        "DeleteReason": DELETE_REASON_USER,
+        "DeletedUtc": _utc_text(now),
+        "UpdatedUtc": _utc_text(now),
+        # Only ever pulled forward — never later than the date already set.
+        "DeletionDate": _utc_text(min(_effective_deletion_date(entity), next_midnight)),
     }
 
     try:
@@ -1045,11 +1181,77 @@ def _delete_competition(req: func.HttpRequest) -> func.HttpResponse:
         logging.error(f"Error deleting competition '{competition_id}': {e}")
         return _error("internal_error", "Could not delete the competition.", 500)
 
-    _delete_code_row(table_client, entity.get("Code", ""))
+    # Best-effort here: a CODE row left behind is released by the sweep.
+    _release_code_row(table_client, entity.get("Code", ""), competition_id)
 
     merged = dict(entity)
     merged.update(updates)
     return _json(entity_to_competition(merged))
+
+
+def _extend_competition(req: func.HttpRequest) -> func.HttpResponse:
+    """
+    POST /api/competitions/{id}/extend — push the deletion date out by
+    EXTENSION_DAYS, counted from the current date or from today when that has
+    already passed (an overdue row the sweep has not reached yet). No cap: the
+    operator presses it once per extra week they need.
+
+    Optimistic concurrency: the write only lands on the row version it was
+    computed from, so two simultaneous presses add two weeks, not one. Who
+    extended is deliberately not stored — only how often and when.
+    """
+    email = get_user_email_from_header(req)
+    if not email:
+        return _error("unauthorized", "Sign-in required.", 401)
+
+    competition_id = req.route_params.get("id")
+    if not competition_id:
+        return _error("invalid_id", "A competition id is required.", 400)
+
+    table_client = get_table_client()
+    if not table_client:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    for attempt in range(EXTEND_RETRIES):
+        try:
+            entity = _get_competition_entity(table_client, competition_id)
+        except Exception as e:
+            logging.error(f"Error reading competition '{competition_id}': {e}")
+            return _error("internal_error", "Could not read the competition.", 500)
+
+        if entity is None or entity.get("Status") == STATUS_DELETED:
+            return _error("not_found", "Competition not found.", 404)
+
+        now = datetime.now(timezone.utc)
+        base = max(_effective_deletion_date(entity), _midnight(now))
+        updates = {
+            "DeletionDate": _utc_text(base + timedelta(days=EXTENSION_DAYS)),
+            "ExtendedCount": _int_column(entity, "ExtendedCount") + 1,
+            "LastExtendedUtc": _utc_text(now),
+            "UpdatedUtc": _utc_text(now),
+        }
+        try:
+            table_client.update_entity(
+                {"PartitionKey": PK_COMPETITION, "RowKey": competition_id, **updates},
+                mode=UpdateMode.MERGE,
+                etag=_entity_etag(entity),
+                match_condition=MatchConditions.IfNotModified,
+            )
+        except ResourceModifiedError:
+            logging.info(f"Competition '{competition_id}' changed during extend "
+                         f"(attempt {attempt + 1}/{EXTEND_RETRIES}); retrying")
+            continue
+        except ResourceNotFoundError:
+            return _error("not_found", "Competition not found.", 404)
+        except Exception as e:
+            logging.error(f"Error extending competition '{competition_id}': {e}")
+            return _error("internal_error", "Could not extend the deletion date.", 500)
+
+        merged = dict(entity)
+        merged.update(updates)
+        return _json(entity_to_competition(merged))
+
+    return _error("conflict", "The competition kept changing; please try again.", 409)
 
 
 # ── file pool handlers ────────────────────────────────────────────────────────
@@ -1427,6 +1629,250 @@ def _deny_hovtp_source(req: func.HttpRequest) -> func.HttpResponse:
     return _json({"source": _source_to_json(merged, _now_utc()), "deleted": deleted})
 
 
+# ── retention sweep ───────────────────────────────────────────────────────────
+# One clock: everything a competition owns on the platform — its pool blobs,
+# FSM pushes and quarantine, its HOVTP trust rows and its e-mail addresses — is
+# removed the night its DeletionDate passes. The tool Function Apps read the
+# same row and delete their own linked records on the same schedule.
+
+def _purge_enabled() -> bool:
+    return (os.environ.get("RETENTION_PURGE_ENABLED") or "").strip().lower() in ("1", "true", "yes")
+
+
+def _delete_competition_blobs(container, competition_id: str) -> tuple[int, bool]:
+    """Delete every blob under `<guid>/`. -> (deleted, all succeeded).
+
+    The trailing slash is the boundary: `<guid>` alone would also match a
+    longer name that merely starts with the same characters.
+    """
+    prefix = f"{competition_id}/"
+    deleted = 0
+    ok = True
+    try:
+        names = [blob.name for blob in container.list_blobs(name_starts_with=prefix)]
+    except Exception as e:
+        logging.error(f"Retention: could not list blobs under '{prefix}': {e}")
+        return 0, False
+    for name in names:
+        if not name.startswith(prefix):
+            continue
+        try:
+            container.get_blob_client(name).delete_blob()
+            deleted += 1
+        except ResourceNotFoundError:
+            pass
+        except Exception as e:
+            logging.error(f"Retention: could not delete blob '{name}': {e}")
+            ok = False
+    return deleted, ok
+
+
+def _delete_hovtp_sources(table_client, competition_id: str) -> tuple[int, bool]:
+    """Delete the competition's HOVTPSOURCE rows (IPs, acceptedBy e-mails)."""
+    deleted = 0
+    ok = True
+    try:
+        rows = list(_list_hovtp_source_entities(table_client, competition_id))
+    except Exception as e:
+        logging.error(f"Retention: could not list HOVTP sources of '{competition_id}': {e}")
+        return 0, False
+    for row in rows:
+        try:
+            table_client.delete_entity(partition_key=PK_HOVTP_SOURCE, row_key=row["RowKey"])
+            deleted += 1
+        except ResourceNotFoundError:
+            pass
+        except Exception as e:
+            logging.error(f"Retention: could not delete HOVTP source '{row.get('RowKey')}': {e}")
+            ok = False
+    return deleted, ok
+
+
+def _tombstone(entity, now_text: str) -> dict:
+    """What survives a purge: the competition's identity and timeline, no
+    personal data (no CreatedBy/DeletedBy/any e-mail)."""
+    stone = {"PartitionKey": PK_COMPETITION, "RowKey": entity["RowKey"]}
+    for column in TOMBSTONE_COLUMNS:
+        if column in entity and entity.get(column) is not None:
+            stone[column] = entity.get(column)
+    stone["Status"] = STATUS_DELETED
+    stone["UpdatedUtc"] = now_text
+    stone["PurgedUtc"] = now_text
+    return stone
+
+
+def _purge_competition(table_client, container, entity, now: datetime) -> bool:
+    """Purge one expired competition. -> True once the tombstone is written.
+
+    Every step is idempotent, and the tombstone (PurgedUtc) is written last:
+    if any step fails the row stays un-purged and the next night retries all
+    of them.
+    """
+    competition_id = entity["RowKey"]
+    now_text = _utc_text(now)
+
+    # 1. Deleted first, so the HOVTP listener answers 451 and the API 404s an
+    #    extend from here on. Conditional: an extend that just landed wins and
+    #    the row is reconsidered tomorrow.
+    if entity.get("Status") != STATUS_DELETED:
+        updates = {
+            "Status": STATUS_DELETED,
+            "DeletedUtc": entity.get("DeletedUtc") or now_text,
+            "DeleteReason": entity.get("DeleteReason") or AUTO_CLEANUP_ACTOR,
+            "UpdatedUtc": now_text,
+        }
+        try:
+            table_client.update_entity(
+                {"PartitionKey": PK_COMPETITION, "RowKey": competition_id, **updates},
+                mode=UpdateMode.MERGE,
+                etag=_entity_etag(entity),
+                match_condition=MatchConditions.IfNotModified,
+            )
+        except ResourceModifiedError:
+            logging.info(f"Retention: '{competition_id}' changed during the sweep; "
+                         "reconsidered next night")
+            return False
+        except Exception as e:
+            logging.error(f"Retention: could not mark '{competition_id}' deleted: {e}")
+            return False
+
+    code_ok = _release_code_row(table_client, entity.get("Code", ""), competition_id)
+    _sources, sources_ok = _delete_hovtp_sources(table_client, competition_id)
+    if container is None:
+        blobs, blobs_ok = 0, False
+    else:
+        blobs, blobs_ok = _delete_competition_blobs(container, competition_id)
+    if not (code_ok and sources_ok and blobs_ok):
+        logging.error(f"Retention: purge of '{competition_id}' incomplete; retried next night")
+        return False
+
+    # 2. Tombstone — replace (not merge), so no e-mail column can survive.
+    try:
+        fresh = table_client.get_entity(partition_key=PK_COMPETITION, row_key=competition_id)
+        table_client.update_entity(
+            _tombstone(fresh, now_text),
+            mode=UpdateMode.REPLACE,
+            etag=_entity_etag(fresh),
+            match_condition=MatchConditions.IfNotModified,
+        )
+    except Exception as e:
+        logging.error(f"Retention: could not write the tombstone of '{competition_id}': {e}")
+        return False
+
+    logging.info(f"Retention: purged competition '{competition_id}' "
+                 f"(code '{entity.get('Code', '')}', {blobs} blob(s))")
+    return True
+
+
+def _session_last_activity(entity) -> datetime | None:
+    for column in ("UpdatedUtc", "CreatedUtc"):
+        moment = _parse_utc(entity.get(column))
+        if moment is not None:
+            return moment
+    metadata = getattr(entity, "metadata", None) or {}
+    return _parse_utc(metadata.get("timestamp"))
+
+
+def _run_retention_sweep(now: datetime, purge_enabled: bool) -> dict:
+    """The nightly retention pass. Returns counters (logged, and asserted on
+    by the tests). With purge disabled it still backfills DeletionDate but
+    deletes nothing — it only logs what it would have purged."""
+    summary = {"backfilled": 0, "purged": 0, "would_purge": 0, "failed": 0,
+               "resweeps": 0, "sessions_deleted": 0, "sessions_would_delete": 0}
+
+    table_client = get_table_client()
+    if not table_client:
+        logging.error("Retention: storage configuration invalid; sweep skipped")
+        return summary
+    container = _get_container_client()
+    if container is None and purge_enabled:
+        logging.error("Retention: blob storage unavailable; purges will be retried")
+
+    try:
+        entities = list(table_client.query_entities(f"PartitionKey eq '{PK_COMPETITION}'"))
+    except Exception as e:
+        logging.error(f"Retention: could not list competitions: {e}")
+        return summary
+
+    resweep_after = now - timedelta(days=RESWEEP_DAYS)
+
+    for entity in entities:
+        competition_id = entity.get("RowKey", "")
+        if not competition_id:
+            continue
+
+        # 1. Backfill — also in dry-run, so the date the UI shows is the one
+        #    that will apply.
+        if not _parse_utc(entity.get("DeletionDate")):
+            deletion = _utc_text(_effective_deletion_date(entity))
+            try:
+                table_client.update_entity(
+                    {"PartitionKey": PK_COMPETITION, "RowKey": competition_id,
+                     "DeletionDate": deletion},
+                    mode=UpdateMode.MERGE,
+                    etag=_entity_etag(entity),
+                    match_condition=MatchConditions.IfNotModified,
+                )
+                entity = table_client.get_entity(
+                    partition_key=PK_COMPETITION, row_key=competition_id)
+                summary["backfilled"] += 1
+            except ResourceModifiedError:
+                # Someone (an extend) wrote the row meanwhile; tomorrow's run sees it.
+                continue
+            except Exception as e:
+                logging.error(f"Retention: could not backfill '{competition_id}': {e}")
+                continue
+
+        purged_utc = _parse_utc(entity.get("PurgedUtc"))
+        if purged_utc is not None:
+            # 3. Re-sweep a fresh tombstone's prefix for late HOVTP writes.
+            if purged_utc >= resweep_after and purge_enabled and container is not None:
+                _delete_competition_blobs(container, competition_id)
+                _delete_hovtp_sources(table_client, competition_id)
+                summary["resweeps"] += 1
+            continue
+
+        if _effective_deletion_date(entity) > now:
+            continue
+
+        # 2. Expired.
+        if not purge_enabled:
+            logging.warning(f"Retention (dry-run): would purge competition '{competition_id}' "
+                            f"(code '{entity.get('Code', '')}', deletion date "
+                            f"{_utc_text(_effective_deletion_date(entity))})")
+            summary["would_purge"] += 1
+            continue
+        if _purge_competition(table_client, container, entity, now):
+            summary["purged"] += 1
+        else:
+            summary["failed"] += 1
+
+    # 4. HOVTP sessions belong to no competition; drop the idle ones.
+    idle_before = now - timedelta(days=HOVTP_SESSION_IDLE_DAYS)
+    try:
+        sessions = list(table_client.query_entities(f"PartitionKey eq '{PK_HOVTP_SESSION}'"))
+    except Exception as e:
+        logging.error(f"Retention: could not list HOVTP sessions: {e}")
+        sessions = []
+    for session in sessions:
+        last = _session_last_activity(session)
+        if last is None or last >= idle_before:
+            continue
+        if not purge_enabled:
+            summary["sessions_would_delete"] += 1
+            continue
+        try:
+            table_client.delete_entity(partition_key=PK_HOVTP_SESSION, row_key=session["RowKey"])
+            summary["sessions_deleted"] += 1
+        except ResourceNotFoundError:
+            pass
+        except Exception as e:
+            logging.error(f"Retention: could not delete HOVTP session '{session.get('RowKey')}': {e}")
+
+    logging.info(f"Retention sweep ({'purge' if purge_enabled else 'dry-run'}): {summary}")
+    return summary
+
+
 # ── HTTP routes ───────────────────────────────────────────────────────────────
 # The Functions host prepends the default `api` route prefix, so these register
 # as /api/competitions and /api/competitions/{id}.
@@ -1446,6 +1892,12 @@ def competition_by_id(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "DELETE":
         return _delete_competition(req)
     return _get_competition(req)
+
+
+@app.route(route="competitions/{id}/extend", auth_level=func.AuthLevel.ANONYMOUS,
+           methods=["POST"])
+def competition_extend(req: func.HttpRequest) -> func.HttpResponse:
+    return _extend_competition(req)
 
 
 @app.route(route="competitions/{id}/files", auth_level=func.AuthLevel.ANONYMOUS,
@@ -1493,6 +1945,14 @@ def competition_hovtp_source_by_ip(req: func.HttpRequest) -> func.HttpResponse:
 def health(req: func.HttpRequest) -> func.HttpResponse:
     """Liveness probe. Deliberately touches no storage and needs no identity."""
     return _json({"status": "ok", "service": "fs-platform"})
+
+
+# Same 03:00 UTC schedule as the tool Function Apps' own clean-up timers, so the
+# platform and every tool decide on the same night.
+@app.timer_trigger(schedule="0 0 3 * * *", arg_name="timer", run_on_startup=False,
+                   use_monitor=True)
+def retention_sweep(timer: func.TimerRequest) -> None:
+    _run_retention_sweep(datetime.now(timezone.utc), _purge_enabled())
 
 
 # The FSM ingest is NOT here: FSM pushes over HOVTP to its own Function App,

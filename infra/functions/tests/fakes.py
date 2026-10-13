@@ -58,6 +58,10 @@ class FakeTableClient:
         # Set to an exception instance to make the NEXT call blow up.
         self.fail_next_create: Exception | None = None
         self.fail_next_update: Exception | None = None
+        self.fail_next_delete: Exception | None = None
+        # Called with (client, key) right before an etag-conditional update is
+        # checked — lets a test slip a competing write in between read and write.
+        self.before_conditional_update = None
         self.calls: list[tuple] = []
         self._etag_seq = 0
 
@@ -99,6 +103,9 @@ class FakeTableClient:
             raise error
         if key not in self.rows:
             raise ResourceNotFoundError("entity not found")
+        if etag is not None and self.before_conditional_update is not None:
+            hook, self.before_conditional_update = self.before_conditional_update, None
+            hook(self, key)
         if etag is not None and match_condition in (MatchConditions.IfNotModified, None):
             if etag != self.etags.get(key):
                 raise ResourceModifiedError("etag mismatch")
@@ -119,11 +126,17 @@ class FakeTableClient:
         merged.update(entity)
         self._store(key, merged)
 
-    def delete_entity(self, partition_key, row_key):
+    def delete_entity(self, partition_key, row_key, etag=None, match_condition=None):
         key = (partition_key, row_key)
         self.calls.append(("delete_entity", key))
+        if self.fail_next_delete is not None:
+            error, self.fail_next_delete = self.fail_next_delete, None
+            raise error
         if key not in self.rows:
             raise ResourceNotFoundError("entity not found")
+        if etag is not None and match_condition in (MatchConditions.IfNotModified, None):
+            if etag != self.etags.get(key):
+                raise ResourceModifiedError("etag mismatch")
         del self.rows[key]
         self.etags.pop(key, None)
 
@@ -222,6 +235,10 @@ class FakeBlobClient:
 
     def delete_blob(self):
         self._container.calls.append(("delete_blob", self.blob_name))
+        if self._container.fail_next_delete is not None:
+            error = self._container.fail_next_delete
+            self._container.fail_next_delete = None
+            raise error
         self._blob()
         del self._container.blobs[self.blob_name]
 
@@ -235,6 +252,7 @@ class FakeContainerClient:
         self.calls: list[tuple] = []
         self.fail_next_upload: Exception | None = None
         self.fail_next_download: Exception | None = None
+        self.fail_next_delete: Exception | None = None
         # Distinct, increasing timestamps so ordering assertions are meaningful.
         self._clock = datetime(2026, 1, 2, 10, 0, 0, tzinfo=timezone.utc)
 
