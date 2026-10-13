@@ -340,19 +340,20 @@ az rest --method PUT --uri "<same-uri>" --body @auth.json
 
 ## 7. Teardown
 
-- [ ] Static Web Apps `swa-fs-site-test` + `swa-fs-site-prod`
-- [ ] tool Web Apps `app-fs-{judgepapers,scoremodifier,protocols}-*` and their
+- [x] Static Web Apps `swa-fs-site-test` + `swa-fs-site-prod`
+- [x] tool Web Apps `app-fs-{judgepapers,scoremodifier,protocols}-*` and their
       `asp-*-web` plans (both envs)
-- [ ] tool auth managed identities `mi-fs-*-auth-*`
+- [ ] tool auth managed identities `mi-fs-*-auth-*` (still present 2026-10-05:
+      judgepapers test+prod, protocols test, scoremodifier test+prod)
 - [ ] tool Entra app registrations + their federated credentials
-- [ ] DNS: `judgepapers` / `test.judgepapers` / `scoremodifier` /
+- [x] DNS: `judgepapers` / `test.judgepapers` / `scoremodifier` /
       `protocolgenerator` CNAMEs + matching `asuid.*` TXT records
 - [ ] rotate all four `PROXY_SHARED_SECRET_*` values (site repo secret +
       the Function App setting in each tool repo, in that order)
-- [ ] delete `frontend/` from the three tool repos
-- [ ] mark `packages/shared-ui` private, drop `publishConfig`, retire
+- [x] delete `frontend/` from the three tool repos
+- [x] mark `packages/shared-ui` private, drop `publishConfig`, retire
       `publish-shared-ui.yml`
-- [ ] delete `site/public/staticwebapp.config.json`
+- [x] delete `site/public/staticwebapp.config.json`
 - [ ] `rg-fs-dns` is **shared and persistent** — never torn down with an env
 
 Nothing is migrated data-wise. The per-tool competition tables keep their legacy
