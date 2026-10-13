@@ -112,7 +112,7 @@ the config object (tests override them).
 | `PROXY_SHARED_SECRET_GDPRTOOL` | prod | — | Sent as `x-proxy-secret` to the GDPR removal tool. |
 | `PROXY_SHARED_SECRET_PLATFORM` | prod | — | Sent as `x-proxy-secret` to the platform API. |
 | `NODE_ENV` | no | — | `production` hard-disables `DEV_FAKE_USER`. |
-| `AUTH_LOGIN_PROVIDER` | no | `aad` | Easy Auth provider segment `/signin` redirects to (`/.auth/login/<provider>`). |
+| `AUTH_LOGIN_PROVIDER` | no | `aad` | Easy Auth provider segment `/signin` redirects to (`/.auth/login/<provider>`). Bicep-owned: set the GitHub environment variable `AUTH_LOGIN_PROVIDER`, never the app setting by hand (infra deploys replace all app settings). |
 | `DEV_FAKE_USER` | no | — | **Non-production only.** Email returned by `/userinfo` (and forwarded to backends) when no Easy Auth headers are present. |
 
 Trailing slashes on the `FUNCTION_APP_URL_*` values are ignored. A secret left

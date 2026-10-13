@@ -54,7 +54,11 @@ h1, h2, h3, p { margin: 0; }
 }
 .skip-link:focus { top: 16px; }
 
-:focus-visible { outline: 3px solid var(--gold-bright); outline-offset: 3px; }
+/* Ink on the light sections (~16:1), gold on the dark ones (~8:1): either way
+ * well above the 3:1 non-text contrast a focus indicator needs. */
+:focus-visible { outline: 3px solid var(--ink); outline-offset: 3px; }
+.hero :focus-visible, .showcase :focus-visible, .motto :focus-visible,
+.footer :focus-visible, .skip-link:focus-visible { outline-color: var(--gold-bright); }
 
 /* ── Buttons ─────────────────────────────────────────────────────────────── */
 .btn {

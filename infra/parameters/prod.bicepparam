@@ -30,6 +30,10 @@ param functionAppUrlJudgepapers = readEnvironmentVariable('FUNCTION_APP_URL_JUDG
 param functionAppUrlScoremodifier = readEnvironmentVariable('FUNCTION_APP_URL_SCOREMODIFIER', '')
 param functionAppUrlProtocolgenerator = readEnvironmentVariable('FUNCTION_APP_URL_PROTOCOLGENERATOR', '')
 param functionAppUrlGdprtool = readEnvironmentVariable('FUNCTION_APP_URL_GDPRTOOL', '')
+
+// Easy Auth provider the router's /signin redirects to. Unset GitHub var arrives
+// as '' and means aad; change it together with the auth config (Entra External ID).
+param authLoginProvider = readEnvironmentVariable('AUTH_LOGIN_PROVIDER', 'aad')
 param proxySharedSecretJudgepapers = readEnvironmentVariable('PROXY_SHARED_SECRET_JUDGEPAPERS', '')
 param proxySharedSecretScoremodifier = readEnvironmentVariable('PROXY_SHARED_SECRET_SCOREMODIFIER', '')
 param proxySharedSecretProtocolgenerator = readEnvironmentVariable('PROXY_SHARED_SECRET_PROTOCOLGENERATOR', '')
