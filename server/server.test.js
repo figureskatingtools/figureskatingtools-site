@@ -530,6 +530,21 @@ test('/ serves the landing page without a principal and the home page with one',
         const byName = await request(port, '/', { headers: { 'x-ms-client-principal-name': 'skater@example.com' } });
         assert.match(byName.text, /ROOT_INDEX/);
 
+        // / is an Easy Auth excluded path: the platform passes the session
+        // cookie but no principal headers, so the cookie alone means home.
+        for (const cookie of [
+            'AppServiceAuthSession=abc123',
+            'theme=light; AppServiceAuthSession=abc123; other=1',
+            'AppServiceAuthSession1=part1; AppServiceAuthSession2=part2',
+        ]) {
+            const bySession = await request(port, '/', { headers: { cookie } });
+            assert.match(bySession.text, /ROOT_INDEX/, cookie);
+            assert.equal(bySession.headers.vary, 'Cookie');
+        }
+        for (const cookie of ['AppServiceAuthSession=', 'NotAppServiceAuthSession=abc', 'theme=light']) {
+            assert.match((await request(port, '/', { headers: { cookie } })).text, /LANDING/, cookie);
+        }
+
         // A garbage principal is no principal.
         const garbage = await request(port, '/', { headers: { 'x-ms-client-principal': '%%%' } });
         assert.match(garbage.text, /LANDING/);

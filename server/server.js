@@ -42,8 +42,10 @@ const PROXY_TARGETS = [...TOOLS, ...Object.keys(SMALL_TOOL_APIS), PLATFORM];
 // Must match the Easy Auth excludedPaths entry in infra/modules/webapp.bicep.
 const JUDGEPAPERS_DOWNLOAD_PATH = '/judgepapers/download';
 
-// The public landing page: a static document (no JS bundle, so /assets/* stays
-// behind sign-in) served at / to visitors without an Easy Auth principal.
+// The public landing page: a static document served at / to visitors who are
+// not signed in. / is an Easy Auth excluded path, and Easy Auth does not inject
+// X-MS-CLIENT-PRINCIPAL there, so a signed-in browser is recognised by its
+// session cookie (see hasSignedInSession).
 // LANDING_DOCUMENT_PATHS, SIGNIN_PATH and the landing files must all be listed
 // in the Easy Auth excludedPaths in infra/modules/webapp.bicep.
 const LANDING_DIR = 'landing';
@@ -289,11 +291,21 @@ function handleUserInfo(req, res, config) {
     });
 }
 
-// Whether the request carries a signed-in user (or DEV_FAKE_USER stands in).
-// Only decides which document / gets; it never gates data — everything behind
-// it is still protected by Easy Auth and the backends' proxy-secret gate.
-function isSignedIn(req, config) {
-    return Boolean(decodePrincipal(req) || req.headers['x-ms-client-principal-name'] || config.devFakeUser);
+// Easy Auth's session cookie (chunked as AppServiceAuthSession1, 2, … when large).
+const EASY_AUTH_SESSION_COOKIE = /(?:^|;\s*)AppServiceAuthSession\d*=[^;\s]/;
+
+// Whether / should get the signed-in home page: an Easy Auth principal, the
+// Easy Auth session cookie (excluded paths get the cookie but no principal
+// headers), or DEV_FAKE_USER locally. Only picks a document, never gates data:
+// the home page's /userinfo and every API stay behind Easy Auth, so a stale or
+// forged cookie just ends on the home page's own sign-in view.
+function hasSignedInSession(req, config) {
+    return Boolean(
+        decodePrincipal(req) ||
+            req.headers['x-ms-client-principal-name'] ||
+            EASY_AUTH_SESSION_COOKIE.test(req.headers.cookie || '') ||
+            config.devFakeUser
+    );
 }
 
 // Where /signin may send the user back to: a same-origin absolute path only.
@@ -725,10 +737,11 @@ function serveStatic(req, res, config, pathname) {
     });
 }
 
-// / for a visitor without a principal → the public landing page. The answer
+// / for a visitor without a session → the public landing page. The answer
 // depends on the session, so shared caches must not hand one to the other.
 function serveRootDocument(req, res, config, pathname) {
-    if (isSignedIn(req, config)) {
+    res.setHeader('Vary', 'Cookie');
+    if (hasSignedInSession(req, config)) {
         serveStatic(req, res, config, pathname);
         return;
     }
@@ -739,7 +752,7 @@ function serveRootDocument(req, res, config, pathname) {
             serveStatic(req, res, config, pathname);
             return;
         }
-        sendFile(res, landingPath, '/landing/index.html', 200, { Vary: 'Cookie' });
+        sendFile(res, landingPath, '/landing/index.html');
     });
 }
 
