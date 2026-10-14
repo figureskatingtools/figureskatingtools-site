@@ -84,6 +84,9 @@ export function renderSignInView(appElement: HTMLElement, redirectPath = '/'): v
           For access, contact <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>
         </p>
         <a href="${href}" class="btn btn-primary reveal reveal-4">Sign In to Continue</a>
+        <p class="unauth-privacy reveal reveal-4">
+          <a href="/privacy/">Privacy notice</a> · <a href="/tietosuoja/" lang="fi">Tietosuojaseloste</a>
+        </p>
       </div>
     </div>
   `;
@@ -103,6 +106,7 @@ export function setupUserMenu(container: HTMLElement, user: UserInfo): void {
         <div style="padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-color); font-size: 0.75rem; color: var(--text-secondary);">
           Signed in as <br> <strong style="color: var(--text-primary);">${escapeHtml(user.userDetails)}</strong>
         </div>
+        <a href="/privacy/" class="dropdown-item">Privacy notice</a>
         <a href="${logoutUrl()}" class="dropdown-item">Sign Out</a>
       </div>
     </div>

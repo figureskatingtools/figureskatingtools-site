@@ -358,6 +358,16 @@ a {
   font-weight: 600;
 }
 
+.unauth-privacy {
+  margin: 1.75rem 0 0;
+  color: var(--ink-faint);
+  font-size: 0.8125rem;
+}
+
+.unauth-privacy a {
+  color: var(--ink-muted);
+}
+
 /* ── Authenticated Layout ── */
 .auth-main {
   max-width: 1280px;
@@ -1038,6 +1048,18 @@ a {
   font-size: 0.75rem;
   letter-spacing: 0.06em;
   border-top: 1px solid var(--line);
+}
+
+.site-footer p + p {
+  margin-top: 0.5rem;
+}
+
+.site-footer-links a {
+  color: var(--ink-muted);
+}
+
+.site-footer-links a:hover {
+  color: var(--rink);
 }
 
 /* ── Responsive ── */

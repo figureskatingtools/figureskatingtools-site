@@ -272,6 +272,7 @@ h1, h2, h3, p { margin: 0; }
 
 .footer { background: var(--ink-deep); color: #93a7ba; font-size: 14px; }
 .footer-row { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding-block: 28px; }
+.footer-links { display: flex; flex-wrap: wrap; gap: 12px 28px; }
 .footer a { display: inline-flex; align-items: center; gap: 8px; color: var(--on-dark); text-decoration: none; }
 .footer a:hover { color: #fff; }
 

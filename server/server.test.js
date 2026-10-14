@@ -609,6 +609,83 @@ test('/ shows the home page when DEV_FAKE_USER is set, or when the build has no 
     }
 });
 
+// ── Public privacy notice + self-hosted fonts ────────────────────────────────
+
+function addPrivacyAndFonts(dir) {
+    fs.mkdirSync(path.join(dir, 'privacy'));
+    fs.mkdirSync(path.join(dir, 'tietosuoja'));
+    fs.mkdirSync(path.join(dir, 'fonts'));
+    fs.writeFileSync(path.join(dir, 'privacy', 'index.html'), '<html>PRIVACY_EN</html>');
+    fs.writeFileSync(path.join(dir, 'privacy', 'privacy.css'), 'main{}');
+    fs.writeFileSync(path.join(dir, 'tietosuoja', 'index.html'), '<html>PRIVACY_FI</html>');
+    fs.writeFileSync(path.join(dir, 'fonts', 'fonts.css'), '@font-face{}');
+    fs.writeFileSync(path.join(dir, 'fonts', 'fraunces-latin-opsz-normal.v5-3-0.woff2'), Buffer.from('wOF2'));
+}
+
+test('the privacy notice and fonts are plain static files, served the same signed in or out', async () => {
+    const publicDir = makePublicFixture();
+    addLanding(publicDir);
+    addPrivacyAndFonts(publicDir);
+    const { server, port } = await startRouter({ publicDir });
+    try {
+        // Easy Auth lists /privacy, /privacy/*, /tietosuoja, /tietosuoja/* and
+        // /fonts/* as excluded paths, so these requests arrive without any
+        // principal; the router must not need one.
+        const signedIn = { headers: { 'x-ms-client-principal': principalHeader(PRINCIPAL) } };
+        for (const opts of [{}, signedIn, { headers: { cookie: 'AppServiceAuthSession=abc' } }]) {
+            const en = await request(port, '/privacy/', opts);
+            assert.equal(en.status, 200);
+            assert.match(en.text, /PRIVACY_EN/);
+            assert.match(en.headers['content-type'], /text\/html/);
+            assert.equal(en.headers['cache-control'], 'no-cache');
+            assert.equal(en.headers['content-security-policy'], buildCsp(''));
+
+            const fi = await request(port, '/tietosuoja/', opts);
+            assert.equal(fi.status, 200);
+            assert.match(fi.text, /PRIVACY_FI/);
+        }
+
+        // The bare paths redirect to the directory so relative URLs resolve.
+        const bare = await request(port, '/privacy');
+        assert.equal(bare.status, 301);
+        assert.equal(bare.headers.location, '/privacy/');
+        assert.equal((await request(port, '/tietosuoja')).headers.location, '/tietosuoja/');
+
+        const css = await request(port, '/privacy/privacy.css');
+        assert.match(css.headers['content-type'], /text\/css/);
+
+        // fonts.css is revalidated; the versioned font files are immutable.
+        const fontsCss = await request(port, '/fonts/fonts.css');
+        assert.equal(fontsCss.status, 200);
+        assert.match(fontsCss.headers['content-type'], /text\/css/);
+        assert.equal(fontsCss.headers['cache-control'], 'no-cache');
+        const font = await request(port, '/fonts/fraunces-latin-opsz-normal.v5-3-0.woff2');
+        assert.equal(font.status, 200);
+        assert.equal(font.headers['content-type'], 'font/woff2');
+        assert.equal(font.headers['cache-control'], 'public, max-age=31536000, immutable');
+        assert.equal((await request(port, '/fonts/missing.woff2')).status, 404);
+    } finally {
+        await close(server);
+        fs.rmSync(publicDir, { recursive: true, force: true });
+    }
+});
+
+test('the real privacy pages and fonts.css reference only this origin', () => {
+    const publicRoot = path.join(__dirname, '..', 'site', 'public');
+    for (const page of ['privacy/index.html', 'tietosuoja/index.html', 'landing/index.html']) {
+        const html = fs.readFileSync(path.join(publicRoot, page), 'utf8');
+        assert.doesNotMatch(html, /googleapis|gstatic/, page);
+        assert.match(html, /<link rel="stylesheet" href="\/fonts\/fonts\.css">/, page);
+    }
+    const fontsCss = fs.readFileSync(path.join(publicRoot, 'fonts', 'fonts.css'), 'utf8');
+    const urls = [...fontsCss.matchAll(/url\(([^)]+)\)/g)].map((m) => m[1]);
+    assert.ok(urls.length > 0);
+    for (const url of urls) {
+        assert.match(url, /^\.\/[a-z0-9-]+\.v[0-9-]+\.woff2$/, url);
+        assert.ok(fs.existsSync(path.join(publicRoot, 'fonts', url)), url);
+    }
+});
+
 test('GET /signin redirects to the Easy Auth login with a same-origin return path', async () => {
     const { server, port } = await startRouter();
     try {
@@ -691,12 +768,14 @@ test('CSP differs per prefix', async () => {
         const jpCsp = (await request(port, '/judgepapers/')).headers['content-security-policy'];
         const pgCsp = (await request(port, '/protocolgenerator/')).headers['content-security-policy'];
 
-        // Base policy: Google Fonts allowed everywhere.
+        // Base policy: fonts and styles from this origin only. The fonts are
+        // self-hosted under /fonts/, so no Google host is allowed anywhere.
         for (const csp of [rootCsp, jpCsp, pgCsp]) {
             assert.match(csp, /default-src 'self'/);
-            assert.match(csp, /style-src [^;]*https:\/\/fonts\.googleapis\.com/);
-            assert.match(csp, /font-src [^;]*https:\/\/fonts\.gstatic\.com/);
+            assert.match(csp, /style-src 'self' 'unsafe-inline'(;|$)/);
+            assert.match(csp, /font-src 'self'(;|$)/);
             assert.match(csp, /frame-ancestors 'none'/);
+            assert.doesNotMatch(csp, /googleapis|gstatic/);
         }
 
         // Root: no WASM, no worker-src, no blob storage.

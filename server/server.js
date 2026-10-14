@@ -8,6 +8,8 @@
 //   /scoremodifier/          → Score Modifier app      (SPA, own index.html)
 //   /protocolgenerator/      → Protocol Generator app  (SPA, own index.html)
 //   /tools/<name>/           → small in-site tools (static pages)
+//   /privacy/, /tietosuoja/  → public privacy notice, EN/FI (static, excluded from Easy Auth)
+//   /fonts/*                 → self-hosted web fonts (static, excluded from Easy Auth)
 //   /health                  → liveness probe (excluded from Easy Auth)
 //   /judgepapers/download    → e-mailed judges'-papers link (excluded from Easy Auth)
 //   /userinfo                → flat user object decoded from Easy Auth headers
@@ -47,7 +49,9 @@ const JUDGEPAPERS_DOWNLOAD_PATH = '/judgepapers/download';
 // X-MS-CLIENT-PRINCIPAL there, so a signed-in browser is recognised by its
 // session cookie (see hasSignedInSession).
 // LANDING_DOCUMENT_PATHS, SIGNIN_PATH and the landing files must all be listed
-// in the Easy Auth excludedPaths in infra/modules/webapp.bicep.
+// in the Easy Auth excludedPaths in infra/modules/webapp.bicep. So must the
+// public privacy notice (/privacy/, /tietosuoja/) and the self-hosted fonts
+// (/fonts/*): those need no router logic, serveStatic serves them to everyone.
 const LANDING_DIR = 'landing';
 const LANDING_DOCUMENT_PATHS = ['/', '/index.html'];
 
@@ -135,9 +139,10 @@ function baseDirectives() {
     return {
         'default-src': ["'self'"],
         'script-src': ["'self'"],
-        'style-src': ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+        // Fonts are self-hosted under /fonts/ (no third-party font host).
+        'style-src': ["'self'", "'unsafe-inline'"],
         'img-src': ["'self'", 'data:', 'blob:'],
-        'font-src': ["'self'", 'https://fonts.gstatic.com'],
+        'font-src': ["'self'"],
         'connect-src': ["'self'"],
         'frame-ancestors': ["'none'"],
     };
@@ -644,10 +649,12 @@ async function handleChangelog(res, config, state, search) {
 
 // ── Static files ─────────────────────────────────────────────────────────────
 // Vite emits content-hashed filenames under /assets/, so those can be cached
-// forever; HTML/JSON must always be revalidated or a browser keeps serving a
-// stale page referencing bundles that no longer exist.
+// forever, and so can the self-hosted /fonts/*.woff2 files, whose names carry
+// a version suffix (site/public/fonts/fonts.css); HTML/JSON/CSS must always be
+// revalidated or a browser keeps serving a stale page referencing bundles
+// that no longer exist.
 function cacheControlFor(urlPath) {
-    return /(^|\/)assets\//.test(urlPath)
+    return /(^|\/)assets\//.test(urlPath) || /^\/fonts\/[^/]+\.woff2$/.test(urlPath)
         ? 'public, max-age=31536000, immutable'
         : 'no-cache';
 }
