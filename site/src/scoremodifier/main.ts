@@ -6,7 +6,14 @@ import {
     initCompetitionSelector,
     getActiveCompetition,
     subscribeActiveCompetition,
+    refreshActiveCompetition,
+    clearActiveCompetition,
+    readPlatformError,
+    isGoneCompetitionError,
+    platformErrorMessage,
+    competitionLabel,
     formatDateFi,
+    type PlatformCompetition,
 } from '@figureskatingtools/shared-ui';
 import { escapeHtml, fetchUser, loginUrl, setupUserMenu, type UserInfo } from '../shell.js';
 
@@ -72,7 +79,16 @@ appElement.innerHTML = `
     </div>
 
     <div id="main-content" class="hidden">
-      <div id="tool-view" class="card reveal" style="max-width: 860px; margin: 0 auto;">
+      <div id="pick-view" class="card reveal hidden" style="max-width: 860px; margin: 0 auto;">
+        <span class="micro-label">Score Modifier</span>
+        <h2 style="margin-bottom: 0.75rem;">No competition selected</h2>
+        <p id="pick-notice" class="status-error hidden" role="status"></p>
+        <p class="lead">Choose or create a competition from the selector in the top bar —
+          every tool works on the same selected competition, and what you generate here is
+          kept with it and deleted together with its data.</p>
+      </div>
+
+      <div id="tool-view" class="card reveal hidden" style="max-width: 860px; margin: 0 auto;">
         <span class="micro-label">Score Modifier</span>
 
         <div class="tool-tabs" role="tablist">
@@ -193,16 +209,69 @@ function downloadLink(url: string, fileName: string, label: string, primary = tr
     return `<a class="${cls}" href="${escapeAttr(url)}" download="${escapeAttr(fileName)}">${escapeHtml(label)}</a>`;
 }
 
-async function runPerSkater() {
+/**
+ * The selected platform competition, sent as `platformId` on every generate
+ * call: the backend links what it generates to it and deletes it on the
+ * platform competition's deletion date. Required (400 `platform_id_required`
+ * without it), which is why the tool is only shown with a competition selected.
+ */
+function withPlatformId(params: URLSearchParams, competition: PlatformCompetition): URLSearchParams {
+    params.set('platformId', competition.id);
+    return params;
+}
+
+/** Generate pressed while no competition is selected (another tab cleared it) */
+class NoCompetitionError extends Error {
+    constructor() {
+        super('Select a competition in the top bar first.');
+        this.name = 'NoCompetitionError';
+    }
+}
+
+/**
+ * Show a failed generate call readably. A competition that was deleted or no
+ * longer exists is dropped from the selection everywhere, and the pick card
+ * says why; other platform codes get the shared wording; anything else is the
+ * backend's own text.
+ */
+async function showFailure(resp: Response, requested: PlatformCompetition): Promise<void> {
+    const text = (await resp.text()).trim();
+    const code = readPlatformError(resp.status, text);
+    // Name the competition the request was made for — the selection may have
+    // changed while it was in flight
+    const label = competitionLabel(requested);
+    if (isGoneCompetitionError(code)) {
+        const message = platformErrorMessage(code!, label);
+        if (getActiveCompetition()?.id === requested.id) {
+            showPickNotice(message);
+            clearActiveCompetition();   // → the pick card
+        } else {
+            showError(message);         // another competition is selected by now: keep it
+        }
+        return;
+    }
+    showError(code ? platformErrorMessage(code, label) : text || `Error ${resp.status}`);
+}
+
+/** One-off explanation on the pick card (cleared once a competition is chosen) */
+function showPickNotice(message: string | null) {
+    const el = document.getElementById('pick-notice');
+    if (!el) return;
+    el.textContent = message ?? '';
+    el.classList.toggle('hidden', !message);
+}
+
+async function runPerSkater(requested: PlatformCompetition) {
     const resultArea = document.getElementById('result-area')!;
     const includeRanks = (document.getElementById('include-ranks') as HTMLInputElement).checked;
-    const resp = await fetch(`${API_BASE}/generate?includeRanks=${includeRanks}`, {
+    const query = withPlatformId(new URLSearchParams({ includeRanks: String(includeRanks) }), requested);
+    const resp = await fetch(`${API_BASE}/generate?${query.toString()}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/pdf' },
         body: selectedFile,
     });
     if (!resp.ok) {
-        showError((await resp.text()) || `Error ${resp.status}`);
+        await showFailure(resp, requested);
         return;
     }
     const data: GenerateResult = await resp.json();
@@ -218,7 +287,7 @@ async function runPerSkater() {
         </div>`;
 }
 
-async function runResults() {
+async function runResults(requested: PlatformCompetition) {
     const resultArea = document.getElementById('result-area')!;
     const val = (id: string) => (document.getElementById(id) as HTMLInputElement | HTMLSelectElement).value.trim();
     const customFilename = (document.getElementById('r-custom-filename') as HTMLInputElement).checked;
@@ -233,13 +302,14 @@ async function runResults() {
         // Blank → backend applies the category default (Tulokkaat = FSM name)
         pdfFile: customFilename ? val('r-filename') : '',
     });
+    withPlatformId(params, requested);
     const resp = await fetch(`${API_BASE}/generate_results?${params.toString()}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/pdf' },
         body: selectedFile,
     });
     if (!resp.ok) {
-        showError((await resp.text()) || `Error ${resp.status}`);
+        await showFailure(resp, requested);
         return;
     }
     const data: GenerateResult = await resp.json();
@@ -272,14 +342,22 @@ async function runGenerate() {
     resultArea.innerHTML = `<p class="text-muted">Processing your PDF…</p>`;
 
     try {
+        // The competition this request is for, fixed now — a selection change
+        // while it is in flight must not redirect or clear the wrong one
+        const requested = getActiveCompetition();
+        if (!requested) throw new NoCompetitionError();
         if (activeTool === 'results') {
-            await runResults();
+            await runResults(requested);
         } else {
-            await runPerSkater();
+            await runPerSkater(requested);
         }
     } catch (e) {
-        showError('Something went wrong. Please try again.');
-        console.error(e);
+        if (e instanceof NoCompetitionError) {
+            showError(e.message);
+        } else {
+            showError('Something went wrong. Please try again.');
+            console.error(e);
+        }
     } finally {
         generateBtn.textContent = originalLabel;
         generateBtn.disabled = !selectedFile;
@@ -307,6 +385,8 @@ function setIfEmpty(id: string, v: string) {
 function prefillFromActiveCompetition() {
     const competition = getActiveCompetition();
     if (!competition) return;
+    document.querySelector('#tool-view .micro-label')!.textContent =
+        `Score Modifier · ${competitionLabel(competition)}`;
     setIfEmpty('r-competition', competition.name);
     // `r-date` is free text printed onto the results sheet — Finnish, not ISO
     setIfEmpty('r-date', formatDateFi(competition.date));
@@ -423,12 +503,26 @@ async function init() {
     const competitionSlot = document.getElementById('fst-nav-competition');
     if (competitionSlot) void initCompetitionSelector(competitionSlot);
 
-    // 4. Show the tool, prefilled from the active competition
+    // 4. Show the tool — only with a competition selected, because everything
+    //    generated belongs to (and is deleted with) that competition
     loadingView.classList.add('hidden');
     mainContent.classList.remove('hidden');
     wireTool();
-    prefillFromActiveCompetition();
-    subscribeActiveCompetition(() => prefillFromActiveCompetition());
+    showForActiveCompetition();
+    subscribeActiveCompetition(() => showForActiveCompetition());
+    // Drop a selection whose competition has been deleted meanwhile
+    void refreshActiveCompetition();
+}
+
+/** The tool with a competition selected, the "pick a competition" card without */
+function showForActiveCompetition() {
+    const active = getActiveCompetition();
+    document.getElementById('pick-view')!.classList.toggle('hidden', Boolean(active));
+    document.getElementById('tool-view')!.classList.toggle('hidden', !active);
+    if (active) {
+        showPickNotice(null);
+        prefillFromActiveCompetition();
+    }
 }
 
 init();

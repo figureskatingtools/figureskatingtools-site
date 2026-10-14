@@ -992,3 +992,9 @@ input[type="checkbox"] { accent-color: var(--ink); }
   letter-spacing: 0.06em;
   border-top: 1px solid var(--line);
 }
+
+/* Deletion within a week, or before the competition starts */
+.retention-date--warn {
+  color: var(--gold);
+  font-weight: 600;
+}

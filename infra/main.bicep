@@ -70,6 +70,9 @@ param proxySharedSecretGdprtool string = ''
 @description('System-assigned principal ids of the tool Function Apps that need read access to competition-data. May be empty on a first deploy.')
 param toolFunctionPrincipalIds array = []
 
+@description('true = the platform retention_sweep purges competitions past their deletion date; false = dry-run (logs only) — the kill switch. See modules/platform-function.bicep.')
+param retentionPurgeEnabled bool = true
+
 @description('Kill switch for the HOVTP listener. false = the app is still deployed but answers every request 503 (see modules/hovtp-function.bicep).')
 param hovtpEnabled bool = true
 
@@ -175,6 +178,8 @@ module platformFunction 'modules/platform-function.bicep' = {
     deploymentContainerUrl: platformStorage.outputs.deploymentContainerUrl
     dataContainerName: platformStorage.outputs.dataContainerName
     proxySharedSecret: proxySharedSecretPlatform
+    retentionPurgeEnabled: retentionPurgeEnabled
+    clockTableName: platformStorage.outputs.clockTableName
   }
 }
 
@@ -242,13 +247,17 @@ module hovtpDataAccess 'modules/hovtp-data-access.bicep' = {
   }
 }
 
-// Cross-tool read access to the shared competition-data container. No-op until
-// the TOOL_PRINCIPAL_ID_* GitHub env vars are populated.
+// Cross-tool read access: the competition-data container (shared file pool)
+// and the retentionclock table (the platform retention clock the tools follow —
+// never the registry's competitions table), each scoped to the child resource. No-op until the TOOL_PRINCIPAL_ID_* GitHub
+// env vars are populated.
 module sharedDataAccess 'modules/shared-data-access.bicep' = {
   scope: rg
   name: 'sharedDataAccessDeployment'
   params: {
     storageAccountName: platformStorage.outputs.storageAccountName
+    dataContainerName: platformStorage.outputs.dataContainerName
+    clockTableName: platformStorage.outputs.clockTableName
     toolPrincipalIds: toolFunctionPrincipalIds
   }
 }
@@ -304,6 +313,7 @@ output hovtpFunctionPrincipalId string = hovtpFunction.outputs.functionPrincipal
 // X-HOVTP-Environment header) from what was actually deployed, instead of
 // re-deriving the per-environment bicepparam defaults in shell.
 output hovtpEnabled bool = hovtpEnabled
+output retentionPurgeEnabled bool = retentionPurgeEnabled
 output hovtpEnvironment string = hovtpEnvironment
 output toolPrincipalsGranted int = sharedDataAccess.outputs.grantedCount
 output customDomain string = customDomain

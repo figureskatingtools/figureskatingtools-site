@@ -1618,3 +1618,9 @@ dialog.send-dialog.send-dialog--preview {
   max-height: 55vh;
   overflow-y: auto;
 }
+
+/* Deletion within a week, or before the competition starts */
+.retention-date--warn {
+  color: var(--gold);
+  font-weight: 600;
+}

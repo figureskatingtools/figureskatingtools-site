@@ -28,6 +28,14 @@ param dataContainerName string = 'competition-data'
 @description('Table holding both the COMPETITION rows and the CODE uniqueness rows.')
 param competitionsTableName string = 'competitions'
 
+// The platform retention clock as the tool Function Apps see it: PK=COMPETITION
+// RK=<guid>, columns DeletionDate / Status / PurgedUtc and nothing else. A
+// separate table so the tools' read grant never reaches the registry rows
+// (operators' e-mail addresses, FS Manager sender IPs). Written only by the
+// platform Function App (infra/functions/function_app.py, _sync_clock).
+@description('Non-personal mirror of each competition deletion state, readable by the tool Function Apps.')
+param clockTableName string = 'retentionclock'
+
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   name: storageAccountName
   location: location
@@ -74,8 +82,14 @@ resource competitionsTable 'Microsoft.Storage/storageAccounts/tableServices/tabl
   name: competitionsTableName
 }
 
+resource clockTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-01-01' = {
+  parent: tableService
+  name: clockTableName
+}
+
 output storageAccountName string = storageAccount.name
 output storageAccountId string = storageAccount.id
 output deploymentContainerUrl string = '${storageAccount.properties.primaryEndpoints.blob}app-package'
 output blobEndpoint string = storageAccount.properties.primaryEndpoints.blob
 output dataContainerName string = dataContainerName
+output clockTableName string = clockTable.name

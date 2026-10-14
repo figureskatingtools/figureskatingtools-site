@@ -704,7 +704,29 @@ def lookup_competition(table_client, code: str) -> tuple[str, str]:
     if competition.get("Status") == STATUS_DELETED:
         raise HovtpError(451, f"competition {normalized} is deleted", outcome="unknown_code")
 
+    # The platform's retention clock (DeletionDate, written by the platform
+    # API) has run out, but tonight's sweep has not purged it yet: anything
+    # stored now would be deleted within hours, so refuse it like a deleted one.
+    if _deletion_date_passed(competition.get("DeletionDate")):
+        raise HovtpError(451, f"competition {normalized} is past its deletion date",
+                         outcome="unknown_code")
+
     return normalized, competition_id
+
+
+def _deletion_date_passed(value) -> bool:
+    """True when DeletionDate is set and not in the future. A missing or
+    unparseable value never blocks: the platform backfills it nightly."""
+    text = str(value or "").strip()
+    if not text:
+        return False
+    try:
+        deletion = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if deletion.tzinfo is None:
+        deletion = deletion.replace(tzinfo=timezone.utc)
+    return deletion <= datetime.now(timezone.utc)
 
 
 # ── sessions (serial numbers) ─────────────────────────────────────────────────

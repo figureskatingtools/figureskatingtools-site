@@ -28,7 +28,7 @@ def test_list_returns_a_bare_array_of_competitions(table):
     assert isinstance(competitions, list) and len(competitions) == 1
     assert set(competitions[0]) == {
         "id", "code", "name", "date", "endDate", "venue",
-        "createdBy", "createdUtc", "updatedUtc", "status",
+        "createdBy", "createdUtc", "updatedUtc", "deletionDate", "status",
     }
 
 

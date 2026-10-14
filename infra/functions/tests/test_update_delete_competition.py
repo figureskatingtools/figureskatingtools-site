@@ -137,7 +137,9 @@ def test_delete_is_soft_and_releases_the_code(table):
     # The row survives...
     row = table.competition_rows()[0]
     assert row["Status"] == "deleted"
-    assert row["DeletedBy"] == "skater@example.com"
+    # Only that a user deleted it — never who (the e-mail would outlive the data).
+    assert row["DeleteReason"] == "user"
+    assert "DeletedBy" not in row
     # ...but the code is free.
     assert table.code_rows() == {}
 

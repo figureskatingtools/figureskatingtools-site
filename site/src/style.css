@@ -691,6 +691,34 @@ a {
   color: var(--ink-faint);
 }
 
+/* "Data is deleted automatically on <date> · Extend by a week" */
+.comp-retention {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.4rem;
+  margin: 0.35rem 0 0;
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+}
+
+.comp-retention .comp-extend {
+  font-size: 0.75rem;
+}
+
+.comp-retention-sep {
+  color: var(--ink-faint);
+}
+
+/* Last week, or the date falls before the competition: a gold-tinted note */
+.comp-retention--warn {
+  padding: 0.35rem 0.6rem;
+  border-left: 2px solid var(--gold);
+  background-color: var(--gold-tint);
+  border-radius: 0.25rem;
+  color: var(--ink-soft);
+}
+
 .comp-recent-created {
   font-size: 0.7rem;
   color: var(--ink-faint);

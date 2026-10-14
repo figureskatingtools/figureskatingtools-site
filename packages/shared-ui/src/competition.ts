@@ -32,6 +32,12 @@ export interface PlatformCompetition {
   createdBy?: string;
   /** Creation timestamp (ISO UTC), when the API reports it */
   createdUtc?: string;
+  /**
+   * When the platform deletes the competition's data — midnight UTC as
+   * `YYYY-MM-DDT00:00:00Z`. Server-owned: 60 days after creation, moved only
+   * by `extendCompetition` (and pulled to the next midnight by a delete).
+   */
+  deletionDate?: string;
 }
 
 /** Fields accepted when creating a competition */
@@ -84,7 +90,8 @@ export function isPlatformCompetition(value: unknown): value is PlatformCompetit
     typeof c.date === 'string' &&
     typeof c.venue === 'string' &&
     (c.createdBy === undefined || typeof c.createdBy === 'string') &&
-    (c.createdUtc === undefined || typeof c.createdUtc === 'string')
+    (c.createdUtc === undefined || typeof c.createdUtc === 'string') &&
+    (c.deletionDate === undefined || typeof c.deletionDate === 'string')
   );
 }
 
@@ -112,6 +119,7 @@ export function toPlatformCompetition(raw: unknown): PlatformCompetition | null 
   };
   if (typeof r.createdBy === 'string') competition.createdBy = r.createdBy;
   if (typeof r.createdUtc === 'string') competition.createdUtc = r.createdUtc;
+  if (typeof r.deletionDate === 'string' && r.deletionDate) competition.deletionDate = r.deletionDate;
   return competition;
 }
 
@@ -126,14 +134,82 @@ export function parseActiveCompetition(raw: string | null): PlatformCompetition 
   }
 }
 
-/** Serialize for storage — only the known fields, never stray keys */
+/**
+ * Serialize for storage — only the known fields, never stray keys.
+ * `deletionDate` is included so an extend in one tab reaches every other tab
+ * through the `storage` event.
+ */
 export function serializeActiveCompetition(competition: PlatformCompetition): string {
-  const { id, code, name, date, venue, createdBy } = competition;
-  return JSON.stringify(
-    createdBy === undefined
-      ? { id, code, name, date, venue }
-      : { id, code, name, date, venue, createdBy }
-  );
+  const { id, code, name, date, venue, createdBy, deletionDate } = competition;
+  const stored: Record<string, string> = { id, code, name, date, venue };
+  if (createdBy !== undefined) stored.createdBy = createdBy;
+  if (deletionDate !== undefined) stored.deletionDate = deletionDate;
+  return JSON.stringify(stored);
+}
+
+/** How close a deletion date is — see `retentionInfo` */
+export interface RetentionInfo {
+  /** The deletion day, ISO `YYYY-MM-DD` (UTC — the platform's calendar day) */
+  day: string;
+  /** Whole days until the deletion date; 0 once it is today or past */
+  daysLeft: number;
+  /** Deletion is at most `RETENTION_WARN_DAYS` away */
+  dueSoon: boolean;
+  /** Deletion falls on or before the competition's start date */
+  beforeEvent: boolean;
+}
+
+/** Days before deletion from which the UI warns (and nudges to extend) */
+export const RETENTION_WARN_DAYS = 7;
+
+const DAY_MS = 24 * 3600 * 1000;
+
+/**
+ * Pure summary of a deletion date for display. `null` when there is no usable
+ * date (older API, or a malformed value) — callers then show nothing.
+ *
+ * The clock counts from creation, so for a competition created long before
+ * the event the deletion date can fall before the competition itself —
+ * `beforeEvent` lets the UI say so.
+ */
+export function retentionInfo(
+  deletionDate: string | null | undefined,
+  startDate: string | null | undefined,
+  now: Date = new Date()
+): RetentionInfo | null {
+  if (!deletionDate) return null;
+  const due = Date.parse(deletionDate);
+  if (!Number.isFinite(due)) return null;
+  const day = new Date(due).toISOString().slice(0, 10);
+  const daysLeft = Math.max(0, Math.ceil((due - now.getTime()) / DAY_MS));
+  const start = /^\d{4}-\d{2}-\d{2}$/.test(startDate ?? '') ? (startDate as string) : '';
+  return {
+    day,
+    daysLeft,
+    dueSoon: daysLeft <= RETENTION_WARN_DAYS,
+    beforeEvent: start !== '' && day <= start,
+  };
+}
+
+/**
+ * Fold the active competition into a list snapshot (the nav selector's menu,
+ * the home panel's recent list). Without it an Extend, a rename or a change
+ * arriving from another tab leaves the snapshot stale — and picking that
+ * entry again would write the stale copy back as the active competition.
+ * Mutates `list` in place; true when an entry changed.
+ */
+export function syncCompetitionSnapshot(
+  list: PlatformCompetition[],
+  active: PlatformCompetition | null
+): boolean {
+  if (!active) return false;
+  const index = list.findIndex((c) => c.id === active.id);
+  if (index < 0) return false;
+  // Spread keeps what the stored copy lacks (createdUtc) from the list entry
+  const merged = { ...list[index], ...active };
+  if (JSON.stringify(merged) === JSON.stringify(list[index])) return false;
+  list[index] = merged;
+  return true;
 }
 
 /** Human label for a competition — name, falling back to the code */
@@ -418,6 +494,120 @@ export async function updateCompetition(
     throw new CompetitionApiError(resp.status, 'Competitions API returned an unexpected body');
   }
   return updated;
+}
+
+/**
+ * `POST /api/competitions/{id}/extend`.
+ *
+ * Pushes the competition's deletion date a week out (from the current date,
+ * or from today when that has already passed). No cap — each press is one
+ * more week. Resolves with the competition as the registry now stores it, so
+ * the caller can hand it to `setActiveCompetition` and every tab follows.
+ *
+ * Throws `CompetitionApiError` (404 when the competition is deleted or
+ * unknown, 0 when the API is unreachable).
+ */
+export async function extendCompetition(id: string): Promise<PlatformCompetition> {
+  let resp: Response;
+  try {
+    resp = await fetch(`${COMPETITIONS_API}/${encodeURIComponent(id)}/extend`, {
+      method: 'POST',
+      headers: { Accept: 'application/json' },
+    });
+  } catch (_e) {
+    throw new CompetitionApiError(0, 'Competitions API unreachable');
+  }
+
+  if (!resp.ok) {
+    let detail = '';
+    try {
+      const payload = await resp.json();
+      detail =
+        (typeof payload?.message === 'string' && payload.message) ||
+        (typeof payload?.error === 'string' && payload.error) ||
+        '';
+    } catch (_e) {
+      // No JSON body — fall back to the bare status
+    }
+    throw new CompetitionApiError(
+      resp.status,
+      detail || `Could not extend the deletion date (${resp.status})`
+    );
+  }
+
+  let payload: unknown;
+  try {
+    payload = await resp.json();
+  } catch (_e) {
+    throw new CompetitionApiError(resp.status, 'Competitions API returned a non-JSON body');
+  }
+  const extended = toPlatformCompetition(payload);
+  if (!extended) {
+    throw new CompetitionApiError(resp.status, 'Competitions API returned an unexpected body');
+  }
+  return extended;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   Tool backend errors about the platform competition
+   ════════════════════════════════════════════════════════════════ */
+
+/**
+ * Machine codes the tool backends answer when the platform competition behind
+ * a request is the problem (they read the platform's clock row directly).
+ */
+export type PlatformErrorCode =
+  | 'platform_id_required'
+  | 'platform_not_found'
+  | 'platform_deleted'
+  | 'platform_unavailable';
+
+const PLATFORM_ERROR_STATUS: Record<PlatformErrorCode, number> = {
+  platform_id_required: 400,
+  platform_not_found: 404,
+  platform_deleted: 410,
+  platform_unavailable: 503,
+};
+
+/**
+ * Recognise one of those codes in a failed tool response. Tools answer either
+ * a plain-text body that starts with the code (Judge Papers, Score Modifier)
+ * or JSON `{"error": "<code>"}` (Protocol Generator); the HTTP status must
+ * match too, so free text that merely mentions a code is not misread.
+ */
+export function readPlatformError(status: number, body: string): PlatformErrorCode | null {
+  const text = String(body ?? '').trim();
+  let code = '';
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && typeof parsed.error === 'string') code = parsed.error;
+  } catch (_e) {
+    code = text.split(/[^a-z_]/, 1)[0];
+  }
+  if (!(code in PLATFORM_ERROR_STATUS)) return null;
+  const known = code as PlatformErrorCode;
+  return PLATFORM_ERROR_STATUS[known] === status ? known : null;
+}
+
+/** True for the codes after which the selection should be dropped */
+export function isGoneCompetitionError(code: PlatformErrorCode | null): boolean {
+  return code === 'platform_deleted' || code === 'platform_not_found';
+}
+
+/** The one wording every tool shows for these codes */
+export function platformErrorMessage(code: PlatformErrorCode, label = ''): string {
+  const name = label.trim() ? `“${label.trim()}”` : 'The selected competition';
+  switch (code) {
+    case 'platform_deleted':
+      return `${name} has been deleted, together with its data. ` +
+        'Choose or create another competition in the top bar.';
+    case 'platform_not_found':
+      return `${name} no longer exists. Choose or create another competition in the top bar.`;
+    case 'platform_unavailable':
+      return "The competition registry can't be reached right now, try again shortly.";
+    case 'platform_id_required':
+      return 'Select a competition in the top bar first.';
+  }
 }
 
 /**

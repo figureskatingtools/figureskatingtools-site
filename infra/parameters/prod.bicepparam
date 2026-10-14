@@ -51,6 +51,12 @@ param toolFunctionPrincipalIds = [
 // HOVTP listener (FS Manager push endpoint). Off in prod until it has been proven
 // in test — set the GitHub environment variable HOVTP_ENABLED=true to turn it on.
 param hovtpEnabled = readEnvironmentVariable('HOVTP_ENABLED', 'false') == 'true'
+
+// Platform retention sweep: purges from day one — the privacy notice promises
+// deletion 60 days after creation. The GitHub environment variable
+// RETENTION_PURGE_ENABLED=false is the kill switch (dry-run logging only); the
+// workflow always exports it, so an unset variable arrives as '' and stays on.
+param retentionPurgeEnabled = readEnvironmentVariable('RETENTION_PURGE_ENABLED', 'true') != 'false'
 param hovtpEnvironment = 'Production'
 
 // Prod is published as https://api.figureskatingtools.com — Front Door Premium
