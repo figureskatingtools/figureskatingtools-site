@@ -57,7 +57,9 @@ const ADMIN_DIAGNOSTICS_PATH = '/admin/api/diagnostics';
 // Written next to server.js by the deploy workflow (never under public/, so it
 // is not served): {"commit": "<sha>", "builtUtc": "…"}. Missing locally.
 const BUILD_INFO_FILE = 'build-info.json';
-const HEALTH_TIMEOUT_MS = 3000;
+// Generous: a Flex Consumption app answering its first request after idling
+// can take several seconds (judgepapers measured ~3.7 s for a cold 404).
+const HEALTH_TIMEOUT_MS = 10000;
 
 // Public (no sign-in) route for the link e-mailed by judgepapers' send dialog.
 // Must match the Easy Auth excludedPaths entry in infra/modules/webapp.bicep.
