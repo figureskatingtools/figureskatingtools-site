@@ -1174,6 +1174,7 @@ async function init() {
 
         const omitSegmentCover = omitSegmentCoverFor === data.id;
         const combinedSchedule = combinedScheduleFor === data.id;
+        if (!combinedSchedule) combinedScheduleCopies = 1;
 
         optionsArea.innerHTML = `
             <h3 class="options-title">Global Settings</h3>
