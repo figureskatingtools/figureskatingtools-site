@@ -19,6 +19,9 @@
 //   competitions      table, two row kinds (see infra/functions/function_app.py):
 //                       PK=COMPETITION RK=<guid>            the competition
 //                       PK=CODE        RK=<normalized code> -> CompetitionId
+//   retentionclock    table, the tools' read-only view of the retention clock
+//   adminlog          table, the admin panel's audit trail (PK=AUDIT, kept 365 d)
+//                     and retention sweep runs (PK=SWEEP, kept 30 d)
 param location string
 param storageAccountName string
 
@@ -35,6 +38,12 @@ param competitionsTableName string = 'competitions'
 // platform Function App (infra/functions/function_app.py, _sync_clock).
 @description('Non-personal mirror of each competition deletion state, readable by the tool Function Apps.')
 param clockTableName string = 'retentionclock'
+
+// Admin actions (with the admin's e-mail) and sweep runs. Written only by the
+// platform Function App, whose account-scoped Table Data Contributor covers it;
+// neither the tools nor the HOVTP listener have a grant on it.
+@description('Admin audit log and retention sweep history of the platform Function App.')
+param adminLogTableName string = 'adminlog'
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   name: storageAccountName
@@ -87,9 +96,15 @@ resource clockTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023
   name: clockTableName
 }
 
+resource adminLogTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-01-01' = {
+  parent: tableService
+  name: adminLogTableName
+}
+
 output storageAccountName string = storageAccount.name
 output storageAccountId string = storageAccount.id
 output deploymentContainerUrl string = '${storageAccount.properties.primaryEndpoints.blob}app-package'
 output blobEndpoint string = storageAccount.properties.primaryEndpoints.blob
 output dataContainerName string = dataContainerName
 output clockTableName string = clockTable.name
+output adminLogTableName string = adminLogTable.name

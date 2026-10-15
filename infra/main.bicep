@@ -73,6 +73,9 @@ param toolFunctionPrincipalIds array = []
 @description('true = the platform retention_sweep purges competitions past their deletion date; false = dry-run (logs only) — the kill switch. See modules/platform-function.bicep.')
 param retentionPurgeEnabled bool = true
 
+@description('Comma-separated admin e-mail addresses (GitHub variable ADMIN_EMAILS). Written to both the router (which serves /admin/ and gates /api/manage/*) and the platform Function App (which enforces it again). Empty = nobody is admin.')
+param adminEmails string = ''
+
 @description('Kill switch for the HOVTP listener. false = the app is still deployed but answers every request 503 (see modules/hovtp-function.bicep).')
 param hovtpEnabled bool = true
 
@@ -140,6 +143,9 @@ module webApp 'modules/webapp.bicep' = {
     proxySharedSecretScoremodifier: proxySharedSecretScoremodifier
     proxySharedSecretProtocolgenerator: proxySharedSecretProtocolgenerator
     proxySharedSecretGdprtool: proxySharedSecretGdprtool
+    adminEmails: adminEmails
+    // Probed by the router's admin diagnostics.
+    hovtpHealthUrl: '${hovtpFunction.outputs.functionAppUrl}/api/health'
   }
 }
 
@@ -180,6 +186,11 @@ module platformFunction 'modules/platform-function.bicep' = {
     proxySharedSecret: proxySharedSecretPlatform
     retentionPurgeEnabled: retentionPurgeEnabled
     clockTableName: platformStorage.outputs.clockTableName
+    adminEmails: adminEmails
+    adminLogTableName: platformStorage.outputs.adminLogTableName
+    // Informational copy for the admin diagnostics; the listener's own
+    // setting (below) is the one that switches it.
+    hovtpEnabled: hovtpEnabled
   }
 }
 

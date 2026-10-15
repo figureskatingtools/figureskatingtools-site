@@ -140,6 +140,9 @@ jobs:
           # Easy Auth provider for the router's /signin (AUTH_LOGIN_PROVIDER app
           # setting). Unset means aad.
           AUTH_LOGIN_PROVIDER: ${{ vars.AUTH_LOGIN_PROVIDER }}
+          # Admin panel allow-list (comma-separated e-mails), written to both the
+          # router and the platform Function App. Unset = nobody is admin.
+          ADMIN_EMAILS: ${{ vars.ADMIN_EMAILS }}
         run: |
           set -euo pipefail
           ENV_NAME="${{ needs.set-environment.outputs.env_name }}"
