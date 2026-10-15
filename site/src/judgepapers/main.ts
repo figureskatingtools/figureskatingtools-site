@@ -1300,9 +1300,12 @@ async function init() {
         stepButtons.forEach(b => b.addEventListener('click', () => {
             setCopies(clampCopies(combinedCopies.value) + Number(b.dataset.step));
         }));
-        // Digits only while typing; settle on a valid number when leaving the field.
+        // Digits only while typing, and the count follows right away, so an
+        // options re-render (e.g. after an upload) mid-typing keeps it; settle
+        // on a valid number when leaving the field.
         combinedCopies.addEventListener('input', () => {
             combinedCopies.value = combinedCopies.value.replace(/\D/g, '').slice(0, 2);
+            if (combinedCopies.value) combinedScheduleCopies = clampCopies(combinedCopies.value);
         });
         combinedCopies.addEventListener('change', () => setCopies(clampCopies(combinedCopies.value)));
         combinedCopies.addEventListener('keydown', (e) => {
