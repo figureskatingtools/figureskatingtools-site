@@ -82,6 +82,9 @@ let poolNoticeShown = false;
  * key is added before the request goes out.
  */
 const autoParsedSchedules = new Set<string>();
+/** Same guard for the roster pair imported from the pool on open, keyed on the
+ * DT_PARTIC_TEAMS file. */
+const autoImportedRosters = new Set<string>();
 const openCats = new Set<string>();
 /** Collapsed-by-default state of the "Team rosters" per-category groups. */
 const openRosterCats = new Set<string>();
@@ -392,6 +395,9 @@ async function openCompetition(id: string, name: string) {
   // The pool listing is fresh now (loadDetails refreshes it), so this is the
   // first moment we can tell whether the schedule is already sitting there.
   await autoParsePoolSchedule();
+  // After the schedule, so a freshly parsed competition has its synchro
+  // categories to place the teams into.
+  await autoImportPoolRosters();
 }
 
 async function loadDetails() {
@@ -618,7 +624,7 @@ function teamRowHtml(cat: Category, team: TeamRow, s: Structure): string {
   const nameMode = teamNameMode(s, cat, team);
   const roster = count
     ? `<ul class="roster-skaters">${team.members.map(m => `<li>${escapeHtml(m)}</li>`).join('')}</ul>`
-    : '<span class="team-roster-empty">No roster yet — import the DT_PARTIC XML pair.</span>';
+    : '<span class="team-roster-empty">No roster yet — import the DT_PARTIC XML pair or take it from the competition files.</span>';
   return `<div class="team-row ${status === 'red' && !skipped ? 'team-row--alert' : ''} ${skipped ? 'team-row--skipped' : ''}"
          data-team-row="${team.id}" data-cat="${cat.id}">
       <div class="team-row-main">
@@ -740,9 +746,15 @@ function rosterReportHtml(s: Structure): string {
   }
   if (!blocks.length) blocks.push('<p class="roster-report-ok">All registered teams placed.</p>');
 
+  const pooled = [r.files?.teams, r.files?.partic].filter(f => f?.poolName)
+    .map(f => `${escapeHtml(f!.poolName!)}${f!.source === 'fsm' ? ' (FSM)' : ''}`);
+  const from = pooled.length
+    ? `<p class="roster-report-ok">From competition files: ${pooled.join(' · ')}</p>` : '';
+
   return `<div class="roster-report">
       <p class="roster-report-sum">Imported ${r.imported} team(s)${r.moved ? ` · ${r.moved} moved` : ''}${
         when ? ` <span class="roster-report-when">${escapeHtml(when)}</span>` : ''}</p>
+      ${from}
       ${blocks.join('')}
     </div>`;
 }
@@ -958,7 +970,9 @@ function renderDetails() {
               event but compete per block, and the result sheets are the only place that mapping exists.</li>
             <li>Then select the competition's <strong>DT_PARTIC_TEAMS</strong> and <strong>DT_PARTIC</strong>
               XML files together; one pair covers the whole competition and every team is placed
-              into the right block automatically.</li>
+              into the right block automatically. When FS Manager has sent the pair to the
+              competition files, it is imported on its own the first time the competition is opened,
+              and newer files are offered here.</li>
             <li>Assign a missing results PDF later and the teams are <strong>re-matched
               automatically</strong> — no need to import again.</li>
             <li>Accreditation pictures import in bulk from one <strong>ZIP</strong>: files named
@@ -996,6 +1010,7 @@ function renderDetails() {
       <p class="section-sub">Everything team-related lives here: names, rosters and both pictures.
         Assign the <strong>Total Results</strong> PDFs first, then import the DT_PARTIC XML pair —
         see <span class="help-hint">?</span> for the full flow and the colour codes.</p>
+      ${poolRostersHtml(s)}
       ${rosterGroupsHtml(s)}
       ${rosterReportHtml(s)}
     </div>` : ''}
@@ -1206,6 +1221,11 @@ function wireDetail() {
 
   // Roster import (two DT_PARTIC XML files, one pair for the whole competition).
   document.getElementById('btn-import-rosters')?.addEventListener('click', () => pickRosters());
+  // …or the pair already sitting in the competition files.
+  document.getElementById('btn-pool-rosters')?.addEventListener('click', () => {
+    const plan = details && poolRosterPlan(details.structure);
+    if (plan) void importRostersFromPool(plan);
+  });
 
   // Fallback (accreditation) pictures — one ZIP for the whole competition.
   document.getElementById('btn-upload-fallbacks')?.addEventListener('click', () => {
@@ -1574,6 +1594,74 @@ function scheduleCandidates(): PoolFile[] {
     isXml(a) - isXml(b) || (b.uploadedUtc || '').localeCompare(a.uploadedUtc || ''));
 }
 
+/** FS Manager pushes the roster pair as `DT_PARTIC_TEAMS_<code>.xml` and
+ * `DT_PARTIC_<code>.xml` — the TEAMS name starts with the PARTIC prefix, so the
+ * PARTIC test has to exclude it. */
+function isRosterTeamsFile(name: string): boolean {
+  return /^DT_PARTIC_TEAMS[^/]*\.xml$/i.test(name) && !/^DT_PARTIC_TEAMS_UPDATE/i.test(name);
+}
+function isRosterParticFile(name: string): boolean {
+  return /^DT_PARTIC_(?!TEAMS)[^/]*\.xml$/i.test(name) && !/^DT_PARTIC_UPDATE/i.test(name);
+}
+
+/** The newest pool file passing `test`, whichever folder (FSM or upload) it is in. */
+function newestPoolFile(test: (name: string) => boolean): PoolFile | undefined {
+  return (poolFiles || []).filter(f => test(f.name))
+    .sort((a, b) => (b.uploadedUtc || '').localeCompare(a.uploadedUtc || ''))[0];
+}
+
+/** Milliseconds of an ISO stamp; the backend writes microseconds, which not
+ * every engine parses. */
+function stampTime(value?: string): number {
+  const t = Date.parse((value || '').replace(/(\.\d{3})\d+/, '$1'));
+  return isNaN(t) ? 0 : t;
+}
+
+interface PoolRosterPlan {
+  teams?: PoolFile;
+  partic?: PoolFile;
+  /** A roster was imported already; these files are newer than it. */
+  update: boolean;
+}
+
+/**
+ * What the competition files could add to the roster, or null when nothing.
+ *
+ * Before the first import: the newest TEAMS file (with the newest PARTIC, if
+ * any). After it: a TEAMS file newer than the one in use is offered with the
+ * newest PARTIC — the backend never joins a fresh TEAMS file with the archived
+ * DT_PARTIC, so leaving it out would drop the skater names — and a PARTIC that
+ * is newer alone (or the first one at all) is offered on its own, which
+ * re-matches the archived teams.
+ */
+function poolRosterPlan(s: Structure): PoolRosterPlan | null {
+  const teams = newestPoolFile(isRosterTeamsFile);
+  const partic = newestPoolFile(isRosterParticFile);
+  const r = s.rosterImport;
+  if (!r) return teams ? { teams, partic, update: false } : null;
+  // Reports written before `files` existed only know when the last pass ran. A
+  // TEAMS file is always in use once there is a report; a DT_PARTIC may not be.
+  const teamsInUse = r.files?.teams ?? { at: r.at };
+  const particInUse = r.files ? r.files.partic : { at: r.at };
+  const newer = (f: PoolFile | undefined, ref?: { at: string }) =>
+    !!f && (!ref || stampTime(f.uploadedUtc) > stampTime(ref.at));
+  if (newer(teams, teamsInUse)) return { teams, partic, update: true };
+  if (newer(partic, particInUse)) return { partic, update: true };
+  return null;
+}
+
+function poolRostersHtml(s: Structure): string {
+  const plan = poolRosterPlan(s);
+  if (!plan) return '';
+  const names = [plan.teams, plan.partic].filter(Boolean)
+    .map(f => `<strong>${escapeHtml(f!.name)}</strong>`).join(' + ');
+  return `<p class="section-sub">${plan.update
+      ? 'Newer roster files in competition files'
+      : 'Roster files found in competition files'}: ${names}
+      <button class="btn btn-xs btn-ghost" id="btn-pool-rosters">${
+        plan.update ? 'Update from them' : 'Use them'}</button></p>`;
+}
+
 function poolImportHtml(): string {
   const all = importablePoolFiles();
   const pending = pendingPoolFiles();
@@ -1877,6 +1965,59 @@ async function autoParsePoolSchedule(): Promise<void> {
   if (autoParsedSchedules.has(key)) return;
   autoParsedSchedules.add(key);
   await parseScheduleFromPool(candidate);
+}
+
+/**
+ * Import the roster pair straight out of the competition files.
+ *
+ * Runs once per (competition, TEAMS file) after a competition is opened, and
+ * only while there is no roster import at all — later pushes are offered, not
+ * applied — and only when some category is synchro, so a singles competition
+ * never gets teams placed into it.
+ */
+async function autoImportPoolRosters(): Promise<void> {
+  if (!currentId || !details) return;
+  const s = details.structure;
+  if (s.rosterImport || !(s.categories || []).some(c => c.discipline === 'synchro')) return;
+  const plan = poolRosterPlan(s);
+  if (!plan?.teams) return;
+  const key = `${currentId}::${plan.teams.name}::${plan.teams.uploadedUtc || ''}`;
+  if (autoImportedRosters.has(key)) return;
+  autoImportedRosters.add(key);
+  await importRostersFromPool(plan, true);
+}
+
+/** Same route as the file picker, without the bytes: the backend reads the named
+ * pool files itself and checks each one really is the file it was named as. */
+async function importRostersFromPool(plan: PoolRosterPlan, auto = false): Promise<void> {
+  if (!currentId) return;
+  const ref = (f: PoolFile) => ({ name: f.name, source: f.source });
+  const body = {
+    id: currentId,
+    ...(plan.teams ? { teamsPool: ref(plan.teams) } : {}),
+    ...(plan.partic ? { particPool: ref(plan.partic) } : {}),
+  };
+  try {
+    const resp = await apiJson('/import_rosters', body);
+    if (!resp.ok) {
+      const text = await resp.text();
+      let error = '', message = text;
+      try { ({ error = '', message = text } = JSON.parse(text)); } catch { /* plain-text error */ }
+      if (error === 'not_bound' || error === 'platform_not_configured') {
+        notePoolUnavailable();
+        await loadDetails();
+        return;
+      }
+      const note = 'Roster import from competition files failed: ' + message;
+      if (auto) flash(note); else alert(note);
+      return;
+    }
+    const data = await resp.json();
+    await loadDetails();
+    flash(`Imported ${data.imported} team(s) from competition files${data.moved ? `, ${data.moved} moved` : ''} — see the Team rosters section for details.`);
+  } catch {
+    if (!auto) alert('Network error importing rosters.');
+  }
 }
 
 function pickRosters() {

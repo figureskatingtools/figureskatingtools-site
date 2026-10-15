@@ -119,6 +119,15 @@ export interface RosterImport {
   moved: number;
   unmatched: RosterUnmatched[];
   withdrawn: RosterWithdrawn[];
+  /** The roster files in use: when each was supplied and, when it came from
+   * the competition file pool, which file. Absent on imports made before. */
+  files?: { teams?: RosterFileRef; partic?: RosterFileRef };
+}
+
+export interface RosterFileRef {
+  at: string;
+  poolName?: string;
+  source?: 'upload' | 'fsm';
 }
 
 export interface EventInfo {
