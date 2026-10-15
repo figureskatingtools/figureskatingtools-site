@@ -889,10 +889,14 @@ async function init() {
         
         const globalToggle = document.getElementById('global-use-time-schedule') as HTMLInputElement;
         const segmentToggles = document.querySelectorAll('.time-schedule-toggle') as NodeListOf<HTMLInputElement>;
+        const omitToggle = document.getElementById('global-omit-segment-cover') as HTMLInputElement | null;
         
         const options: any = {
             globalSegmentCover: globalToggle ? !globalToggle.checked : false,
             segmentCovers: {},
+            // Checked = no page at all before a segment (neither the generated
+            // cover nor the time schedule); overrides the toggles above.
+            globalOmitSegmentCover: omitToggle ? omitToggle.checked : false,
             language: currentLanguage
         };
         
@@ -1170,7 +1174,14 @@ async function init() {
                 </label>
             </div>
 
-            <div class="option-advanced">
+            <div class="option-row">
+                <label class="option-check">
+                    <input type="checkbox" id="global-omit-segment-cover">
+                    <span>No cover page or time schedule before the segments</span>
+                </label>
+            </div>
+
+            <div class="option-advanced" id="segment-cover-advanced">
                 <button id="toggle-advanced-options" class="btn btn-ghost btn-xs" style="padding-left: 0;">Show Per-Segment Settings ▸</button>
                 <div id="segment-options-list" class="segment-options-list hidden">
                     ${segments.map(s => `
@@ -1211,6 +1222,16 @@ async function init() {
             // Re-render to reflect new language
             updateOptionsView(data);
             renderCompetitionView();
+        });
+
+        // "No cover page or time schedule" makes the cover/time-schedule choice moot.
+        const omitToggle = document.getElementById('global-omit-segment-cover') as HTMLInputElement;
+        const advanced = document.getElementById('segment-cover-advanced')!;
+        omitToggle.addEventListener('change', () => {
+            const omit = omitToggle.checked;
+            globalToggle.disabled = omit;
+            segmentToggles.forEach(t => t.disabled = omit);
+            advanced.classList.toggle('is-disabled', omit);
         });
 
         globalToggle.addEventListener('change', () => {
