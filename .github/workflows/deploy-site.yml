@@ -508,7 +508,7 @@ jobs:
 
       - name: Build site
         # One multi-entry Vite build produces the whole tree: /, /judgepapers/,
-        # /scoremodifier/, /protocolgenerator/, /tools/banner/, /tools/gdpr/ + shared /assets/*.
+        # /scoremodifier/, /protocolgenerator/, /tools/banner/, /tools/gdpr/, /admin/ + shared /assets/*.
         run: npm run build --workspace=site
 
       - name: Create deployment package
@@ -517,6 +517,10 @@ jobs:
           STAGE_DIR=$(mktemp -d)
           # The router lives at the zip root; the Vite dist becomes its public/.
           cp server/server.js "$STAGE_DIR/"
+          # Read by the router at startup for the admin diagnostics. Next to
+          # server.js, never under public/, so it is not served.
+          jq -n --arg commit "$GITHUB_SHA" --arg builtUtc "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{commit: $commit, builtUtc: $builtUtc}' > "$STAGE_DIR/build-info.json"
           mkdir -p "$STAGE_DIR/public"
           cp -r site/dist/* "$STAGE_DIR/public/"
 
