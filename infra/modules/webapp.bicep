@@ -54,6 +54,12 @@ param proxySharedSecretProtocolgenerator string = ''
 @secure()
 param proxySharedSecretGdprtool string = ''
 
+@description('Comma-separated admin e-mail addresses (ADMIN_EMAILS). The router serves /admin/ and proxies /api/manage/* only for these; the platform Function App checks its own copy. Empty = nobody is admin.')
+param adminEmails string = ''
+
+@description('Health URL of the HOVTP listener, probed by the admin diagnostics (HOVTP_HEALTH_URL).')
+param hovtpHealthUrl string = ''
+
 @description('Easy Auth provider segment the router\'s /signin redirects to (/.auth/login/<provider>). Written to the AUTH_LOGIN_PROVIDER app setting; empty means aad. Changes together with the authsettingsV2 identity provider (e.g. the move to Entra External ID).')
 param authLoginProvider string = 'aad'
 
@@ -174,6 +180,10 @@ resource siteAppSettings 'Microsoft.Web/sites/config@2022-09-01' = {
       PROXY_SHARED_SECRET_PROTOCOLGENERATOR: proxySharedSecretProtocolgenerator
       PROXY_SHARED_SECRET_GDPRTOOL: proxySharedSecretGdprtool
       AUTH_LOGIN_PROVIDER: empty(authLoginProvider) ? 'aad' : authLoginProvider
+      ADMIN_EMAILS: adminEmails
+      HOVTP_HEALTH_URL: hovtpHealthUrl
+      // Hard-disables DEV_FAKE_USER in the router, which the admin check relies on.
+      NODE_ENV: 'production'
       // The zip already contains the built dist; Oryx must not try to build it.
       SCM_DO_BUILD_DURING_DEPLOYMENT: 'false'
     },

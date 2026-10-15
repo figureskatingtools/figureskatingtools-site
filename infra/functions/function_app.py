@@ -88,6 +88,27 @@ HOVTP source JSON (one FSM sender, identified by its client IP):
 "expired" is computed, never stored: an accepted source whose AcceptedUntilUtc
 has passed reads back as expired so the UI re-prompts for it.
 
+Admin routes (the /admin/ panel), gated by `_require_admin` — fail closed: the
+proxy secret must be configured and match, and the e-mail in
+X-Forwarded-User-Email must be in ADMIN_EMAILS. Every mutation writes an AUDIT
+row to the `adminlog` table (see "Admin log" below):
+
+    GET    /api/manage/competitions?status=active|deleted|purged|all
+                                           -> 200 {"competitions": [AdminCompetition, ...]}
+    GET    /api/manage/competitions/{id}   -> 200 {"competition", "files", "hovtp"}
+    PATCH  /api/manage/competitions/{id}   -> 200 {"competition"}  (+ createdBy, deletionDate)
+    DELETE /api/manage/competitions/{id}   -> 200 {"competition"} | 409 deleted
+    POST   /api/manage/competitions/{id}/restore -> 200 {"competition"}  {deletionDate?}
+    POST   /api/manage/competitions/{id}/purge   -> 200 {"competition"} (tombstone)
+                                                    {"confirm": "<code>"}
+    POST   /api/manage/sweep/dry-run       -> 200 {"summary": {...}}
+    GET    /api/manage/diagnostics         -> 200 {"config", "storage", "counts", "sweeps"}
+    GET    /api/manage/audit?before=&limit= -> 200 {"entries": [...], "next": "<id>"|null}
+
+AdminCompetition = Competition + startDate, extendedCount, lastExtendedUtc,
+deleteReason, deletedUtc, purgedUtc, "clock" (the clock row and whether it is
+in sync), with "status" derived: "purged" when PurgedUtc is set.
+
 Every non-2xx body is {"error": "<machine_code>", "message": "<human text>"}.
 
 Storage layout — one `competitions` table, four row kinds:
@@ -131,14 +152,29 @@ DELETE pulls the date to the next midnight. The nightly `retention_sweep`:
      PurgedUtc set — so the tools can tell "purged" from "never existed";
   3. re-sweeps `<guid>/` for two days after a purge (in-flight HOVTP writes);
   4. deletes HOVTPSESSION rows idle for HOVTP_SESSION_IDLE_DAYS;
-  5. reconciles every COMPETITION row into the clock table.
+  5. reconciles every COMPETITION row into the clock table;
+  6. prunes the admin log: AUDIT rows after AUDIT_RETENTION_DAYS, SWEEP rows
+     after SWEEP_LOG_RETENTION_DAYS.
 
 RETENTION_PURGE_ENABLED (app setting, Bicep-owned, on by default) must be
-"true" for steps 2–4 to delete anything; "false" is the kill switch — they
-then only log what they would do.
+"true" for steps 2–4 and 6 to delete anything; "false" is the kill switch —
+they then only log what they would do. The admin "Purge now" is an explicit
+action and does not obey it.
+
+Admin log — table `adminlog` (ADMIN_LOG_TABLE), written only by this app:
+
+    PartitionKey="AUDIT", RowKey=<inverted ticks>_<uuid>   Utc, Actor (the
+        admin's e-mail), Action, CompetitionId, CompetitionCode, Changes (JSON
+        {field: [before, after]}, changed fields only), Outcome
+    PartitionKey="SWEEP", RowKey=<inverted ticks>_<uuid>   Utc, PurgeEnabled,
+        DryRunManual, Summary (JSON) — one row per sweep run
+
+Inverted ticks make ascending RowKey order newest first. Written after the
+action succeeded, best effort: a failed write is logged, never rolled back.
 """
 
 import base64
+import hmac
 import ipaddress
 import json
 import logging
@@ -197,6 +233,29 @@ TOMBSTONE_COLUMNS = (
     "Code", "Name", "StartDate", "EndDate", "Venue", "CreatedUtc", "DeletedUtc",
     "DeleteReason", "DeletionDate", "ExtendedCount", "LastExtendedUtc",
 )
+
+# ── admin (/api/manage/*) ──
+# The admin log: PK "AUDIT" rows (one per admin mutation, newest first by an
+# inverted-ticks RowKey) and PK "SWEEP" rows (one per retention sweep run).
+# Only this app has a grant on it — not the tools, not the HOVTP listener.
+ADMIN_LOG_TABLE_DEFAULT = "adminlog"
+PK_AUDIT = "AUDIT"
+PK_SWEEP = "SWEEP"
+AUDIT_RETENTION_DAYS = 365
+SWEEP_LOG_RETENTION_DAYS = 30
+SWEEP_HISTORY = 10
+AUDIT_PAGE_DEFAULT = 50
+AUDIT_PAGE_MAX = 200
+# Derived, never stored: a tombstone (PurgedUtc set) reads back as purged.
+STATUS_PURGED = "purged"
+ADMIN_STATUS_FILTERS = (STATUS_ACTIVE, STATUS_DELETED, STATUS_PURGED, "all")
+RESTORE_DEFAULT_DAYS = 7
+MAX_EMAIL_LENGTH = 254
+# DateTime.MaxValue.Ticks in .NET — the usual base of an inverted-ticks key.
+_MAX_TICKS = 3155378975999999999
+_TICKS_EPOCH = datetime(1, 1, 1, tzinfo=timezone.utc)
+_ADMIN_LOG_KEY_RE = re.compile(r"^[0-9a-f_]{1,80}$")
+_DELETION_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(T00:00:00Z)?$")
 
 MAX_NAME_LENGTH = 200
 MAX_CODE_LENGTH = 64
@@ -1120,6 +1179,99 @@ def _get_competition(req: func.HttpRequest) -> func.HttpResponse:
     return _json(entity_to_competition(entity))
 
 
+def _apply_competition_edit(table_client, entity, body: dict, extra_updates=None, etag=None):
+    """The editable-field half of PUT/PATCH, shared by the user route and the
+    admin route: validate `body`, claim a renamed code, merge the write,
+    release the old code. -> (merged entity, None) or (None, error response).
+
+    `extra_updates` are already-validated columns written in the same merge
+    (the admin route's owner and deletion date). With `etag` the write is
+    conditional: ResourceModifiedError is re-raised AFTER a fresh code claim
+    has been compensated, so the caller can re-read the row and retry.
+    """
+    competition_id = entity.get("RowKey", "")
+    updates = {}
+
+    if "name" in body:
+        name = _clean(body.get("name"), MAX_NAME_LENGTH)
+        if not name:
+            return None, _error("invalid_name", "A competition name is required.", 400)
+        updates["Name"] = name
+
+    for field, column, max_length in (("date", "StartDate", 10), ("endDate", "EndDate", 10)):
+        if field in body:
+            value = _clean(body.get(field), max_length)
+            if not _valid_date(value):
+                return None, _error("invalid_date", "Dates must be in yyyy-mm-dd format.", 400)
+            updates[column] = value
+
+    if "startDate" in body and "date" not in body:
+        value = _clean(body.get("startDate"), 10)
+        if not _valid_date(value):
+            return None, _error("invalid_date", "Dates must be in yyyy-mm-dd format.", 400)
+        updates["StartDate"] = value
+
+    if "venue" in body:
+        updates["Venue"] = _clean(body.get("venue"), MAX_VENUE_LENGTH)
+
+    old_code = entity.get("Code", "")
+    new_code = old_code
+    if "code" in body:
+        new_code = normalize_code(body.get("code"))
+        if not new_code:
+            return None, _error("invalid_code",
+                                "The competition code must contain letters or digits.", 400)
+
+    renaming = new_code != old_code
+
+    # Rename = claim the new code first (409 if taken), then update, then release
+    # the old one. Same ordering as create, for the same reason.
+    if renaming:
+        try:
+            table_client.create_entity({
+                "PartitionKey": PK_CODE,
+                "RowKey": new_code,
+                "CompetitionId": competition_id,
+                "CreatedUtc": _now_utc(),
+            })
+        except ResourceExistsError:
+            return None, _error("code_in_use", f"The competition code '{new_code}' is already in use.",
+                                409, code=new_code)
+        except Exception as e:
+            logging.error(f"Error reserving competition code '{new_code}': {e}")
+            return None, _error("internal_error", "Could not update the competition.", 500)
+        updates["Code"] = new_code
+
+    updates.update(extra_updates or {})
+    updates["UpdatedUtc"] = _now_utc()
+
+    conditional = {}
+    if etag is not None:
+        conditional = {"etag": etag, "match_condition": MatchConditions.IfNotModified}
+    try:
+        table_client.update_entity(
+            {"PartitionKey": PK_COMPETITION, "RowKey": competition_id, **updates},
+            mode=UpdateMode.MERGE,
+            **conditional,
+        )
+    except ResourceModifiedError:
+        if renaming:
+            _delete_code_row(table_client, new_code)
+        raise
+    except Exception as e:
+        logging.error(f"Error updating competition '{competition_id}': {e}")
+        if renaming:
+            _delete_code_row(table_client, new_code)
+        return None, _error("internal_error", "Could not update the competition.", 500)
+
+    if renaming:
+        _delete_code_row(table_client, old_code)
+
+    merged = dict(entity)
+    merged.update(updates)
+    return merged, None
+
+
 def _update_competition(req: func.HttpRequest) -> func.HttpResponse:
     email = get_user_email_from_header(req)
     if not email:
@@ -1146,57 +1298,27 @@ def _update_competition(req: func.HttpRequest) -> func.HttpResponse:
     if entity is None or entity.get("Status") == STATUS_DELETED:
         return _error("not_found", "Competition not found.", 404)
 
-    updates = {}
+    merged, error = _apply_competition_edit(table_client, entity, body)
+    if error is not None:
+        return error
+    return _json(entity_to_competition(merged))
 
-    if "name" in body:
-        name = _clean(body.get("name"), MAX_NAME_LENGTH)
-        if not name:
-            return _error("invalid_name", "A competition name is required.", 400)
-        updates["Name"] = name
 
-    for field, column, max_length in (("date", "StartDate", 10), ("endDate", "EndDate", 10)):
-        if field in body:
-            value = _clean(body.get(field), max_length)
-            if not _valid_date(value):
-                return _error("invalid_date", "Dates must be in yyyy-mm-dd format.", 400)
-            updates[column] = value
-
-    if "startDate" in body and "date" not in body:
-        value = _clean(body.get("startDate"), 10)
-        if not _valid_date(value):
-            return _error("invalid_date", "Dates must be in yyyy-mm-dd format.", 400)
-        updates["StartDate"] = value
-
-    if "venue" in body:
-        updates["Venue"] = _clean(body.get("venue"), MAX_VENUE_LENGTH)
-
-    old_code = entity.get("Code", "")
-    new_code = old_code
-    if "code" in body:
-        new_code = normalize_code(body.get("code"))
-        if not new_code:
-            return _error("invalid_code", "The competition code must contain letters or digits.", 400)
-
-    renaming = new_code != old_code
-
-    # Rename = claim the new code first (409 if taken), then update, then release
-    # the old one. Same ordering as create, for the same reason.
-    if renaming:
-        try:
-            table_client.create_entity({
-                "PartitionKey": PK_CODE,
-                "RowKey": new_code,
-                "CompetitionId": competition_id,
-                "CreatedUtc": _now_utc(),
-            })
-        except ResourceExistsError:
-            return _error("code_in_use", f"The competition code '{new_code}' is already in use.", 409, code=new_code)
-        except Exception as e:
-            logging.error(f"Error reserving competition code '{new_code}': {e}")
-            return _error("internal_error", "Could not update the competition.", 500)
-        updates["Code"] = new_code
-
-    updates["UpdatedUtc"] = _now_utc()
+def _soft_delete(table_client, entity):
+    """Status=deleted, CODE row freed, DeletionDate pulled to the next midnight.
+    Shared by the user DELETE, the admin DELETE and the admin purge.
+    -> (merged entity, None) or (None, error response)."""
+    competition_id = entity.get("RowKey", "")
+    now = datetime.now(timezone.utc)
+    next_midnight = _midnight(now) + timedelta(days=1)
+    updates = {
+        "Status": STATUS_DELETED,
+        "DeleteReason": DELETE_REASON_USER,
+        "DeletedUtc": _utc_text(now),
+        "UpdatedUtc": _utc_text(now),
+        # Only ever pulled forward — never later than the date already set.
+        "DeletionDate": _utc_text(min(_effective_deletion_date(entity), next_midnight)),
+    }
 
     try:
         table_client.update_entity(
@@ -1204,17 +1326,17 @@ def _update_competition(req: func.HttpRequest) -> func.HttpResponse:
             mode=UpdateMode.MERGE,
         )
     except Exception as e:
-        logging.error(f"Error updating competition '{competition_id}': {e}")
-        if renaming:
-            _delete_code_row(table_client, new_code)
-        return _error("internal_error", "Could not update the competition.", 500)
+        logging.error(f"Error deleting competition '{competition_id}': {e}")
+        return None, _error("internal_error", "Could not delete the competition.", 500)
 
-    if renaming:
-        _delete_code_row(table_client, old_code)
+    # Best-effort here: a CODE row left behind is released by the sweep.
+    _release_code_row(table_client, entity.get("Code", ""), competition_id)
 
     merged = dict(entity)
     merged.update(updates)
-    return _json(entity_to_competition(merged))
+    # Status=deleted reaches the tools now; they delete on their next run.
+    _sync_clock(merged)
+    return merged, None
 
 
 def _delete_competition(req: func.HttpRequest) -> func.HttpResponse:
@@ -1249,33 +1371,9 @@ def _delete_competition(req: func.HttpRequest) -> func.HttpResponse:
         # Idempotent: deleting twice is not an error.
         return _json(entity_to_competition(entity))
 
-    now = datetime.now(timezone.utc)
-    next_midnight = _midnight(now) + timedelta(days=1)
-    updates = {
-        "Status": STATUS_DELETED,
-        "DeleteReason": DELETE_REASON_USER,
-        "DeletedUtc": _utc_text(now),
-        "UpdatedUtc": _utc_text(now),
-        # Only ever pulled forward — never later than the date already set.
-        "DeletionDate": _utc_text(min(_effective_deletion_date(entity), next_midnight)),
-    }
-
-    try:
-        table_client.update_entity(
-            {"PartitionKey": PK_COMPETITION, "RowKey": competition_id, **updates},
-            mode=UpdateMode.MERGE,
-        )
-    except Exception as e:
-        logging.error(f"Error deleting competition '{competition_id}': {e}")
-        return _error("internal_error", "Could not delete the competition.", 500)
-
-    # Best-effort here: a CODE row left behind is released by the sweep.
-    _release_code_row(table_client, entity.get("Code", ""), competition_id)
-
-    merged = dict(entity)
-    merged.update(updates)
-    # Status=deleted reaches the tools now; they delete on their next run.
-    _sync_clock(merged)
+    merged, error = _soft_delete(table_client, entity)
+    if error is not None:
+        return error
     return _json(entity_to_competition(merged))
 
 
@@ -1879,13 +1977,28 @@ def _session_last_activity(entity) -> datetime | None:
     return _parse_utc(metadata.get("timestamp"))
 
 
-def _run_retention_sweep(now: datetime, purge_enabled: bool) -> dict:
-    """The nightly retention pass. Returns counters (logged, and asserted on
-    by the tests). With purge disabled it still backfills DeletionDate but
-    deletes nothing — it only logs what it would have purged."""
+def _run_retention_sweep(now: datetime, purge_enabled: bool, *,
+                         dry_run_manual: bool = False) -> dict:
+    """The nightly retention pass. Returns counters (logged, recorded as a
+    SWEEP row in the admin log, and asserted on by the tests). With purge
+    disabled it still backfills DeletionDate but deletes nothing — it only
+    logs what it would have purged. `dry_run_manual` marks the admin panel's
+    "dry-run now" in that record; it never enables purging by itself."""
+    summary = _sweep_registry(now, purge_enabled)
+    # 6. The admin log keeps its own retention (AUDIT_RETENTION_DAYS /
+    #    SWEEP_LOG_RETENTION_DAYS), under the same kill switch.
+    _prune_admin_log(now, purge_enabled, summary)
+    logging.info(f"Retention sweep ({'purge' if purge_enabled else 'dry-run'}): {summary}")
+    _record_sweep(now, purge_enabled, summary, dry_run_manual)
+    return summary
+
+
+def _sweep_registry(now: datetime, purge_enabled: bool) -> dict:
+    """Steps 1–5 of the sweep (see the module docstring)."""
     summary = {"backfilled": 0, "purged": 0, "would_purge": 0, "failed": 0,
                "resweeps": 0, "sessions_deleted": 0, "sessions_would_delete": 0,
-               "clock_synced": 0}
+               "clock_synced": 0, "audit_pruned": 0, "audit_would_prune": 0,
+               "sweeps_pruned": 0, "sweeps_would_prune": 0}
 
     table_client = get_table_client()
     if not table_client:
@@ -1985,8 +2098,745 @@ def _run_retention_sweep(now: datetime, purge_enabled: bool) -> dict:
     else:
         summary["clock_synced"], _ok = _reconcile_clock(table_client, clock_client)
 
-    logging.info(f"Retention sweep ({'purge' if purge_enabled else 'dry-run'}): {summary}")
     return summary
+
+
+# ── admin: gate ───────────────────────────────────────────────────────────────
+# The router already answers 403 on /api/manage/* for non-admins, but this
+# app's hostname is public, so the decision is made again here from its own
+# copy of the allow-list. Unlike get_user_email_from_header this gate FAILS
+# CLOSED: no configured secret means nobody is an admin, and the identity comes
+# only from the router's X-Forwarded-User-Email — never from the unverified
+# X-MS-*/JWT fallbacks.
+
+def _admin_emails() -> frozenset:
+    """ADMIN_EMAILS (comma-separated) -> lowercased set. Empty = no admins."""
+    raw = os.environ.get("ADMIN_EMAILS") or ""
+    return frozenset(part.strip().lower() for part in raw.split(",") if part.strip())
+
+
+def _require_admin(req: func.HttpRequest):
+    """-> the admin's lowercased e-mail, or the 401/403 response to return."""
+    expected = os.environ.get("PROXY_SHARED_SECRET") or ""
+    provided = req.headers.get("X-Proxy-Secret") or req.headers.get("x-proxy-secret") or ""
+    if not expected or not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
+        logging.warning("Admin route: proxy shared secret unset, missing or mismatched")
+        return _error("unauthorized", "Sign-in required.", 401)
+
+    email = (req.headers.get("X-Forwarded-User-Email")
+             or req.headers.get("x-forwarded-user-email") or "").strip().lower()
+    if not email or email not in _admin_emails():
+        return _error("admin_required", "Administrator access required.", 403)
+    return email
+
+
+# ── admin: log (audit trail + sweep runs) ─────────────────────────────────────
+# Best effort, like _sync_clock: the admin action has already succeeded when
+# its audit row is written, so a failed write is logged at ERROR and the
+# action stands.
+
+def _admin_log_table_name() -> str:
+    return os.environ.get("ADMIN_LOG_TABLE") or ADMIN_LOG_TABLE_DEFAULT
+
+
+def _inverted_ticks(moment: datetime) -> str:
+    """Fixed-width, so ascending RowKey order is newest first."""
+    delta = moment.astimezone(timezone.utc) - _TICKS_EPOCH
+    ticks = (delta.days * 86400 + delta.seconds) * 10_000_000 + delta.microseconds * 10
+    return f"{_MAX_TICKS - ticks:019d}"
+
+
+def _admin_log_key(moment: datetime) -> str:
+    # The uuid keeps two writes within the same 100 ns tick apart.
+    return f"{_inverted_ticks(moment)}_{uuid4().hex}"
+
+
+def _write_admin_log(row: dict) -> bool:
+    try:
+        client = get_table_client(_admin_log_table_name())
+        if client is None:
+            logging.error(f"Admin log unavailable; {row.get('PartitionKey')} row not written")
+            return False
+        try:
+            client.create_entity(row)
+        except ResourceNotFoundError:
+            # Table missing (local dev); Bicep creates it in Azure.
+            _ensure_table(client)
+            client.create_entity(row)
+        return True
+    except Exception as e:
+        logging.error(f"Could not write the admin log ({row.get('PartitionKey')} "
+                      f"{row.get('Action', '')}): {e}")
+        return False
+
+
+def _audit(actor: str, action: str, entity=None, changes=None, outcome: str = "ok") -> bool:
+    """One AUDIT row. `changes` is {field: [before, after]}, changed fields only."""
+    now = datetime.now(timezone.utc)
+    entity = entity or {}
+    return _write_admin_log({
+        "PartitionKey": PK_AUDIT,
+        "RowKey": _admin_log_key(now),
+        "Utc": _utc_text(now),
+        "Actor": actor,
+        "Action": action,
+        "CompetitionId": entity.get("RowKey") or "",
+        "CompetitionCode": entity.get("Code") or "",
+        "Changes": json.dumps(changes or {}),
+        "Outcome": outcome,
+    })
+
+
+def _record_sweep(now: datetime, purge_enabled: bool, summary: dict, dry_run_manual: bool) -> bool:
+    """One SWEEP row per _run_retention_sweep — the diagnostics' "last runs"."""
+    return _write_admin_log({
+        "PartitionKey": PK_SWEEP,
+        "RowKey": _admin_log_key(now),
+        "Utc": _utc_text(now),
+        "PurgeEnabled": bool(purge_enabled),
+        "DryRunManual": bool(dry_run_manual),
+        "Summary": json.dumps(summary),
+    })
+
+
+def _prune_admin_log(now: datetime, purge_enabled: bool, summary: dict) -> None:
+    """Sweep step 6: AUDIT rows older than AUDIT_RETENTION_DAYS and SWEEP rows
+    older than SWEEP_LOG_RETENTION_DAYS. Older = larger inverted ticks, so each
+    is one RowKey range from the cut-off up."""
+    client = get_table_client(_admin_log_table_name())
+    if client is None:
+        logging.error("Retention: admin log unavailable; prune skipped")
+        return
+    for partition_key, days, done, would in (
+        (PK_AUDIT, AUDIT_RETENTION_DAYS, "audit_pruned", "audit_would_prune"),
+        (PK_SWEEP, SWEEP_LOG_RETENTION_DAYS, "sweeps_pruned", "sweeps_would_prune"),
+    ):
+        cutoff = _inverted_ticks(now - timedelta(days=days))
+        try:
+            rows = list(client.query_entities(
+                f"PartitionKey eq '{partition_key}' and RowKey ge '{cutoff}'"))
+        except ResourceNotFoundError:
+            continue   # no admin log yet
+        except Exception as e:
+            logging.error(f"Retention: could not list old {partition_key} rows: {e}")
+            continue
+        for row in rows:
+            if not purge_enabled:
+                summary[would] += 1
+                continue
+            try:
+                client.delete_entity(partition_key=partition_key, row_key=row["RowKey"])
+                summary[done] += 1
+            except ResourceNotFoundError:
+                pass
+            except Exception as e:
+                logging.error(f"Retention: could not delete {partition_key} row "
+                              f"'{row.get('RowKey')}': {e}")
+
+
+def _audit_to_json(row) -> dict:
+    try:
+        changes = json.loads(row.get("Changes") or "{}")
+    except ValueError:
+        changes = {}
+    return {
+        "id": row.get("RowKey", ""),
+        "utc": row.get("Utc", ""),
+        "actor": row.get("Actor", ""),
+        "action": row.get("Action", ""),
+        "competitionId": row.get("CompetitionId") or None,
+        "competitionCode": row.get("CompetitionCode") or None,
+        "changes": changes if isinstance(changes, dict) else {},
+        "outcome": row.get("Outcome", ""),
+    }
+
+
+def _sweep_to_json(row) -> dict:
+    try:
+        summary = json.loads(row.get("Summary") or "{}")
+    except ValueError:
+        summary = {}
+    return {
+        "utc": row.get("Utc", ""),
+        "purgeEnabled": bool(row.get("PurgeEnabled")),
+        "dryRunManual": bool(row.get("DryRunManual")),
+        "summary": summary,
+    }
+
+
+# ── admin: wire shape ─────────────────────────────────────────────────────────
+
+# The fields an AUDIT row's `changes` may name, in AdminCompetition terms.
+AUDIT_FIELDS = ("name", "code", "startDate", "endDate", "venue", "createdBy",
+                "deletionDate", "status")
+
+
+def _admin_status(entity) -> str:
+    if entity.get("PurgedUtc"):
+        return STATUS_PURGED
+    return entity.get("Status") or STATUS_ACTIVE
+
+
+def _clock_to_json(entity, clock_row):
+    if clock_row is None:
+        return None
+    return {
+        "inSync": not _clock_differs(_clock_row(entity), clock_row),
+        "deletionDate": clock_row.get("DeletionDate") or None,
+        "status": clock_row.get("Status") or None,
+        "purgedUtc": clock_row.get("PurgedUtc") or None,
+    }
+
+
+def entity_to_admin_competition(entity, clock_row=None) -> dict:
+    """entity_to_competition + the server-owned columns an admin may see."""
+    competition = entity_to_competition(entity)
+    competition.update({
+        "startDate": competition["date"],
+        "endDate": competition["endDate"] or None,
+        "createdBy": competition["createdBy"] or None,
+        "status": _admin_status(entity),
+        "extendedCount": _int_column(entity, "ExtendedCount"),
+        "lastExtendedUtc": entity.get("LastExtendedUtc") or None,
+        "deleteReason": entity.get("DeleteReason") or None,
+        "deletedUtc": entity.get("DeletedUtc") or None,
+        "purgedUtc": entity.get("PurgedUtc") or None,
+        "clock": _clock_to_json(entity, clock_row),
+    })
+    return competition
+
+
+def _changes(before, after) -> dict:
+    old = entity_to_admin_competition(before)
+    new = entity_to_admin_competition(after)
+    return {field: [old[field], new[field]] for field in AUDIT_FIELDS if old[field] != new[field]}
+
+
+def _read_clock_row(competition_id: str):
+    """The competition's clock row, or None (missing or unreadable)."""
+    try:
+        client = get_table_client(_clock_table_name())
+        if client is None:
+            return None
+        return client.get_entity(partition_key=PK_COMPETITION,
+                                 row_key=str(competition_id).strip().lower())
+    except ResourceNotFoundError:
+        return None
+    except Exception as e:
+        logging.warning(f"Could not read the clock row of '{competition_id}': {e}")
+        return None
+
+
+def _read_clock_rows():
+    """-> ({rowkey: clock row}, None) or ({}, error text)."""
+    try:
+        client = get_table_client(_clock_table_name())
+        if client is None:
+            return {}, "Clock table configuration invalid."
+        rows = client.query_entities(f"PartitionKey eq '{PK_COMPETITION}'")
+        return {row.get("RowKey"): row for row in rows}, None
+    except ResourceNotFoundError:
+        return {}, None
+    except Exception as e:
+        logging.warning(f"Could not read the clock table: {e}")
+        return {}, _short_error(e)
+
+
+def _short_error(error: Exception) -> str:
+    return f"{type(error).__name__}: {str(error)[:200]}"
+
+
+def _parse_deletion_date(value, now: datetime) -> datetime | None:
+    """'YYYY-MM-DD' or 'YYYY-MM-DDT00:00:00Z', on or after tomorrow 00:00 UTC.
+    Any later date is allowed. None => invalid."""
+    if not isinstance(value, str) or not _DELETION_DATE_RE.match(value.strip()):
+        return None
+    day = value.strip()[:10]
+    if not _valid_date(day):
+        return None
+    moment = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    if moment < _midnight(now) + timedelta(days=1):
+        return None
+    return moment
+
+
+def _admin_target(req: func.HttpRequest):
+    """Gate + {id} + table client, shared by the per-competition admin routes.
+
+    -> ((admin, competition_id, table_client), None) or (None, error response).
+    """
+    admin = _require_admin(req)
+    if isinstance(admin, func.HttpResponse):
+        return None, admin
+
+    competition_id = req.route_params.get("id")
+    if not competition_id:
+        return None, _error("invalid_id", "A competition id is required.", 400)
+
+    table_client = get_table_client()
+    if not table_client:
+        return None, _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    return (admin, competition_id, table_client), None
+
+
+def _read_admin_entity(table_client, competition_id: str):
+    """(entity, None) or (None, 404/500 response)."""
+    try:
+        entity = _get_competition_entity(table_client, competition_id)
+    except Exception as e:
+        logging.error(f"Error reading competition '{competition_id}': {e}")
+        return None, _error("internal_error", "Could not read the competition.", 500)
+    if entity is None:
+        return None, _error("not_found", "Competition not found.", 404)
+    return entity, None
+
+
+def _admin_competition_response(entity) -> func.HttpResponse:
+    return _json({"competition": entity_to_admin_competition(
+        entity, _read_clock_row(entity.get("RowKey", "")))})
+
+
+# ── admin: handlers ───────────────────────────────────────────────────────────
+
+def _admin_list_competitions(req: func.HttpRequest) -> func.HttpResponse:
+    admin = _require_admin(req)
+    if isinstance(admin, func.HttpResponse):
+        return admin
+
+    status = (req.params.get("status") or "all").strip().lower()
+    if status not in ADMIN_STATUS_FILTERS:
+        return _error("invalid_status", "Status must be active, deleted, purged or all.", 400)
+
+    table_client = get_table_client()
+    if not table_client:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    try:
+        entities = list(table_client.query_entities(f"PartitionKey eq '{PK_COMPETITION}'"))
+    except ResourceNotFoundError:
+        entities = []
+    except Exception as e:
+        logging.error(f"Error listing competitions for the admin panel: {e}")
+        return _error("internal_error", "Could not list competitions.", 500)
+
+    clocks, _clock_error = _read_clock_rows()
+    competitions = [
+        entity_to_admin_competition(entity, clocks.get(str(entity.get("RowKey") or "").lower()))
+        for entity in entities
+        if status == "all" or _admin_status(entity) == status
+    ]
+    competitions.sort(key=_sort_key, reverse=True)
+    return _json({"competitions": competitions})
+
+
+def _admin_get_competition(req: func.HttpRequest) -> func.HttpResponse:
+    target, error = _admin_target(req)
+    if error is not None:
+        return error
+    _admin, competition_id, table_client = target
+
+    entity, error = _read_admin_entity(table_client, competition_id)
+    if error is not None:
+        return error
+
+    container = _get_container_client()
+    if container is None:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    files = {"count": 0, "bytes": 0}
+    hovtp = {HOVTP_STATUS_PENDING: 0, HOVTP_STATUS_ACCEPTED: 0,
+             HOVTP_STATUS_EXPIRED: 0, HOVTP_STATUS_REJECTED: 0}
+    now = _now_utc()
+    try:
+        # Everything under <guid>/ — uploads, fsm and the quarantine alike.
+        for blob in container.list_blobs(name_starts_with=f"{competition_id}/"):
+            files["count"] += 1
+            files["bytes"] += getattr(blob, "size", 0) or 0
+        for source in _list_hovtp_source_entities(table_client, competition_id):
+            status = _source_status(source, now)
+            hovtp[status] = hovtp.get(status, 0) + 1
+    except Exception as e:
+        logging.error(f"Error reading the details of competition '{competition_id}': {e}")
+        return _error("internal_error", "Could not read the competition details.", 500)
+
+    return _json({
+        "competition": entity_to_admin_competition(entity, _read_clock_row(competition_id)),
+        "files": files,
+        "hovtp": hovtp,
+    })
+
+
+def _admin_update_competition(req: func.HttpRequest) -> func.HttpResponse:
+    """The user PATCH (same validation, same CODE-row move) plus the owner
+    (`createdBy`) and the deletion date — any day from tomorrow on, synced
+    into the clock table at once. Etag-conditional with retries, so the audit
+    row's "before" is the version the write replaced."""
+    target, error = _admin_target(req)
+    if error is not None:
+        return error
+    admin, competition_id, table_client = target
+
+    body = _read_body(req)
+    if body is None:
+        return _error("invalid_body", "Expected a JSON object body.", 400)
+
+    extra = {}
+    if "createdBy" in body:
+        owner = body.get("createdBy")
+        owner = "" if owner is None else owner
+        if not isinstance(owner, str):
+            return _error("invalid_created_by", "The owner must be an e-mail address.", 400)
+        owner = owner.strip()
+        if len(owner) > MAX_EMAIL_LENGTH or (owner and (
+                owner.count("@") != 1 or any(c.isspace() for c in owner))):
+            return _error("invalid_created_by", "The owner must be an e-mail address.", 400)
+        extra["CreatedBy"] = owner
+
+    if "deletionDate" in body:
+        moment = _parse_deletion_date(body.get("deletionDate"), datetime.now(timezone.utc))
+        if moment is None:
+            return _error("invalid_deletion_date",
+                          "The deletion date must be a yyyy-mm-dd date from tomorrow on.", 400)
+        extra["DeletionDate"] = _utc_text(moment)
+
+    for attempt in range(EXTEND_RETRIES):
+        entity, error = _read_admin_entity(table_client, competition_id)
+        if error is not None:
+            return error
+        if entity.get("Status") == STATUS_DELETED:
+            return _error("deleted", "This competition has been deleted; restore it first.", 409)
+
+        try:
+            merged, error = _apply_competition_edit(table_client, entity, body, extra,
+                                                    etag=_entity_etag(entity))
+        except ResourceModifiedError:
+            logging.info(f"Competition '{competition_id}' changed during an admin edit "
+                         f"(attempt {attempt + 1}/{EXTEND_RETRIES}); retrying")
+            continue
+        if error is not None:
+            return error
+
+        _sync_clock(merged)
+        changes = _changes(entity, merged)
+        if changes:
+            _audit(admin, "competition.update", merged, changes)
+        return _admin_competition_response(merged)
+
+    return _error("conflict", "The competition kept changing; please try again.", 409)
+
+
+def _admin_restore_competition(req: func.HttpRequest) -> func.HttpResponse:
+    """Undo a soft delete: re-claim the CODE row (409 code_in_use when someone
+    took the code meanwhile — rename and retry), Status=active, and a fresh
+    deletion date (body `deletionDate`, default today + RESTORE_DEFAULT_DAYS).
+    A purged competition has nothing left to restore."""
+    target, error = _admin_target(req)
+    if error is not None:
+        return error
+    admin, competition_id, table_client = target
+
+    body = {}
+    if req.get_body():
+        body = _read_body(req)
+        if body is None:
+            return _error("invalid_body", "Expected a JSON object body.", 400)
+
+    now = datetime.now(timezone.utc)
+    deletion = _midnight(now) + timedelta(days=RESTORE_DEFAULT_DAYS)
+    if body.get("deletionDate") not in (None, ""):
+        deletion = _parse_deletion_date(body.get("deletionDate"), now)
+        if deletion is None:
+            return _error("invalid_deletion_date",
+                          "The deletion date must be a yyyy-mm-dd date from tomorrow on.", 400)
+
+    for attempt in range(EXTEND_RETRIES):
+        entity, error = _read_admin_entity(table_client, competition_id)
+        if error is not None:
+            return error
+        if entity.get("PurgedUtc"):
+            return _error("purged", "This competition has been purged and cannot be restored.", 409)
+        if entity.get("Status") != STATUS_DELETED:
+            return _error("not_deleted", "This competition is not deleted.", 409)
+
+        # Claim the code first, as create does: a taken code fails here with
+        # nothing written. A CODE row still pointing here (a release that
+        # failed) is ours already.
+        code = entity.get("Code", "")
+        claimed = False
+        if code:
+            try:
+                table_client.create_entity({
+                    "PartitionKey": PK_CODE,
+                    "RowKey": code,
+                    "CompetitionId": competition_id,
+                    "CreatedUtc": _utc_text(now),
+                })
+                claimed = True
+            except ResourceExistsError:
+                try:
+                    owner = table_client.get_entity(partition_key=PK_CODE, row_key=code)
+                except ResourceNotFoundError:
+                    continue   # released between the two calls; claim again
+                if (owner.get("CompetitionId") or "") != competition_id:
+                    return _error("code_in_use",
+                                  f"The competition code '{code}' is already in use.", 409, code=code)
+            except Exception as e:
+                logging.error(f"Error reserving competition code '{code}': {e}")
+                return _error("internal_error", "Could not restore the competition.", 500)
+
+        updates = {
+            "Status": STATUS_ACTIVE,
+            "DeleteReason": "",
+            "DeletedUtc": "",
+            "DeletionDate": _utc_text(deletion),
+            "UpdatedUtc": _utc_text(datetime.now(timezone.utc)),
+        }
+        try:
+            table_client.update_entity(
+                {"PartitionKey": PK_COMPETITION, "RowKey": competition_id, **updates},
+                mode=UpdateMode.MERGE,
+                etag=_entity_etag(entity),
+                match_condition=MatchConditions.IfNotModified,
+            )
+        except ResourceModifiedError:
+            if claimed:
+                _delete_code_row(table_client, code)
+            logging.info(f"Competition '{competition_id}' changed during restore "
+                         f"(attempt {attempt + 1}/{EXTEND_RETRIES}); retrying")
+            continue
+        except Exception as e:
+            if claimed:
+                _delete_code_row(table_client, code)
+            if isinstance(e, ResourceNotFoundError):
+                return _error("not_found", "Competition not found.", 404)
+            logging.error(f"Error restoring competition '{competition_id}': {e}")
+            return _error("internal_error", "Could not restore the competition.", 500)
+
+        merged = dict(entity)
+        merged.update(updates)
+        _sync_clock(merged)
+        _audit(admin, "competition.restore", merged, _changes(entity, merged))
+        return _admin_competition_response(merged)
+
+    return _error("conflict", "The competition kept changing; please try again.", 409)
+
+
+def _admin_purge_competition(req: func.HttpRequest) -> func.HttpResponse:
+    """Purge now, exactly as the nightly sweep would: soft delete if needed,
+    then _purge_competition — blobs, HOVTP sources and CODE row gone, the row
+    replaced by a tombstone. An explicit admin action, so it does NOT obey the
+    RETENTION_PURGE_ENABLED kill switch (that guards the unattended sweep).
+    The typed code in `confirm` must match."""
+    target, error = _admin_target(req)
+    if error is not None:
+        return error
+    admin, competition_id, table_client = target
+
+    body = _read_body(req)
+    if body is None:
+        return _error("invalid_body", "Expected a JSON object body.", 400)
+
+    entity, error = _read_admin_entity(table_client, competition_id)
+    if error is not None:
+        return error
+    if entity.get("PurgedUtc"):
+        return _error("purged", "This competition has already been purged.", 409)
+
+    confirm = normalize_code(body.get("confirm") or "")
+    if not confirm or confirm != (entity.get("Code") or ""):
+        return _error("confirm_mismatch", "Type the competition code to confirm the purge.", 400)
+
+    before_status = _admin_status(entity)
+    if entity.get("Status") != STATUS_DELETED:
+        _merged, error = _soft_delete(table_client, entity)
+        if error is not None:
+            return error
+        entity, error = _read_admin_entity(table_client, competition_id)
+        if error is not None:
+            return error
+
+    if not _purge_competition(table_client, _get_container_client(), entity,
+                              datetime.now(timezone.utc)):
+        # The soft delete stands (DeletionDate is tonight), so the nightly
+        # sweep finishes the purge if this retry is not made first.
+        _audit(admin, "competition.purge", entity,
+               {"status": [before_status, _admin_status(entity)]}, outcome="failed")
+        return _error("purge_failed", "The purge did not complete; try again.", 500)
+
+    stone, error = _read_admin_entity(table_client, competition_id)
+    if error is not None:
+        return error
+    # Status only: the "before" owner e-mail must not outlive the tombstone.
+    _audit(admin, "competition.purge", stone, {"status": [before_status, STATUS_PURGED]})
+    return _admin_competition_response(stone)
+
+
+def _admin_delete_competition(req: func.HttpRequest) -> func.HttpResponse:
+    """The user DELETE plus an audit row; a second delete is a 409 here."""
+    target, error = _admin_target(req)
+    if error is not None:
+        return error
+    admin, competition_id, table_client = target
+
+    entity, error = _read_admin_entity(table_client, competition_id)
+    if error is not None:
+        return error
+    if entity.get("Status") == STATUS_DELETED:
+        return _error("deleted", "This competition has already been deleted.", 409)
+
+    merged, error = _soft_delete(table_client, entity)
+    if error is not None:
+        return error
+    _audit(admin, "competition.delete", merged, _changes(entity, merged))
+    return _admin_competition_response(merged)
+
+
+def _admin_sweep_dry_run(req: func.HttpRequest) -> func.HttpResponse:
+    """The nightly sweep with purging off. Deletes nothing — but, as in any
+    dry-run, the DeletionDate backfill and the clock reconcile still write."""
+    admin = _require_admin(req)
+    if isinstance(admin, func.HttpResponse):
+        return admin
+
+    summary = _run_retention_sweep(datetime.now(timezone.utc), False, dry_run_manual=True)
+    _audit(admin, "sweep.dryrun")
+    return _json({"summary": summary})
+
+
+def _hovtp_enabled_setting():
+    """HOVTP_ENABLED as the listener reads it — informational here, the
+    listener has its own copy. None = not configured on this app."""
+    raw = (os.environ.get("HOVTP_ENABLED") or "").strip().lower()
+    if not raw:
+        return None
+    return raw not in ("0", "false", "no")
+
+
+def _admin_diagnostics(req: func.HttpRequest) -> func.HttpResponse:
+    admin = _require_admin(req)
+    if isinstance(admin, func.HttpResponse):
+        return admin
+
+    config = {
+        "retentionPurgeEnabled": _purge_enabled(),
+        "hovtpEnabled": _hovtp_enabled_setting(),
+        "retentionDays": RETENTION_DAYS,
+        "extensionDays": EXTENSION_DAYS,
+        "clockTable": _clock_table_name(),
+        "adminLogTable": _admin_log_table_name(),
+        "auditRetentionDays": AUDIT_RETENTION_DAYS,
+    }
+    by_status = {STATUS_ACTIVE: 0, STATUS_DELETED: 0, STATUS_PURGED: 0}
+    sources_by_status = {HOVTP_STATUS_PENDING: 0, HOVTP_STATUS_ACCEPTED: 0,
+                         HOVTP_STATUS_EXPIRED: 0, HOVTP_STATUS_REJECTED: 0}
+    counts = {"competitions": by_status, "dueWithin7Days": 0, "pastDeletionDate": 0,
+              "hovtpSources": sources_by_status, "hovtpSessions": 0, "clockDrift": 0}
+    errors = []
+    sweeps = []
+
+    table_client = get_table_client()
+    if table_client is None:
+        errors.append("Storage configuration invalid.")
+    else:
+        try:
+            competitions = list(table_client.query_entities(f"PartitionKey eq '{PK_COMPETITION}'"))
+            sources = list(table_client.query_entities(f"PartitionKey eq '{PK_HOVTP_SOURCE}'"))
+            sessions = list(table_client.query_entities(f"PartitionKey eq '{PK_HOVTP_SESSION}'"))
+        except Exception as e:
+            errors.append(_short_error(e))
+            competitions, sources, sessions = [], [], []
+
+        clocks, clock_error = _read_clock_rows()
+        if clock_error:
+            errors.append(f"Clock table: {clock_error}")
+
+        now = datetime.now(timezone.utc)
+        due_before = now + timedelta(days=7)
+        for entity in competitions:
+            status = _admin_status(entity)
+            by_status[status] = by_status.get(status, 0) + 1
+            if not clock_error and _clock_differs(
+                    _clock_row(entity), clocks.get(str(entity.get("RowKey") or "").lower())):
+                counts["clockDrift"] += 1
+            if status == STATUS_PURGED:
+                continue
+            deletion = _effective_deletion_date(entity)
+            if deletion <= now:
+                counts["pastDeletionDate"] += 1
+            elif status == STATUS_ACTIVE and deletion <= due_before:
+                counts["dueWithin7Days"] += 1
+
+        now_text = _utc_text(now)
+        for source in sources:
+            status = _source_status(source, now_text)
+            sources_by_status[status] = sources_by_status.get(status, 0) + 1
+        counts["hovtpSessions"] = len(sessions)
+
+    log_client = get_table_client(_admin_log_table_name())
+    if log_client is None:
+        errors.append("Admin log configuration invalid.")
+    else:
+        try:
+            for row in log_client.query_entities(f"PartitionKey eq '{PK_SWEEP}'"):
+                sweeps.append(_sweep_to_json(row))
+                if len(sweeps) >= SWEEP_HISTORY:
+                    break
+        except ResourceNotFoundError:
+            pass   # no sweep has run yet
+        except Exception as e:
+            errors.append(f"Admin log: {_short_error(e)}")
+
+    return _json({
+        "config": config,
+        "storage": {"ok": not errors, "error": "; ".join(errors) or None},
+        "counts": counts,
+        "sweeps": sweeps,
+    })
+
+
+def _admin_audit_log(req: func.HttpRequest) -> func.HttpResponse:
+    """Newest first, `limit` per page; `next` is the `before` of the next page."""
+    admin = _require_admin(req)
+    if isinstance(admin, func.HttpResponse):
+        return admin
+
+    try:
+        limit = int(req.params.get("limit") or AUDIT_PAGE_DEFAULT)
+    except ValueError:
+        return _error("invalid_limit", f"limit must be 1 to {AUDIT_PAGE_MAX}.", 400)
+    if not 1 <= limit <= AUDIT_PAGE_MAX:
+        return _error("invalid_limit", f"limit must be 1 to {AUDIT_PAGE_MAX}.", 400)
+
+    # The cursor goes into an OData filter, so it is held to the key alphabet.
+    before = (req.params.get("before") or "").strip()
+    if before and not _ADMIN_LOG_KEY_RE.match(before):
+        return _error("invalid_before", "Unknown page cursor.", 400)
+
+    client = get_table_client(_admin_log_table_name())
+    if client is None:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    query = f"PartitionKey eq '{PK_AUDIT}'"
+    if before:
+        query += f" and RowKey ge '{before}'"
+    entries = []
+    has_more = False
+    try:
+        for row in client.query_entities(query, results_per_page=limit + 1):
+            if before and row.get("RowKey", "") <= before:
+                continue   # `ge` includes the cursor row itself
+            if len(entries) == limit:
+                has_more = True
+                break
+            entries.append(_audit_to_json(row))
+    except ResourceNotFoundError:
+        entries = []
+    except Exception as e:
+        logging.error(f"Error reading the audit log: {e}")
+        return _error("internal_error", "Could not read the audit log.", 500)
+
+    return _json({"entries": entries, "next": entries[-1]["id"] if has_more else None})
 
 
 # ── HTTP routes ───────────────────────────────────────────────────────────────
@@ -2055,6 +2905,51 @@ def competition_hovtp_source_reject(req: func.HttpRequest) -> func.HttpResponse:
 def competition_hovtp_source_by_ip(req: func.HttpRequest) -> func.HttpResponse:
     """Revoke: same write as reject, but the already-attached files stay."""
     return _deny_hovtp_source(req)
+
+
+# Admin routes. "manage", not "admin": the Functions host reserves the `admin`
+# route segment for its own management API.
+
+@app.route(route="manage/competitions", auth_level=func.AuthLevel.ANONYMOUS, methods=["GET"])
+def manage_competitions(req: func.HttpRequest) -> func.HttpResponse:
+    return _admin_list_competitions(req)
+
+
+@app.route(route="manage/competitions/{id}", auth_level=func.AuthLevel.ANONYMOUS,
+           methods=["GET", "PATCH", "DELETE"])
+def manage_competition_by_id(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "PATCH":
+        return _admin_update_competition(req)
+    if req.method == "DELETE":
+        return _admin_delete_competition(req)
+    return _admin_get_competition(req)
+
+
+@app.route(route="manage/competitions/{id}/restore", auth_level=func.AuthLevel.ANONYMOUS,
+           methods=["POST"])
+def manage_competition_restore(req: func.HttpRequest) -> func.HttpResponse:
+    return _admin_restore_competition(req)
+
+
+@app.route(route="manage/competitions/{id}/purge", auth_level=func.AuthLevel.ANONYMOUS,
+           methods=["POST"])
+def manage_competition_purge(req: func.HttpRequest) -> func.HttpResponse:
+    return _admin_purge_competition(req)
+
+
+@app.route(route="manage/sweep/dry-run", auth_level=func.AuthLevel.ANONYMOUS, methods=["POST"])
+def manage_sweep_dry_run(req: func.HttpRequest) -> func.HttpResponse:
+    return _admin_sweep_dry_run(req)
+
+
+@app.route(route="manage/diagnostics", auth_level=func.AuthLevel.ANONYMOUS, methods=["GET"])
+def manage_diagnostics(req: func.HttpRequest) -> func.HttpResponse:
+    return _admin_diagnostics(req)
+
+
+@app.route(route="manage/audit", auth_level=func.AuthLevel.ANONYMOUS, methods=["GET"])
+def manage_audit(req: func.HttpRequest) -> func.HttpResponse:
+    return _admin_audit_log(req)
 
 
 @app.route(route="health", auth_level=func.AuthLevel.ANONYMOUS, methods=["GET"])

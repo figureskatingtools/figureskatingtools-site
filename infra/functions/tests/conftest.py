@@ -30,6 +30,8 @@ from fakes import FakeTableClient as _FakeTableClient  # noqa: E402
 
 PROXY_SECRET = "test-proxy-secret"
 USER_EMAIL = "skater@example.com"
+ADMIN_EMAIL = "admin@example.com"
+OTHER_ADMIN_EMAIL = "second-admin@example.com"
 
 
 class FakeTableClient(_FakeTableClient):
@@ -48,6 +50,14 @@ class FakeTableClient(_FakeTableClient):
         """The `retentionclock` mirror (a separate table — see the fixture)."""
         return {rk: row for (pk, rk), row in self.clock.rows.items() if pk == fa.PK_COMPETITION}
 
+    def audit_rows(self):
+        """AUDIT rows of the `adminlog` table, newest first (RowKey order)."""
+        return [row for (pk, _rk), row in sorted(self.adminlog.rows.items()) if pk == fa.PK_AUDIT]
+
+    def sweep_rows(self):
+        """SWEEP rows of the `adminlog` table, newest first (RowKey order)."""
+        return [row for (pk, _rk), row in sorted(self.adminlog.rows.items()) if pk == fa.PK_SWEEP]
+
 
 @pytest.fixture
 def blobs(monkeypatch):
@@ -64,14 +74,28 @@ def table(monkeypatch):
     # The retention clock lives in its own table; same PK/RK shape as the
     # COMPETITION rows, so it must not share the registry's fake.
     client.clock = _FakeTableClient()
+    # The admin log (AUDIT + SWEEP rows) is a third table of its own.
+    client.adminlog = _FakeTableClient()
 
     def pick(table_name=fa.COMPETITIONS_TABLE, *a, **kw):
-        return client.clock if table_name == fa._clock_table_name() else client
+        if table_name == fa._clock_table_name():
+            return client.clock
+        if table_name == fa._admin_log_table_name():
+            return client.adminlog
+        return client
 
     monkeypatch.setattr(fa, "get_table_client", pick)
     # Enforce the proxy gate in tests — the real deployment always sets it.
     monkeypatch.setenv("PROXY_SHARED_SECRET", PROXY_SECRET)
     return client
+
+
+@pytest.fixture
+def admin(monkeypatch, table):
+    """ADMIN_EMAILS configured (mixed case on purpose) on top of `table`.
+    Returns the admin's e-mail for `make_request(user_email=...)`."""
+    monkeypatch.setenv("ADMIN_EMAILS", f" Admin@Example.com , {OTHER_ADMIN_EMAIL}")
+    return ADMIN_EMAIL
 
 
 def make_request(method="GET", path="/api/competitions", *, body=None, raw_body=None,
