@@ -1900,30 +1900,34 @@ def _purge_competition(table_client, container, entity, now: datetime) -> bool:
     competition_id = entity["RowKey"]
     now_text = _utc_text(now)
 
-    # 1. Deleted first, so the HOVTP listener answers 451 and the API 404s an
-    #    extend from here on. Conditional: an extend that just landed wins and
-    #    the row is reconsidered tomorrow.
-    if entity.get("Status") != STATUS_DELETED:
-        updates = {
+    # 1. Claim the purge before anything destructive, in one conditional
+    #    write: deleted (so the HOVTP listener answers 451 and the API 404s an
+    #    extend from here on) and PurgingUtc, after which an admin restore
+    #    refuses. Conditional even when already deleted: an extend or a
+    #    restore that just landed wins and the row is reconsidered tomorrow.
+    updates = {"PurgingUtc": entity.get("PurgingUtc") or now_text, "UpdatedUtc": now_text}
+    newly_deleted = entity.get("Status") != STATUS_DELETED
+    if newly_deleted:
+        updates.update({
             "Status": STATUS_DELETED,
             "DeletedUtc": entity.get("DeletedUtc") or now_text,
             "DeleteReason": entity.get("DeleteReason") or AUTO_CLEANUP_ACTOR,
-            "UpdatedUtc": now_text,
-        }
-        try:
-            table_client.update_entity(
-                {"PartitionKey": PK_COMPETITION, "RowKey": competition_id, **updates},
-                mode=UpdateMode.MERGE,
-                etag=_entity_etag(entity),
-                match_condition=MatchConditions.IfNotModified,
-            )
-        except ResourceModifiedError:
-            logging.info(f"Retention: '{competition_id}' changed during the sweep; "
-                         "reconsidered next night")
-            return False
-        except Exception as e:
-            logging.error(f"Retention: could not mark '{competition_id}' deleted: {e}")
-            return False
+        })
+    try:
+        table_client.update_entity(
+            {"PartitionKey": PK_COMPETITION, "RowKey": competition_id, **updates},
+            mode=UpdateMode.MERGE,
+            etag=_entity_etag(entity),
+            match_condition=MatchConditions.IfNotModified,
+        )
+    except ResourceModifiedError:
+        logging.info(f"Retention: '{competition_id}' changed during the sweep; "
+                     "reconsidered next night")
+        return False
+    except Exception as e:
+        logging.error(f"Retention: could not claim the purge of '{competition_id}': {e}")
+        return False
+    if newly_deleted:
         _sync_clock({**entity, **updates})
 
     code_ok = _release_code_row(table_client, entity.get("Code", ""), competition_id)
@@ -1944,6 +1948,12 @@ def _purge_competition(table_client, container, entity, now: datetime) -> bool:
     #    retries the whole purge.
     try:
         fresh = table_client.get_entity(partition_key=PK_COMPETITION, row_key=competition_id)
+        if fresh.get("Status") != STATUS_DELETED or not fresh.get("PurgingUtc"):
+            # Cannot happen while restore honours PurgingUtc; never tombstone
+            # a row that is not (still) ours to purge.
+            logging.error(f"Retention: '{competition_id}' is no longer claimed for purging; "
+                          "tombstone not written")
+            return False
         if not _release_code_row(table_client, fresh.get("Code", ""), competition_id):
             logging.error(f"Retention: could not release the code of '{competition_id}'; "
                           "retried next night")
@@ -2530,7 +2540,16 @@ def _admin_restore_competition(req: func.HttpRequest) -> func.HttpResponse:
     """Undo a soft delete: re-claim the CODE row (409 code_in_use when someone
     took the code meanwhile — rename and retry), Status=active, and a fresh
     deletion date (body `deletionDate`, default today + RESTORE_DEFAULT_DAYS).
-    A purged competition has nothing left to restore."""
+    A purged competition has nothing left to restore, and one whose purge has
+    started (PurgingUtc, stamped by _purge_competition before it deletes
+    anything) may already have lost its files: both are 409.
+
+    A CODE row this restore claimed is never rolled back on a lost ETag race:
+    a concurrent restore may have adopted it (it points here), and deleting it
+    would leave that now-active competition without its reservation. A claim
+    left on a still-deleted row is harmless — the next restore adopts it and a
+    purge releases it — and is released here at once if the row turns out
+    purged or purging."""
     target, error = _admin_target(req)
     if error is not None:
         return error
@@ -2550,20 +2569,27 @@ def _admin_restore_competition(req: func.HttpRequest) -> func.HttpResponse:
             return _error("invalid_deletion_date",
                           "The deletion date must be a yyyy-mm-dd date from tomorrow on.", 400)
 
+    claimed_code = ""
     for attempt in range(EXTEND_RETRIES):
         entity, error = _read_admin_entity(table_client, competition_id)
         if error is not None:
             return error
-        if entity.get("PurgedUtc"):
-            return _error("purged", "This competition has been purged and cannot be restored.", 409)
+        if entity.get("PurgedUtc") or entity.get("PurgingUtc"):
+            if claimed_code:
+                _release_code_row(table_client, claimed_code, competition_id)
+            if entity.get("PurgedUtc"):
+                return _error("purged",
+                              "This competition has been purged and cannot be restored.", 409)
+            return _error("purging",
+                          "This competition's data is being removed; it cannot be restored.", 409)
         if entity.get("Status") != STATUS_DELETED:
             return _error("not_deleted", "This competition is not deleted.", 409)
 
         # Claim the code first, as create does: a taken code fails here with
         # nothing written. A CODE row still pointing here (a release that
-        # failed) is ours already.
+        # failed, or a claim of an earlier attempt or a concurrent restore) is
+        # ours already.
         code = entity.get("Code", "")
-        claimed = False
         if code:
             try:
                 table_client.create_entity({
@@ -2572,7 +2598,7 @@ def _admin_restore_competition(req: func.HttpRequest) -> func.HttpResponse:
                     "CompetitionId": competition_id,
                     "CreatedUtc": _utc_text(now),
                 })
-                claimed = True
+                claimed_code = code
             except ResourceExistsError:
                 try:
                     owner = table_client.get_entity(partition_key=PK_CODE, row_key=code)
@@ -2600,15 +2626,14 @@ def _admin_restore_competition(req: func.HttpRequest) -> func.HttpResponse:
                 match_condition=MatchConditions.IfNotModified,
             )
         except ResourceModifiedError:
-            if claimed:
-                _delete_code_row(table_client, code)
+            # The claim stays (see the docstring); the re-read decides.
             logging.info(f"Competition '{competition_id}' changed during restore "
                          f"(attempt {attempt + 1}/{EXTEND_RETRIES}); retrying")
             continue
         except Exception as e:
-            if claimed:
-                _delete_code_row(table_client, code)
             if isinstance(e, ResourceNotFoundError):
+                if claimed_code:
+                    _release_code_row(table_client, claimed_code, competition_id)
                 return _error("not_found", "Competition not found.", 404)
             logging.error(f"Error restoring competition '{competition_id}': {e}")
             return _error("internal_error", "Could not restore the competition.", 500)

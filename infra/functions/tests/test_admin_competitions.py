@@ -441,6 +441,97 @@ def test_a_failed_purge_is_500_and_leaves_no_tombstone(admin, table, blobs):
     assert row(table, created["id"])["Status"] == "deleted"
 
 
+# ── restore vs purge, restore vs restore ──────────────────────────────────────
+
+def on_conditional_update_of(table, competition_id, action):
+    """Run `action` just before the next conditional write to this
+    competition's row lands (re-armed past writes to other rows)."""
+    key = (fa.PK_COMPETITION, competition_id)
+
+    def hook(client, written):
+        if written != key:
+            client.before_conditional_update = hook
+            return
+        action()
+
+    table.before_conditional_update = hook
+
+
+def test_a_restore_landing_before_the_purge_claim_wins(admin, table, blobs, monkeypatch):
+    """The sweep read the deleted row; a restore lands before its first write.
+    The purge's claim is conditional even for a deleted row, so it backs off
+    and the restored competition keeps its files and code."""
+    monkeypatch.setenv("RETENTION_PURGE_ENABLED", "true")
+    created = create()
+    blobs.upload_blob(name=f"{created['id']}/uploads/a.pdf", data=PDF, overwrite=True)
+    user_delete(created["id"])
+    restored = []
+    on_conditional_update_of(table, created["id"],
+                             lambda: restored.append(admin_restore(admin, created["id"])))
+
+    summary = fa._run_retention_sweep(today() + timedelta(days=1, hours=3), True)
+
+    assert restored[0].status_code == 200
+    assert summary["purged"] == 0
+    assert row(table, created["id"])["Status"] == "active"
+    assert "PurgingUtc" not in row(table, created["id"])
+    assert f"{created['id']}/uploads/a.pdf" in blobs.blobs
+    assert table.code_rows()[created["code"]]["CompetitionId"] == created["id"]
+
+
+def test_restore_refuses_once_a_purge_has_started(admin, table, blobs):
+    """A purge that failed halfway has already deleted things: its claim
+    (PurgingUtc) stays, restore says so, and the next sweep finishes it."""
+    created = create()
+    blobs.upload_blob(name=f"{created['id']}/uploads/a.pdf", data=PDF, overwrite=True)
+    blobs.fail_next_delete = RuntimeError("blob service down")
+    assert admin_purge(admin, created["id"], created["code"]).status_code == 500
+
+    response = admin_restore(admin, created["id"])
+
+    assert response.status_code == 409
+    assert payload(response)["error"] == "purging"
+    assert row(table, created["id"])["Status"] == "deleted"
+    assert created["code"] not in table.code_rows()
+
+
+def test_a_purge_landing_during_a_restore_releases_the_restore_claim(admin, table, blobs):
+    """Restore claimed the CODE row, then a purge completes before restore's
+    own write: restore loses the ETag race, sees the tombstone, frees the code
+    it claimed and answers 409 — no reservation is left on a purged row."""
+    created = create()
+    user_delete(created["id"])
+    purges = []
+    on_conditional_update_of(table, created["id"],
+                             lambda: purges.append(admin_purge(admin, created["id"], created["code"])))
+
+    response = admin_restore(admin, created["id"])
+
+    assert payload(purges[0])["competition"]["status"] == "purged"
+    assert response.status_code == 409
+    assert payload(response)["error"] == "purged"
+    assert created["code"] not in table.code_rows()
+
+
+def test_overlapping_restores_keep_the_code_reservation(admin, table):
+    """A claims the code; B adopts that claim and restores first; A loses the
+    ETag race. A must not roll back the CODE row B's active competition now
+    relies on."""
+    created = create()
+    user_delete(created["id"])
+    second = []
+    on_conditional_update_of(table, created["id"],
+                             lambda: second.append(admin_restore(admin, created["id"])))
+
+    first = admin_restore(admin, created["id"])
+
+    assert second[0].status_code == 200
+    assert first.status_code == 409
+    assert payload(first)["error"] == "not_deleted"
+    assert row(table, created["id"])["Status"] == "active"
+    assert table.code_rows()[created["code"]]["CompetitionId"] == created["id"]
+
+
 # ── delete + dry-run ──────────────────────────────────────────────────────────
 
 def test_admin_delete_is_the_user_delete_and_409s_the_second_time(admin, table):

@@ -120,6 +120,7 @@ const ERROR_TEXT: Record<string, string> = {
   deleted: 'The competition is deleted. Restore it first.',
   not_deleted: 'Only a deleted competition can be restored.',
   purged: 'The competition has been purged; its data is gone.',
+  purging: 'A purge of this competition has started and may already have removed files, so it cannot be restored. Purge it again to finish.',
   invalid_deletion_date: 'The deletion date must be tomorrow or later.',
   confirm_mismatch: 'The typed code does not match the competition code.',
   purge_failed: 'The purge did not complete. Nothing was tombstoned; it is safe to try again.',
