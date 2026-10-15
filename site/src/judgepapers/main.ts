@@ -559,6 +559,10 @@ async function init() {
     // List Details Logic
     let currentCompetitionData: any = null;
     let isGlobalValid = false;
+    // Id of the competition whose "No cover page or time schedule" box is
+    // checked, so the choice survives options re-renders (language switch,
+    // reload after generating) but not a switch to another competition.
+    let omitSegmentCoverFor: string | null = null;
 
     function renderCompetitionView() {
         const container = document.getElementById('comp-files-container');
@@ -1157,6 +1161,8 @@ async function init() {
              return;
         }
 
+        const omitSegmentCover = omitSegmentCoverFor === data.id;
+
         optionsArea.innerHTML = `
             <h3 class="options-title">Global Settings</h3>
 
@@ -1176,7 +1182,7 @@ async function init() {
 
             <div class="option-row">
                 <label class="option-check">
-                    <input type="checkbox" id="global-omit-segment-cover">
+                    <input type="checkbox" id="global-omit-segment-cover" ${omitSegmentCover ? 'checked' : ''}>
                     <span>No cover page or time schedule before the segments</span>
                 </label>
             </div>
@@ -1227,11 +1233,16 @@ async function init() {
         // "No cover page or time schedule" makes the cover/time-schedule choice moot.
         const omitToggle = document.getElementById('global-omit-segment-cover') as HTMLInputElement;
         const advanced = document.getElementById('segment-cover-advanced')!;
-        omitToggle.addEventListener('change', () => {
+        const applyOmit = () => {
             const omit = omitToggle.checked;
             globalToggle.disabled = omit;
             segmentToggles.forEach(t => t.disabled = omit);
             advanced.classList.toggle('is-disabled', omit);
+        };
+        applyOmit();
+        omitToggle.addEventListener('change', () => {
+            omitSegmentCoverFor = omitToggle.checked ? data.id : null;
+            applyOmit();
         });
 
         globalToggle.addEventListener('change', () => {
