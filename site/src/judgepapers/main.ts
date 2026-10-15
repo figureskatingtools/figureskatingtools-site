@@ -563,8 +563,10 @@ async function init() {
     // checked, so the choice survives options re-renders (language switch,
     // reload after generating) but not a switch to another competition.
     let omitSegmentCoverFor: string | null = null;
-    // Same for "Combined time schedule of the day after the cover page".
+    // Same for "Combined time schedule of the day at the end of the papers",
+    // and its number of copies per packet.
     let combinedScheduleFor: string | null = null;
+    let combinedScheduleCopies = 1;
 
     function renderCompetitionView() {
         const container = document.getElementById('comp-files-container');
@@ -897,6 +899,7 @@ async function init() {
         const segmentToggles = document.querySelectorAll('.time-schedule-toggle') as NodeListOf<HTMLInputElement>;
         const omitToggle = document.getElementById('global-omit-segment-cover') as HTMLInputElement | null;
         const combinedToggle = document.getElementById('global-combined-schedule') as HTMLInputElement | null;
+        const combinedCopies = document.getElementById('combined-schedule-copies') as HTMLSelectElement | null;
         
         const options: any = {
             globalSegmentCover: globalToggle ? !globalToggle.checked : false,
@@ -904,9 +907,11 @@ async function init() {
             // Checked = no page at all before a segment (neither the generated
             // cover nor the time schedule); overrides the toggles above.
             globalOmitSegmentCover: omitToggle ? omitToggle.checked : false,
-            // Checked = the day's combined time schedule right after each
-            // packet's cover page; an add-on, independent of the options above.
+            // Checked = the day's combined time schedule at the end of each
+            // packet, in combinedScheduleCopies copies (1-5); an add-on,
+            // independent of the options above.
             globalCombinedSchedule: combinedToggle ? combinedToggle.checked : false,
+            combinedScheduleCopies: combinedCopies ? Number(combinedCopies.value) : 1,
             language: currentLanguage
         };
         
@@ -1197,7 +1202,13 @@ async function init() {
             <div class="option-row">
                 <label class="option-check">
                     <input type="checkbox" id="global-combined-schedule" ${combinedSchedule ? 'checked' : ''}>
-                    <span>Combined time schedule of the day after the cover page</span>
+                    <span>Combined time schedule of the day at the end of the papers</span>
+                </label>
+                <label class="option-sub">
+                    <span>Copies per packet</span>
+                    <select id="combined-schedule-copies" ${combinedSchedule ? '' : 'disabled'}>
+                        ${[1, 2, 3, 4, 5].map(n => `<option value="${n}" ${n === combinedScheduleCopies ? 'selected' : ''}>${n}</option>`).join('')}
+                    </select>
                 </label>
             </div>
 
@@ -1260,8 +1271,17 @@ async function init() {
         });
 
         const combinedToggle = document.getElementById('global-combined-schedule') as HTMLInputElement;
+        const combinedCopies = document.getElementById('combined-schedule-copies') as HTMLSelectElement;
         combinedToggle.addEventListener('change', () => {
             combinedScheduleFor = combinedToggle.checked ? data.id : null;
+            combinedCopies.disabled = !combinedToggle.checked;
+            if (!combinedToggle.checked) {
+                combinedScheduleCopies = 1;
+                combinedCopies.value = '1';
+            }
+        });
+        combinedCopies.addEventListener('change', () => {
+            combinedScheduleCopies = Number(combinedCopies.value);
         });
 
         globalToggle.addEventListener('change', () => {
