@@ -567,6 +567,12 @@ async function init() {
     // and its number of copies per packet.
     let combinedScheduleFor: string | null = null;
     let combinedScheduleCopies = 1;
+    const MAX_COMBINED_COPIES = 50;
+    // Whole number 1-50 from the copies field; anything else counts as 1.
+    const clampCopies = (raw: string | number): number => {
+        const n = Math.trunc(Number(raw));
+        return Number.isFinite(n) ? Math.min(Math.max(n, 1), MAX_COMBINED_COPIES) : 1;
+    };
 
     function renderCompetitionView() {
         const container = document.getElementById('comp-files-container');
@@ -899,7 +905,7 @@ async function init() {
         const segmentToggles = document.querySelectorAll('.time-schedule-toggle') as NodeListOf<HTMLInputElement>;
         const omitToggle = document.getElementById('global-omit-segment-cover') as HTMLInputElement | null;
         const combinedToggle = document.getElementById('global-combined-schedule') as HTMLInputElement | null;
-        const combinedCopies = document.getElementById('combined-schedule-copies') as HTMLSelectElement | null;
+        const combinedCopies = document.getElementById('combined-schedule-copies') as HTMLInputElement | null;
         
         const options: any = {
             globalSegmentCover: globalToggle ? !globalToggle.checked : false,
@@ -907,11 +913,11 @@ async function init() {
             // Checked = no page at all before a segment (neither the generated
             // cover nor the time schedule); overrides the toggles above.
             globalOmitSegmentCover: omitToggle ? omitToggle.checked : false,
-            // Checked = the day's combined time schedule at the end of each
-            // packet, in combinedScheduleCopies copies (1-5); an add-on,
-            // independent of the options above.
+            // Checked = combinedScheduleCopies copies (1-50) of the day's
+            // combined time schedule at the end of the day's document (all
+            // packets); an add-on, independent of the options above.
             globalCombinedSchedule: combinedToggle ? combinedToggle.checked : false,
-            combinedScheduleCopies: combinedCopies ? Number(combinedCopies.value) : 1,
+            combinedScheduleCopies: combinedCopies ? clampCopies(combinedCopies.value) : 1,
             language: currentLanguage
         };
         
@@ -1200,17 +1206,21 @@ async function init() {
                 </label>
             </div>
 
-            <div class="option-row">
+            <div class="option-row option-row-inline">
                 <label class="option-check">
                     <input type="checkbox" id="global-combined-schedule" ${combinedSchedule ? 'checked' : ''}>
                     <span>Combined time schedule of the day at the end of the papers</span>
                 </label>
-                <label class="option-sub">
-                    <span>Copies per packet</span>
-                    <select id="combined-schedule-copies" ${combinedSchedule ? '' : 'disabled'}>
-                        ${[1, 2, 3, 4, 5].map(n => `<option value="${n}" ${n === combinedScheduleCopies ? 'selected' : ''}>${n}</option>`).join('')}
-                    </select>
-                </label>
+                <div class="copies-stepper ${combinedSchedule ? '' : 'is-disabled'}" id="combined-copies-stepper">
+                    <input type="text" inputmode="numeric" id="combined-schedule-copies"
+                           value="${combinedScheduleCopies}" aria-label="Copies of the combined time schedule"
+                           ${combinedSchedule ? '' : 'disabled'}>
+                    <div class="copies-stepper-btns">
+                        <button type="button" data-step="1" aria-label="One copy more" ${combinedSchedule ? '' : 'disabled'}>▲</button>
+                        <button type="button" data-step="-1" aria-label="One copy less" ${combinedSchedule ? '' : 'disabled'}>▼</button>
+                    </div>
+                    <span class="copies-stepper-unit">copies</span>
+                </div>
             </div>
 
             <div class="option-advanced" id="segment-cover-advanced">
@@ -1272,17 +1282,34 @@ async function init() {
         });
 
         const combinedToggle = document.getElementById('global-combined-schedule') as HTMLInputElement;
-        const combinedCopies = document.getElementById('combined-schedule-copies') as HTMLSelectElement;
+        const combinedCopies = document.getElementById('combined-schedule-copies') as HTMLInputElement;
+        const copiesStepper = document.getElementById('combined-copies-stepper')!;
+        const stepButtons = copiesStepper.querySelectorAll('button') as NodeListOf<HTMLButtonElement>;
+        const setCopies = (n: number) => {
+            combinedScheduleCopies = clampCopies(n);
+            combinedCopies.value = String(combinedScheduleCopies);
+        };
         combinedToggle.addEventListener('change', () => {
-            combinedScheduleFor = combinedToggle.checked ? data.id : null;
-            combinedCopies.disabled = !combinedToggle.checked;
-            if (!combinedToggle.checked) {
-                combinedScheduleCopies = 1;
-                combinedCopies.value = '1';
-            }
+            const on = combinedToggle.checked;
+            combinedScheduleFor = on ? data.id : null;
+            combinedCopies.disabled = !on;
+            stepButtons.forEach(b => b.disabled = !on);
+            copiesStepper.classList.toggle('is-disabled', !on);
+            if (!on) setCopies(1);
         });
-        combinedCopies.addEventListener('change', () => {
-            combinedScheduleCopies = Number(combinedCopies.value);
+        stepButtons.forEach(b => b.addEventListener('click', () => {
+            setCopies(clampCopies(combinedCopies.value) + Number(b.dataset.step));
+        }));
+        // Digits only while typing; settle on a valid number when leaving the field.
+        combinedCopies.addEventListener('input', () => {
+            combinedCopies.value = combinedCopies.value.replace(/\D/g, '').slice(0, 2);
+        });
+        combinedCopies.addEventListener('change', () => setCopies(clampCopies(combinedCopies.value)));
+        combinedCopies.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                e.preventDefault();
+                setCopies(clampCopies(combinedCopies.value) + (e.key === 'ArrowUp' ? 1 : -1));
+            }
         });
 
         globalToggle.addEventListener('change', () => {
