@@ -20,6 +20,8 @@ export interface UserInfo {
   /** Display name from the principal's name claim; '' when unknown */
   name: string;
   userRoles: string[];
+  /** The router lists this user as an admin (shows the Admin panel link) */
+  isAdmin: boolean;
 }
 
 /**
@@ -57,6 +59,7 @@ export async function fetchUser(): Promise<UserInfo | null> {
         userDetails: data.userDetails ?? 'unknown',
         name: typeof data.name === 'string' ? data.name : '',
         userRoles: Array.isArray(data.userRoles) ? data.userRoles : [],
+        isAdmin: data.isAdmin === true,
       };
     }
   } catch (_e) {
@@ -106,6 +109,7 @@ export function setupUserMenu(container: HTMLElement, user: UserInfo): void {
         <div style="padding: 0.75rem 1rem; border-bottom: 1px solid var(--border-color); font-size: 0.75rem; color: var(--text-secondary);">
           Signed in as <br> <strong style="color: var(--text-primary);">${escapeHtml(user.userDetails)}</strong>
         </div>
+        ${user.isAdmin ? '<a href="/admin/" class="dropdown-item">Admin panel</a>' : ''}
         <a href="/privacy/" class="dropdown-item">Privacy notice</a>
         <a href="${logoutUrl()}" class="dropdown-item">Sign Out</a>
       </div>

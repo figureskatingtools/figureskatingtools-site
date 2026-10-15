@@ -29,6 +29,20 @@ param retentionPurgeEnabled bool = true
 @description('Table the platform mirrors each competition retention state into for the tools.')
 param clockTableName string = 'retentionclock'
 
+// The /api/manage/* allow-list. This app keeps its own copy because its
+// hostname is public, so the router's check alone is not enough. Empty =
+// nobody is admin.
+@description('Comma-separated admin e-mail addresses (the ADMIN_EMAILS GitHub variable).')
+param adminEmails string = ''
+
+@description('Table for the admin audit log and the retention sweep history.')
+param adminLogTableName string = 'adminlog'
+
+// Informational only: the admin diagnostics show it. The HOVTP listener has its
+// own copy of the setting, and that one is what switches it.
+@description('The value the HOVTP listener gets for HOVTP_ENABLED.')
+param hovtpEnabled bool = true
+
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
   name: appServicePlanName
   location: location
@@ -95,6 +109,18 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'RETENTION_CLOCK_TABLE'
           value: clockTableName
+        }
+        {
+          name: 'ADMIN_EMAILS'
+          value: adminEmails
+        }
+        {
+          name: 'ADMIN_LOG_TABLE'
+          value: adminLogTableName
+        }
+        {
+          name: 'HOVTP_ENABLED'
+          value: string(hovtpEnabled)
         }
       ]
     }

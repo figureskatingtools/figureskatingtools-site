@@ -7,8 +7,10 @@ Zero-dependency Node (22 LTS, built-ins only) server that fronts the whole
 ```
 site root/
   server.js          ← this file (App Service startup command: `node server.js`)
+  build-info.json    ← {"commit": "<sha>", "builtUtc": "…"}, written by the deploy
+                       (read once at startup for the admin diagnostics; not served)
   public/            ← the single Vite dist (index.html, judgepapers/, scoremodifier/,
-                       protocolgenerator/, tools/banner/, shared assets/)
+                       protocolgenerator/, tools/banner/, tools/gdpr/, admin/, shared assets/)
 ```
 
 ## Routing order
@@ -16,14 +18,17 @@ site root/
 | Order | Match | Behaviour |
 | --- | --- | --- |
 | 1 | `/health` | `200 {"ok":true}`. Assumes nothing about auth — list it in Easy Auth `globalValidation.excludedPaths`. |
-| 2 | `/userinfo` | Flat user object decoded from the Easy Auth `X-MS-CLIENT-PRINCIPAL` header (no tokens are ever exposed). |
+| 2 | `/userinfo` | Flat user object decoded from the Easy Auth `X-MS-CLIENT-PRINCIPAL` header (no tokens are ever exposed). Every signed-in shape carries `isAdmin` (see [Admins](#admins)). |
 | 3 | `/changelog-live?branch=main\|test` | Merged, server-cached GitHub commit feed for the home page's "What's New" panel (see below). |
 | 4 | `/.auth`, `/.auth/*` | `404` — Easy Auth owns these at the platform level; the router must never swallow them into the SPA fallback. |
 | 4b | `/judgepapers/download?t=<token>` | `GET`/`HEAD` proxied to `$FUNCTION_APP_URL_JUDGEPAPERS/api/download_judge_papers?t=<token>` (other methods `405`). The judges'-papers link e-mailed to recipients who have no account: listed in Easy Auth `excludedPaths`, the backend checks the token and `302`s to a short-lived blob URL. |
 | 4c | `/signin[?return=/path]` | `302` → `/.auth/login/$AUTH_LOGIN_PROVIDER?post_login_redirect_url=<path>` (other methods `405`). Every "Sign in" link uses it (shared `loginUrl()`, the landing page), so a provider change (Entra External ID) is one app setting. `return` must be a same-origin path; anything else (`//host`, `https://…`, backslashes, control characters) becomes `/`. Listed in Easy Auth `excludedPaths`. |
 | 4d | `/`, `/index.html` | Signed in — an Easy Auth principal header, the Easy Auth session cookie `AppServiceAuthSession*`, or `DEV_FAKE_USER` — gets the home page; anyone else the static public landing page `public/landing/index.html` (falls back to the home page if the build has none). Both carry `Vary: Cookie`. The cookie check is needed because these are Easy Auth `excludedPaths`, where the platform injects no principal headers. Only decides which document is shown: the home page's `/userinfo` and the APIs stay gated, so a stale or forged cookie ends on its sign-in view. `/`, `/index.html`, `/landing/*`, `/assets/*` (open-source bundles, no data), `/favicon.png`, `/apple-touch-icon.png`, `/robots.txt` and `/llms.txt` are `excludedPaths`. |
+| 4e | `/admin/api/diagnostics` | Router-native, admins only (`403 {"error":"admin_required"}` otherwise; other `/admin/api/*` paths `404` JSON). See [Admins](#admins). |
+| 4f | `/admin`, `/admin/*` | The admin panel document (`public/admin/index.html`, deep links fall back to it, `Vary: Cookie`) for admins; a plain `404` for everyone else, so the page does not advertise itself. Matched on the decoded, normalised path (`/%61dmin/`, `//admin/` are gated too). Base CSP: `admin` is a document prefix, not a tool. |
 | 5 | `/<tool>/api/*` | Proxied to that tool's Function App with the `/<tool>` prefix **stripped**: `/judgepapers/api/upload_file` → `$FUNCTION_APP_URL_JUDGEPAPERS/api/upload_file`. Backends keep their default `/api` route prefix — zero backend route changes. |
 | 5b | `/tools/gdpr/api/*` | Proxied to the GDPR removal tool's Function App (`fs-gdpr-tool`) with `/tools/gdpr` **stripped** (`SMALL_TOOL_APIS` in `server.js`). The page itself, `/tools/gdpr/`, is a plain static document. |
+| 6a | `/api/manage/*` | Admin-only platform routes. Non-admins get `403 {"error":"admin_required"}` without any proxying; a non-`GET`/`HEAD` request must also be same-origin (`Sec-Fetch-Site: same-origin`, or an `Origin` whose host is the request's `Host`), else `403 {"error":"cross_site"}`. Admins are proxied like 6. Matched case-insensitively on the decoded, normalised path, like the Functions host routes. The platform checks the admin again with its own `ADMIN_EMAILS`. |
 | 6 | `/api/*` | Proxied to the platform Function App (competitions registry). |
 | 7 | `/<tool>` | `301` → `/<tool>/` (query string preserved). |
 | 8 | anything else | Static file from `public/`, else a **per-prefix** SPA fallback. This is also how the public privacy notice (`/privacy/`, `/tietosuoja/`) and the self-hosted fonts (`/fonts/*`) are served: plain static files, the same for everyone, reachable signed out because `/privacy`, `/privacy/*`, `/tietosuoja`, `/tietosuoja/*` and `/fonts/*` are Easy Auth `excludedPaths`. |
@@ -35,8 +40,8 @@ site root/
 - A real file always wins, so root statics (`/assets/*`, `/logo.png`,
   `/changelog.json`, …) resolve before any fallback.
 - Unmatched `/judgepapers/*` → `public/judgepapers/index.html`;
-  `/scoremodifier/*` and `/protocolgenerator/*` likewise; everything else →
-  `public/index.html`.
+  `/scoremodifier/*`, `/protocolgenerator/*` and (for admins) `/admin/*`
+  likewise (`DOCUMENT_PREFIXES`); everything else → `public/index.html`.
 - A missing file **with a non-HTML extension** returns `404` rather than HTML —
   a stale bundle URL must never come back as `index.html` labelled
   `application/javascript`.
@@ -64,6 +69,39 @@ site root/
   `{"error":"proxy_target_not_configured","tool":"scoremodifier","message":"… set FUNCTION_APP_URL_SCOREMODIFIER."}`
 - `http://` targets are supported (local `func start`), `https://` targets use
   port 443 by default.
+
+### Admins
+
+- `ADMIN_EMAILS` (comma-separated, trimmed, compared lowercased) lists the
+  admins. Empty means nobody.
+- `isAdminRequest` takes the same e-mail the backends get as
+  `x-forwarded-user-email`, and counts it only with a decodable
+  `X-MS-CLIENT-PRINCIPAL` (or `DEV_FAKE_USER` with no principal headers, which
+  is off under `NODE_ENV=production`). A bare `X-MS-CLIENT-PRINCIPAL-NAME` is
+  never an admin.
+- That one decision drives `isAdmin` in `/userinfo` (the "Admin panel" link in
+  the user menu), the `/admin/*` documents and the `/api/manage/*` gate.
+
+`GET /admin/api/diagnostics` answers:
+
+```json
+{
+  "router": {"commit": "abc1234", "startedUtc": "…Z", "uptimeSeconds": 123, "node": "v22.x",
+             "nodeEnv": "production", "changelog": {"entries": [{"branch": "main", "ageSeconds": 12, "stale": false}]}},
+  "config": {"targets": {"judgepapers": {"url": true, "secret": true}, "…": {}},
+             "hovtpHealthUrl": true, "adminCount": 1, "loginProvider": "aad", "devFakeUser": false},
+  "backends": [{"name": "platform", "status": "ok", "httpStatus": 200, "latencyMs": 42}, "…"]
+}
+```
+
+- `commit` comes from `build-info.json`; `null` when the file is missing (local runs).
+- Configuration is **booleans only**: no URL or secret value is ever returned.
+- `backends`: a parallel `GET <FUNCTION_APP_URL_x>/api/health` per backend
+  (platform, the tools, the GDPR tool) with that target's `x-proxy-secret`,
+  plus `HOVTP_HEALTH_URL` with none (the listener's health route is never
+  gated), each capped at 10 s (cold starts). `status` is `ok` (2xx), `no_health_route`
+  (404 — a backend without `/api/health`; every backend has one today), `error`
+  (other status or a network failure), `timeout` or `not_configured`.
 
 ### `/changelog-live`
 
@@ -111,7 +149,9 @@ the config object (tests override them).
 | `PROXY_SHARED_SECRET_PROTOCOLGENERATOR` | prod | — | Sent as `x-proxy-secret` to protocolgenerator. |
 | `PROXY_SHARED_SECRET_GDPRTOOL` | prod | — | Sent as `x-proxy-secret` to the GDPR removal tool. |
 | `PROXY_SHARED_SECRET_PLATFORM` | prod | — | Sent as `x-proxy-secret` to the platform API. |
-| `NODE_ENV` | no | — | `production` hard-disables `DEV_FAKE_USER`. |
+| `NODE_ENV` | prod | — | `production` hard-disables `DEV_FAKE_USER` (and with it the dev admin). Set by `webapp.bicep`. Reported in the admin diagnostics. |
+| `ADMIN_EMAILS` | for the admin panel | — | Comma-separated admin e-mails (case-insensitive). Empty = no admins: `/admin/*` is `404` and `/api/manage/*` `403` for everyone. Bicep-owned, from the GitHub environment variable `ADMIN_EMAILS`; the platform app gets the same list. |
+| `HOVTP_HEALTH_URL` | no | — | The HOVTP listener's health URL for the admin diagnostics (a bare base URL gets `/api/health` appended). Unset = `not_configured`. Bicep-owned. |
 | `AUTH_LOGIN_PROVIDER` | no | `aad` | Easy Auth provider segment `/signin` redirects to (`/.auth/login/<provider>`). Bicep-owned: set the GitHub environment variable `AUTH_LOGIN_PROVIDER`, never the app setting by hand (infra deploys replace all app settings). |
 | `DEV_FAKE_USER` | no | — | **Non-production only.** Email returned by `/userinfo` (and forwarded to backends) when no Easy Auth headers are present. |
 
@@ -182,9 +222,11 @@ Give each local `func start` its own port (`func start --port 7071`). Backends
 that have no `PROXY_SHARED_SECRET` set skip the check, so the secret env vars
 are optional locally.
 
-Frontend-only work uses `vite dev` (multi-entry: `/judgepapers/` is served
-natively) with dev-server proxies for `/api`, `/<tool>/api` and `/userinfo` —
-the router is not needed for that loop.
+Frontend-only work can use `vite dev` (multi-entry: `/judgepapers/` is served
+natively), but it has **no** API proxies: `/userinfo` and every API call fail,
+so the apps show their sign-in view. For anything signed in, build and run the
+router as above. Add `ADMIN_EMAILS=you@example.com` (the same address as
+`DEV_FAKE_USER`) to see the admin panel at `/admin/`.
 
 ## Tests
 
@@ -199,7 +241,10 @@ with, without and with a malformed principal, plus `DEV_FAKE_USER`; prefix
 stripping and per-tool header injection; a 6 MiB upload / 4 MiB download
 streamed through the proxy and hash-compared; root statics vs per-prefix SPA
 fallback; per-prefix CSP; the `/<tool>` → `/<tool>/` redirect; the `502`
-for an unconfigured backend; and `/changelog-live` (mapping/sorting/slice, `#nowhatsnew` filtering,
+for an unconfigured backend; admins (`ADMIN_EMAILS` parsing, `isAdmin`, the
+`NODE_ENV=production` dev-user guard, `/admin/` 404 vs document vs deep link,
+the `/api/manage/*` gate and its cross-site check, diagnostics shape and no
+secret/URL leakage); and `/changelog-live` (mapping/sorting/slice, `#nowhatsnew` filtering,
 branch validation, cache hit, stale-on-failure, in-flight dedup, `502` with an
 empty cache) against a stub GitHub.
 

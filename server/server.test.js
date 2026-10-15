@@ -1,4 +1,4 @@
-// Tests for the router server. Run with: node --test server/
+// Tests for the router server. Run with: node --test server/*.test.js
 // Zero dependencies — node:test, node:assert and the built-in http client only.
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -8,7 +8,15 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 
-const { createServer, loadConfig, buildCsp, safeReturnPath, isHiddenFromChangelog, CHANGELOG_MAX_ENTRIES } = require('./server.js');
+const {
+    createServer,
+    loadConfig,
+    isAdminRequest,
+    buildCsp,
+    safeReturnPath,
+    isHiddenFromChangelog,
+    CHANGELOG_MAX_ENTRIES,
+} = require('./server.js');
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -150,6 +158,7 @@ test('GET /userinfo decodes a base64 X-MS-CLIENT-PRINCIPAL', async () => {
             userDetails: 'skater@example.com',
             name: 'Skater Person',
             userRoles: ['authenticated'],
+            isAdmin: false,
         });
     } finally {
         await close(server);
@@ -166,7 +175,7 @@ test('GET /userinfo falls back to the principal-name header and survives garbage
             },
         });
         assert.equal(res.status, 200);
-        assert.deepEqual(json(res), { authenticated: true, userDetails: 'fallback@example.com' });
+        assert.deepEqual(json(res), { authenticated: true, userDetails: 'fallback@example.com', isAdmin: false });
     } finally {
         await close(server);
     }
@@ -1140,6 +1149,319 @@ test('/changelog-live 502s when the sources file is missing', async () => {
     } finally {
         await close(server);
         await close(github.server);
+    }
+});
+
+// ── Admin: identity, panel, /api/manage, diagnostics ─────────────────────────
+
+const ADMIN_EMAIL = 'admin@example.com';
+
+function principalFor(email) {
+    return principalHeader({ ...PRINCIPAL, userDetails: email, claims: [{ typ: 'preferred_username', val: email }] });
+}
+
+// Two admins, listed with stray case and whitespace.
+function adminConfig(extra = {}) {
+    const { adminEmails } = loadConfig({ ADMIN_EMAILS: ' Admin@Example.com , other-admin@example.com ' });
+    return { adminEmails, ...extra };
+}
+
+function fakeReq(headers = {}) {
+    return { headers };
+}
+
+test('ADMIN_EMAILS is parsed into a trimmed, lowercased set', () => {
+    assert.deepEqual([...loadConfig({ ADMIN_EMAILS: ' A@Example.com,,b@example.com ' }).adminEmails], [
+        'a@example.com',
+        'b@example.com',
+    ]);
+    assert.equal(loadConfig({}).adminEmails.size, 0);
+});
+
+test('isAdminRequest: listed e-mail in any case, nobody else, never a bare principal-name header', () => {
+    const config = { ...loadConfig({}), ...adminConfig() };
+    assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor('ADMIN@example.COM') }), config), true);
+    assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor('skater@example.com') }), config), false);
+    assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal-name': ADMIN_EMAIL }), config), false);
+    assert.equal(isAdminRequest(fakeReq({}), config), false);
+    // An empty list means nobody, whatever the identity.
+    const nobody = loadConfig({});
+    assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor(ADMIN_EMAIL) }), nobody), false);
+});
+
+test('isAdminRequest honours DEV_FAKE_USER locally but never under NODE_ENV=production', () => {
+    const dev = loadConfig({ ADMIN_EMAILS: ADMIN_EMAIL, DEV_FAKE_USER: ADMIN_EMAIL });
+    assert.equal(isAdminRequest(fakeReq({}), dev), true);
+    // The dev stand-in does not lend admin to a principal-name header.
+    assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal-name': 'skater@example.com' }), dev), false);
+    const prod = loadConfig({ ADMIN_EMAILS: ADMIN_EMAIL, DEV_FAKE_USER: ADMIN_EMAIL, NODE_ENV: 'production' });
+    assert.equal(isAdminRequest(fakeReq({}), prod), false);
+});
+
+test('GET /userinfo reports isAdmin for admins only', async () => {
+    const { server, port } = await startRouter(adminConfig());
+    try {
+        const admin = await request(port, '/userinfo', {
+            headers: { 'x-ms-client-principal': principalFor('ADMIN@EXAMPLE.COM') },
+        });
+        assert.equal(json(admin).isAdmin, true);
+        const user = await request(port, '/userinfo', {
+            headers: { 'x-ms-client-principal': principalHeader(PRINCIPAL) },
+        });
+        assert.equal(json(user).isAdmin, false);
+    } finally {
+        await close(server);
+    }
+    const dev = await startRouter(adminConfig({ devFakeUser: ADMIN_EMAIL }));
+    try {
+        assert.equal(json(await request(dev.port, '/userinfo')).isAdmin, true);
+    } finally {
+        await close(dev.server);
+    }
+});
+
+test('/admin/ is a plain 404 for non-admins and the admin document (with deep links) for admins', async () => {
+    const publicDir = makePublicFixture();
+    fs.mkdirSync(path.join(publicDir, 'admin'));
+    fs.writeFileSync(path.join(publicDir, 'admin', 'index.html'), '<html>ADMIN_INDEX</html>');
+    const { server, port } = await startRouter(adminConfig({ publicDir }));
+    const adminHeaders = { 'x-ms-client-principal': principalFor(ADMIN_EMAIL) };
+    const userHeaders = { 'x-ms-client-principal': principalHeader(PRINCIPAL) };
+    try {
+        // Encoded and non-normalised spellings are gated like the plain one.
+        const spellings = ['/admin', '/admin/', '/admin/index.html', '/admin/competitions/x', '/%61dmin/', '//admin/', '/x/../admin/'];
+        for (const p of spellings) {
+            const res = await request(port, p, { headers: userHeaders });
+            assert.equal(res.status, 404, p);
+            assert.doesNotMatch(res.text, /ADMIN_INDEX/, p);
+        }
+        assert.equal((await request(port, '/admin/')).status, 404); // signed out
+
+        const doc = await request(port, '/admin/', { headers: adminHeaders });
+        assert.equal(doc.status, 200);
+        assert.match(doc.text, /ADMIN_INDEX/);
+        assert.match(doc.headers['vary'], /Cookie/);
+        // Base CSP: admin is not a tool, so no blob-storage host.
+        assert.doesNotMatch(doc.headers['content-security-policy'], /blob\.core\.windows\.net/);
+
+        const deep = await request(port, '/admin/competitions/1a2b', { headers: adminHeaders });
+        assert.equal(deep.status, 200);
+        assert.match(deep.text, /ADMIN_INDEX/);
+
+        const bare = await request(port, '/admin', { headers: adminHeaders });
+        assert.equal(bare.status, 301);
+        assert.equal(bare.headers['location'], '/admin/');
+
+        // Unknown router-native admin API paths never fall back to the document.
+        const unknownApi = await request(port, '/admin/api/nope', { headers: adminHeaders });
+        assert.equal(unknownApi.status, 404);
+        assert.match(unknownApi.headers['content-type'], /application\/json/);
+    } finally {
+        await close(server);
+        fs.rmSync(publicDir, { recursive: true, force: true });
+    }
+});
+
+test('/api/manage/* is refused for non-admins without reaching the platform', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter(
+        adminConfig({ targets: targets({ platform: { url: upstream.url, secret: 'platform-secret' } }) })
+    );
+    const userHeaders = { 'x-ms-client-principal': principalHeader(PRINCIPAL) };
+    try {
+        const spellings = [
+            '/api/manage/competitions',
+            '/api/Manage/competitions',
+            '/api/%6Danage/audit',
+            '/api/x/../manage/diagnostics',
+            '/api/manage',
+        ];
+        for (const p of spellings) {
+            const res = await request(port, p, { headers: userHeaders });
+            assert.equal(res.status, 403, p);
+            assert.equal(json(res).error, 'admin_required');
+        }
+        const signedOut = await request(port, '/api/manage/competitions', { method: 'POST' });
+        assert.equal(signedOut.status, 403);
+        assert.equal(upstream.received.length, 0);
+        // The ordinary registry routes are untouched.
+        await request(port, '/api/competitions', { headers: userHeaders });
+        assert.equal(upstream.received.length, 1);
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('/api/manage/* proxies admins, and rejects cross-site state changes', async () => {
+    const upstream = await startUpstream((req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end('{"competitions":[]}');
+    });
+    const { server, port } = await startRouter(
+        adminConfig({ targets: targets({ platform: { url: upstream.url, secret: 'platform-secret' } }) })
+    );
+    const admin = { 'x-ms-client-principal': principalFor(ADMIN_EMAIL) };
+    try {
+        const list = await request(port, '/api/manage/competitions?status=all', { headers: admin });
+        assert.equal(list.status, 200);
+        assert.equal(upstream.received[0].url, '/api/manage/competitions?status=all');
+        assert.equal(upstream.received[0].headers['x-proxy-secret'], 'platform-secret');
+        assert.equal(upstream.received[0].headers['x-forwarded-user-email'], ADMIN_EMAIL);
+
+        const body = JSON.stringify({ confirm: 'abc26' });
+        const crossSite = await request(port, '/api/manage/competitions/x/purge', {
+            method: 'POST',
+            headers: {
+                ...admin,
+                'content-type': 'application/json',
+                'sec-fetch-site': 'cross-site',
+                origin: 'https://attacker.example.com',
+            },
+            body,
+        });
+        assert.equal(crossSite.status, 403);
+        assert.equal(json(crossSite).error, 'cross_site');
+        const noOrigin = await request(port, '/api/manage/competitions/x', { method: 'DELETE', headers: admin });
+        assert.equal(noOrigin.status, 403);
+        assert.equal(json(noOrigin).error, 'cross_site');
+        assert.equal(upstream.received.length, 1);
+
+        const sameSite = await request(port, '/api/manage/competitions/x/purge', {
+            method: 'POST',
+            headers: { ...admin, 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' },
+            body,
+        });
+        assert.equal(sameSite.status, 200);
+        const byOrigin = await request(port, '/api/manage/sweep/dry-run', {
+            method: 'POST',
+            headers: { ...admin, origin: `http://127.0.0.1:${port}` },
+        });
+        assert.equal(byOrigin.status, 200);
+        assert.equal(upstream.received.length, 3);
+        assert.equal(upstream.received[1].method, 'POST');
+        assert.equal(upstream.received[1].url, '/api/manage/competitions/x/purge');
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('GET /admin/api/diagnostics: admins only, booleans for config, health of every backend', async () => {
+    const healthy = await startUpstream((req, res) => {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end('{"status":"ok"}');
+    });
+    const noRoute = await startUpstream((req, res) => {
+        res.writeHead(404);
+        res.end();
+    });
+    const broken = await startUpstream((req, res) => {
+        res.writeHead(500);
+        res.end();
+    });
+    const hanging = await startUpstream(() => {}); // never answers
+
+    const buildDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fst-build-'));
+    const buildInfoPath = path.join(buildDir, 'build-info.json');
+    fs.writeFileSync(buildInfoPath, JSON.stringify({ commit: 'abc1234def5678', builtUtc: '2026-10-15T00:00:00Z' }));
+
+    const secrets = { platform: 'platform-SECRET-value', judgepapers: 'jp-SECRET-value', scoremodifier: 'sm-SECRET-value' };
+    const { server, port } = await startRouter(
+        adminConfig({
+            buildInfoPath,
+            healthTimeoutMs: 300,
+            nodeEnv: 'production',
+            hovtpHealthUrl: `${healthy.url}/api/health`,
+            targets: targets({
+                platform: { url: healthy.url + '/', secret: secrets.platform },
+                judgepapers: { url: noRoute.url, secret: secrets.judgepapers },
+                scoremodifier: { url: broken.url, secret: secrets.scoremodifier },
+                protocolgenerator: { url: hanging.url, secret: '' },
+                // gdprtool left unconfigured
+            }),
+        })
+    );
+    try {
+        const denied = await request(port, '/admin/api/diagnostics', {
+            headers: { 'x-ms-client-principal': principalHeader(PRINCIPAL) },
+        });
+        assert.equal(denied.status, 403);
+        assert.equal(json(denied).error, 'admin_required');
+
+        const res = await request(port, '/admin/api/diagnostics', {
+            headers: { 'x-ms-client-principal': principalFor(ADMIN_EMAIL) },
+        });
+        assert.equal(res.status, 200);
+        assert.equal(res.headers['cache-control'], 'no-store');
+        const body = json(res);
+
+        assert.equal(body.router.commit, 'abc1234def5678');
+        assert.equal(body.router.nodeEnv, 'production');
+        assert.equal(body.router.node, process.version);
+        assert.match(body.router.startedUtc, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+        assert.equal(typeof body.router.uptimeSeconds, 'number');
+        assert.deepEqual(body.router.changelog, { entries: [] });
+
+        assert.deepEqual(body.config.targets.platform, { url: true, secret: true });
+        assert.deepEqual(body.config.targets.protocolgenerator, { url: true, secret: false });
+        assert.deepEqual(body.config.targets.gdprtool, { url: false, secret: false });
+        assert.equal(body.config.hovtpHealthUrl, true);
+        assert.equal(body.config.adminCount, 2);
+        assert.equal(body.config.loginProvider, 'aad');
+        assert.equal(body.config.devFakeUser, false);
+
+        const byName = Object.fromEntries(body.backends.map((b) => [b.name, b]));
+        assert.deepEqual(Object.keys(byName).sort(), [
+            'gdprtool',
+            'hovtp',
+            'judgepapers',
+            'platform',
+            'protocolgenerator',
+            'scoremodifier',
+        ]);
+        assert.equal(byName.platform.status, 'ok');
+        assert.equal(byName.platform.httpStatus, 200);
+        assert.equal(typeof byName.platform.latencyMs, 'number');
+        assert.equal(byName.judgepapers.status, 'no_health_route');
+        assert.equal(byName.scoremodifier.status, 'error');
+        assert.equal(byName.scoremodifier.httpStatus, 500);
+        assert.equal(byName.protocolgenerator.status, 'timeout');
+        assert.equal(byName.protocolgenerator.latencyMs, null);
+        assert.equal(byName.gdprtool.status, 'not_configured');
+        assert.equal(byName.hovtp.status, 'ok');
+
+        // Each ping carries that backend's own secret; HOVTP gets none.
+        const healthyCalls = healthy.received.filter((r) => r.url === '/api/health');
+        assert.equal(healthyCalls.length, 2);
+        assert.deepEqual(healthyCalls.map((r) => r.headers['x-proxy-secret'] || '').sort(), ['', secrets.platform]);
+        assert.equal(noRoute.received[0].headers['x-proxy-secret'], secrets.judgepapers);
+
+        // Nothing configurable leaks: no secret values, no backend hosts or ports.
+        const leaks = [...Object.values(secrets), '127.0.0.1', String(healthy.port), String(noRoute.port)];
+        for (const value of leaks) {
+            assert.ok(!res.text.includes(value), `diagnostics leaked ${value}`);
+        }
+    } finally {
+        await close(server);
+        hanging.server.closeAllConnections();
+        await Promise.all([healthy, noRoute, broken, hanging].map((u) => close(u.server)));
+        fs.rmSync(buildDir, { recursive: true, force: true });
+    }
+});
+
+test('diagnostics report a null commit without build info', async () => {
+    const { server, port } = await startRouter(
+        adminConfig({ buildInfoPath: path.join(os.tmpdir(), 'fst-no-such-build-info.json') })
+    );
+    try {
+        const res = await request(port, '/admin/api/diagnostics', {
+            headers: { 'x-ms-client-principal': principalFor(ADMIN_EMAIL) },
+        });
+        assert.equal(res.status, 200);
+        assert.equal(json(res).router.commit, null);
+    } finally {
+        await close(server);
     }
 });
 

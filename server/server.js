@@ -8,12 +8,15 @@
 //   /scoremodifier/          → Score Modifier app      (SPA, own index.html)
 //   /protocolgenerator/      → Protocol Generator app  (SPA, own index.html)
 //   /tools/<name>/           → small in-site tools (static pages)
+//   /admin/                  → admin panel (SPA; plain 404 unless the user is an admin)
+//   /admin/api/diagnostics   → router-native diagnostics (admins only)
 //   /privacy/, /tietosuoja/  → public privacy notice, EN/FI (static, excluded from Easy Auth)
 //   /fonts/*                 → self-hosted web fonts (static, excluded from Easy Auth)
 //   /health                  → liveness probe (excluded from Easy Auth)
 //   /judgepapers/download    → e-mailed judges'-papers link (excluded from Easy Auth)
 //   /userinfo                → flat user object decoded from Easy Auth headers
 //   /changelog-live          → merged GitHub commits for "What's New" (cached)
+//   /api/manage/*            → platform Function App, admins only (403 otherwise)
 //   /api/*                   → platform Function App
 //   /<tool>/api/*            → that tool's Function App, with /<tool> stripped
 //   /tools/gdpr/api/*        → GDPR removal tool's Function App, /tools/gdpr stripped
@@ -39,6 +42,24 @@ const PLATFORM = 'platform';
 // path is proxied: /tools/gdpr/api/* → $FUNCTION_APP_URL_GDPRTOOL/api/*.
 const SMALL_TOOL_APIS = { gdprtool: '/tools/gdpr' };
 const PROXY_TARGETS = [...TOOLS, ...Object.keys(SMALL_TOOL_APIS), PLATFORM];
+
+// Path prefixes that own an SPA document of their own: the tools plus the
+// admin panel. Only the deep-link fallback uses it; admin is deliberately not
+// in TOOLS, which would make it a proxy target and give it the blob-host CSP.
+const ADMIN_PREFIX = 'admin';
+const DOCUMENT_PREFIXES = [...TOOLS, ADMIN_PREFIX];
+
+// Admin-only platform routes. The platform checks the admin again with its own
+// allow-list (its hostname is public); this gate is the first of the two.
+const MANAGE_API_PREFIX = '/api/manage';
+const ADMIN_DIAGNOSTICS_PATH = '/admin/api/diagnostics';
+
+// Written next to server.js by the deploy workflow (never under public/, so it
+// is not served): {"commit": "<sha>", "builtUtc": "…"}. Missing locally.
+const BUILD_INFO_FILE = 'build-info.json';
+// Generous: a Flex Consumption app answering its first request after idling
+// can take several seconds (judgepapers measured ~3.7 s for a cold 404).
+const HEALTH_TIMEOUT_MS = 10000;
 
 // Public (no sign-in) route for the link e-mailed by judgepapers' send dialog.
 // Must match the Easy Auth excludedPaths entry in infra/modules/webapp.bicep.
@@ -101,6 +122,16 @@ function secretEnvVar(tool) {
     return `PROXY_SHARED_SECRET_${envKeySuffix(tool)}`;
 }
 
+// ADMIN_EMAILS: comma-separated, compared case-insensitively.
+function parseAdminEmails(raw) {
+    return new Set(
+        String(raw || '')
+            .split(',')
+            .map((e) => e.trim().toLowerCase())
+            .filter(Boolean)
+    );
+}
+
 function loadConfig(env = process.env) {
     const targets = {};
     for (const tool of PROXY_TARGETS) {
@@ -124,6 +155,13 @@ function loadConfig(env = process.env) {
         devFakeUser: isProduction ? '' : (env.DEV_FAKE_USER || '').trim(),
         // Easy Auth provider segment of /.auth/login/<provider> used by /signin.
         loginProvider: (env.AUTH_LOGIN_PROVIDER || '').trim() || DEFAULT_LOGIN_PROVIDER,
+        nodeEnv: (env.NODE_ENV || '').trim(),
+        // Who gets the admin panel and /api/manage/*. Empty = nobody.
+        adminEmails: parseAdminEmails(env.ADMIN_EMAILS),
+        // The HOVTP listener is not proxied, so diagnostics need its URL apart.
+        hovtpHealthUrl: (env.HOVTP_HEALTH_URL || '').trim(),
+        buildInfoPath: path.join(__dirname, BUILD_INFO_FILE),
+        healthTimeoutMs: HEALTH_TIMEOUT_MS,
         // Changelog knobs. Not env-driven — they exist as config so tests can
         // point the fetch at a stub GitHub and shrink the cache window.
         githubApiOrigin: GITHUB_API_ORIGIN,
@@ -264,6 +302,7 @@ function handleUserInfo(req, res, config) {
                 identityProvider: 'dev',
                 userDetails: config.devFakeUser,
                 userRoles: ['authenticated'],
+                isAdmin: isAdminRequest(req, config),
             });
             return;
         }
@@ -272,7 +311,7 @@ function handleUserInfo(req, res, config) {
     }
 
     if (!parsed) {
-        json({ authenticated: true, userDetails: principalName || 'unknown' });
+        json({ authenticated: true, userDetails: principalName || 'unknown', isAdmin: isAdminRequest(req, config) });
         return;
     }
 
@@ -293,6 +332,7 @@ function handleUserInfo(req, res, config) {
         // judgepapers send dialog's default sender name.
         name: findClaim(parsed, NAME_CLAIMS),
         userRoles: parsed.userRoles || [],
+        isAdmin: isAdminRequest(req, config),
     });
 }
 
@@ -345,6 +385,50 @@ function forwardedUserEmail(req, config) {
     const fromPrincipal =
         (parsed && (parsed.userDetails || findClaim(parsed, EMAIL_CLAIMS))) || '';
     return fromPrincipal || req.headers['x-ms-client-principal-name'] || config.devFakeUser || '';
+}
+
+// Whether the request comes from an admin: the e-mail the backends would see,
+// in ADMIN_EMAILS (case-insensitive). Only a decodable Easy Auth principal
+// counts, or DEV_FAKE_USER locally with no principal headers at all (it is ''
+// under NODE_ENV=production) — a bare X-MS-CLIENT-PRINCIPAL-NAME is never
+// enough. Phase 2 (Entra External ID group membership) changes only this.
+function isAdminRequest(req, config) {
+    if (!config.adminEmails || config.adminEmails.size === 0) return false;
+    const devUser = Boolean(config.devFakeUser) && !req.headers['x-ms-client-principal-name'];
+    if (!decodePrincipal(req) && !devUser) return false;
+    const email = forwardedUserEmail(req, config).trim().toLowerCase();
+    return email !== '' && config.adminEmails.has(email);
+}
+
+// CSRF guard for the state-changing admin API on top of the session cookie:
+// the browser must say the call is same-origin, or send a matching Origin.
+function isSameOriginRequest(req) {
+    if (req.headers['sec-fetch-site'] === 'same-origin') return true;
+    const origin = req.headers.origin;
+    if (!origin || !req.headers.host) return false;
+    try {
+        return new URL(origin).host === req.headers.host;
+    } catch (_e) {
+        return false;
+    }
+}
+
+// The path as the static server and the backends will interpret it: decoded
+// and dot-segment/double-slash normalised. Gates match on this, so
+// /%61dmin/ or //admin/ cannot slip past them. Undecodable → as is (the
+// static server answers those 400).
+function canonicalPath(pathname) {
+    let decoded = pathname;
+    try {
+        decoded = decodeURIComponent(pathname);
+    } catch (_e) {
+        // keep the raw form
+    }
+    return path.posix.normalize(decoded);
+}
+
+function isUnder(pathname, prefix) {
+    return pathname === prefix || pathname.startsWith(prefix + '/');
 }
 
 // ── Proxy ────────────────────────────────────────────────────────────────────
@@ -647,6 +731,127 @@ async function handleChangelog(res, config, state, search) {
     }
 }
 
+// ── Admin diagnostics ────────────────────────────────────────────────────────
+// GET /admin/api/diagnostics: what the router itself knows — build, uptime,
+// changelog cache, which backends are configured, and a health ping of each.
+// Configuration is reported as booleans only: no URL or secret ever leaves.
+
+const HEALTH_PATH = '/api/health';
+
+// {"commit": …} from the deploy package, or null when absent/unreadable.
+function readBuildInfo(file) {
+    try {
+        const parsed = JSON.parse(fs.readFileSync(file, 'utf-8'));
+        const commit = parsed && typeof parsed.commit === 'string' ? parsed.commit.trim() : '';
+        return { commit: /^[0-9a-f]{7,40}$/i.test(commit) ? commit : null };
+    } catch (_e) {
+        return { commit: null };
+    }
+}
+
+// A base URL gets /api/health appended; one that already names a path is used as is.
+function healthUrlFor(base) {
+    const url = new URL(base);
+    if (url.pathname === '' || url.pathname === '/') url.pathname = HEALTH_PATH;
+    else if (!/\/api\/health\/?$/.test(url.pathname)) url.pathname = url.pathname.replace(/\/+$/, '') + HEALTH_PATH;
+    return url;
+}
+
+// One capped GET. Never rejects: every outcome is a status for the table.
+function pingHealth(name, base, secret, timeoutMs) {
+    if (!base) return Promise.resolve({ name, status: 'not_configured', httpStatus: null, latencyMs: null });
+    let target;
+    try {
+        target = healthUrlFor(base);
+    } catch (_e) {
+        return Promise.resolve({ name, status: 'error', httpStatus: null, latencyMs: null });
+    }
+
+    return new Promise((resolve) => {
+        const started = Date.now();
+        let settled = false;
+        const finish = (status, httpStatus) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            resolve({ name, status, httpStatus, latencyMs: httpStatus === null ? null : Date.now() - started });
+        };
+
+        const secure = target.protocol === 'https:';
+        const headers = { accept: 'application/json', 'user-agent': CHANGELOG_USER_AGENT };
+        if (secret) headers['x-proxy-secret'] = secret;
+        const req = (secure ? https : http).request(
+            {
+                protocol: target.protocol,
+                hostname: target.hostname,
+                port: target.port || (secure ? 443 : 80),
+                path: target.pathname + (target.search || ''),
+                method: 'GET',
+                headers,
+            },
+            (upstream) => {
+                upstream.resume(); // drain; only the status matters
+                const code = upstream.statusCode;
+                if (code >= 200 && code < 300) finish('ok', code);
+                else if (code === 404) finish('no_health_route', code);
+                else finish('error', code);
+            }
+        );
+        const timer = setTimeout(() => {
+            finish('timeout', null);
+            req.destroy();
+        }, timeoutMs);
+        req.on('error', () => finish('error', null));
+        req.end();
+    });
+}
+
+function changelogDiagnostics(config, state) {
+    const now = Date.now();
+    return {
+        entries: [...state.cache.entries()].map(([branch, entry]) => ({
+            branch,
+            ageSeconds: Math.round((now - entry.ts) / 1000),
+            stale: now - entry.ts >= config.changelogTtlMs,
+        })),
+    };
+}
+
+// Backends in display order; HOVTP is not a proxy target, so it has no secret
+// here (its /api/health is never gated).
+const DIAGNOSTIC_BACKENDS = [PLATFORM, ...TOOLS, ...Object.keys(SMALL_TOOL_APIS)];
+
+async function handleDiagnostics(res, config, runtime) {
+    const targets = {};
+    for (const tool of PROXY_TARGETS) {
+        targets[tool] = { url: Boolean(config.targets[tool].url), secret: Boolean(config.targets[tool].secret) };
+    }
+    const backends = await Promise.all([
+        ...DIAGNOSTIC_BACKENDS.map((tool) =>
+            pingHealth(tool, config.targets[tool].url, config.targets[tool].secret, config.healthTimeoutMs)
+        ),
+        pingHealth('hovtp', config.hovtpHealthUrl, '', config.healthTimeoutMs),
+    ]);
+    sendJson(res, 200, {
+        router: {
+            commit: runtime.buildInfo.commit,
+            startedUtc: new Date(runtime.startedMs).toISOString().replace(/\.\d{3}Z$/, 'Z'),
+            uptimeSeconds: Math.round((Date.now() - runtime.startedMs) / 1000),
+            node: process.version,
+            nodeEnv: config.nodeEnv,
+            changelog: changelogDiagnostics(config, runtime.changelogState),
+        },
+        config: {
+            targets,
+            hovtpHealthUrl: Boolean(config.hovtpHealthUrl),
+            adminCount: config.adminEmails.size,
+            loginProvider: config.loginProvider,
+            devFakeUser: Boolean(config.devFakeUser),
+        },
+        backends,
+    });
+}
+
 // ── Static files ─────────────────────────────────────────────────────────────
 // Vite emits content-hashed filenames under /assets/, so those can be cached
 // forever, and so can the self-hosted /fonts/*.woff2 files, whose names carry
@@ -675,9 +880,14 @@ function notFound(res) {
 }
 
 // The SPA fallback is per prefix: an unmatched /judgepapers/* route must load
-// that app's document, not the landing page.
+// that app's document, not the landing page (likewise /admin/*).
+function documentPrefixFor(pathname) {
+    const segment = pathname.split('/')[1] || '';
+    return DOCUMENT_PREFIXES.includes(segment) ? segment : '';
+}
+
 function fallbackIndexFor(config, pathname) {
-    const prefix = prefixFor(pathname);
+    const prefix = documentPrefixFor(pathname);
     return prefix
         ? path.join(config.publicDir, prefix, 'index.html')
         : path.join(config.publicDir, 'index.html');
@@ -766,6 +976,8 @@ function serveRootDocument(req, res, config, pathname) {
 // ── Router ───────────────────────────────────────────────────────────────────
 function createRequestHandler(config) {
     const changelogState = createChangelogState();
+    // Read once: the deploy package never changes under a running process.
+    const runtime = { changelogState, startedMs: Date.now(), buildInfo: readBuildInfo(config.buildInfoPath) };
 
     return function handleRequest(req, res) {
         const url = req.url || '/';
@@ -835,6 +1047,39 @@ function createRequestHandler(config) {
             return;
         }
 
+        // 4e. Admin panel. /admin/api/* is router-native JSON; the documents are
+        //     a plain 404 for everyone but admins, so the page does not even
+        //     advertise itself (its bundle under /assets/* is public anyway —
+        //     the real gates are this check and the platform's own).
+        const canonical = canonicalPath(pathname);
+        if (isUnder(canonical, '/' + ADMIN_PREFIX)) {
+            const admin = isAdminRequest(req, config);
+            if (isUnder(canonical, '/' + ADMIN_PREFIX + '/api')) {
+                if (canonical !== ADMIN_DIAGNOSTICS_PATH) {
+                    sendJson(res, 404, { error: 'not_found' });
+                } else if (!admin) {
+                    sendJson(res, 403, { error: 'admin_required' });
+                } else if (req.method !== 'GET' && req.method !== 'HEAD') {
+                    res.writeHead(405, { Allow: 'GET, HEAD', 'Cache-Control': 'no-store' });
+                    res.end();
+                } else {
+                    handleDiagnostics(res, config, runtime).catch((e) => {
+                        console.error('Diagnostics handler error:', e.message);
+                        if (!res.headersSent) sendJson(res, 500, { error: 'diagnostics_failed' });
+                    });
+                }
+                return;
+            }
+            if (!admin) {
+                notFound(res);
+                return;
+            }
+            // Same URL, different answer per user: shared caches must not mix them.
+            res.setHeader('Vary', 'Cookie');
+            serveStatic(req, res, config, pathname);
+            return;
+        }
+
         // 5. /<tool>/api/* → that tool's Function App, /<tool> stripped so the
         //    backends keep their default /api route prefix.
         const toolApi = /^\/([^/]+)(\/api(?:\/.*)?)$/.exec(pathname);
@@ -853,6 +1098,20 @@ function createRequestHandler(config) {
         }
 
         // 6. /api/* → platform Function App (competitions registry).
+        //    /api/manage/* is admin-only: refused here without proxying. The
+        //    match is case-insensitive like the Functions host's routing.
+        if (isUnder(canonical.toLowerCase(), MANAGE_API_PREFIX)) {
+            if (!isAdminRequest(req, config)) {
+                sendJson(res, 403, { error: 'admin_required', message: 'This action needs an administrator.' });
+                return;
+            }
+            if (req.method !== 'GET' && req.method !== 'HEAD' && !isSameOriginRequest(req)) {
+                sendJson(res, 403, { error: 'cross_site', message: 'Cross-site requests are not allowed.' });
+                return;
+            }
+            proxy(req, res, config, PLATFORM, pathname + search);
+            return;
+        }
         if (pathname === '/api' || pathname.startsWith('/api/')) {
             proxy(req, res, config, PLATFORM, pathname + search);
             return;
@@ -885,14 +1144,17 @@ if (require.main === module) {
         console.log(`Static root: ${config.publicDir}`);
         console.log(`Proxy targets configured: ${configured.join(', ') || '(none)'}`);
         if (config.devFakeUser) console.log(`DEV_FAKE_USER active: ${config.devFakeUser}`);
+        console.log(`Admins configured: ${config.adminEmails.size}`);
     });
 }
 
 module.exports = {
     TOOLS,
+    DOCUMENT_PREFIXES,
     PLATFORM,
     SMALL_TOOL_APIS,
     loadConfig,
+    isAdminRequest,
     createServer,
     createRequestHandler,
     buildCsp,
