@@ -18,6 +18,7 @@ export default defineConfig({
         protocolgenerator: fileURLToPath(new URL('protocolgenerator/index.html', import.meta.url)),
         banner: fileURLToPath(new URL('tools/banner/index.html', import.meta.url)),
         gdpr: fileURLToPath(new URL('tools/gdpr/index.html', import.meta.url)),
+        admin: fileURLToPath(new URL('admin/index.html', import.meta.url)),
       },
     },
   },
