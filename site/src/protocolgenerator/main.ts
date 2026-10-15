@@ -1595,13 +1595,13 @@ function scheduleCandidates(): PoolFile[] {
 }
 
 /** FS Manager pushes the roster pair as `DT_PARTIC_TEAMS_<code>.xml` and
- * `DT_PARTIC_<code>.xml` — the TEAMS name starts with the PARTIC prefix, so the
- * PARTIC test has to exclude it. */
+ * `DT_PARTIC_<code>.xml` (a hand upload may be the bare `DT_PARTIC.xml`) — the
+ * TEAMS name starts with the PARTIC prefix, so the PARTIC test excludes it. */
 function isRosterTeamsFile(name: string): boolean {
   return /^DT_PARTIC_TEAMS[^/]*\.xml$/i.test(name) && !/^DT_PARTIC_TEAMS_UPDATE/i.test(name);
 }
 function isRosterParticFile(name: string): boolean {
-  return /^DT_PARTIC_(?!TEAMS)[^/]*\.xml$/i.test(name) && !/^DT_PARTIC_UPDATE/i.test(name);
+  return /^DT_PARTIC(?!_TEAMS)(_[^/]*)?\.xml$/i.test(name) && !/^DT_PARTIC_UPDATE/i.test(name);
 }
 
 /** The newest pool file passing `test`, whichever folder (FSM or upload) it is in. */
@@ -1956,7 +1956,7 @@ async function parseScheduleFromPool(file: PoolFile, force = false): Promise<voi
  * parse is not retried on every refresh.
  */
 async function autoParsePoolSchedule(): Promise<void> {
-  if (!currentId || !details) return;
+  if (!currentId || !details || details.structure.id !== currentId) return;
   const s = details.structure;
   if (s.scheduleParsed || (s.categories || []).length) return;
   const candidate = scheduleCandidates()[0];
@@ -1976,7 +1976,9 @@ async function autoParsePoolSchedule(): Promise<void> {
  * never gets teams placed into it.
  */
 async function autoImportPoolRosters(): Promise<void> {
-  if (!currentId || !details) return;
+  // A details response for the previously opened competition may still be what
+  // `details` holds; its state must not authorize a write to this one.
+  if (!currentId || !details || details.structure.id !== currentId) return;
   const s = details.structure;
   if (s.rosterImport || !(s.categories || []).some(c => c.discipline === 'synchro')) return;
   const plan = poolRosterPlan(s);
