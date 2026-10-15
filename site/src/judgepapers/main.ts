@@ -563,6 +563,8 @@ async function init() {
     // checked, so the choice survives options re-renders (language switch,
     // reload after generating) but not a switch to another competition.
     let omitSegmentCoverFor: string | null = null;
+    // Same for "Combined time schedule of the day after the cover page".
+    let combinedScheduleFor: string | null = null;
 
     function renderCompetitionView() {
         const container = document.getElementById('comp-files-container');
@@ -894,6 +896,7 @@ async function init() {
         const globalToggle = document.getElementById('global-use-time-schedule') as HTMLInputElement;
         const segmentToggles = document.querySelectorAll('.time-schedule-toggle') as NodeListOf<HTMLInputElement>;
         const omitToggle = document.getElementById('global-omit-segment-cover') as HTMLInputElement | null;
+        const combinedToggle = document.getElementById('global-combined-schedule') as HTMLInputElement | null;
         
         const options: any = {
             globalSegmentCover: globalToggle ? !globalToggle.checked : false,
@@ -901,6 +904,9 @@ async function init() {
             // Checked = no page at all before a segment (neither the generated
             // cover nor the time schedule); overrides the toggles above.
             globalOmitSegmentCover: omitToggle ? omitToggle.checked : false,
+            // Checked = the day's combined time schedule right after each
+            // packet's cover page; an add-on, independent of the options above.
+            globalCombinedSchedule: combinedToggle ? combinedToggle.checked : false,
             language: currentLanguage
         };
         
@@ -1162,6 +1168,7 @@ async function init() {
         }
 
         const omitSegmentCover = omitSegmentCoverFor === data.id;
+        const combinedSchedule = combinedScheduleFor === data.id;
 
         optionsArea.innerHTML = `
             <h3 class="options-title">Global Settings</h3>
@@ -1184,6 +1191,13 @@ async function init() {
                 <label class="option-check">
                     <input type="checkbox" id="global-omit-segment-cover" ${omitSegmentCover ? 'checked' : ''}>
                     <span>No cover page or time schedule before the segments</span>
+                </label>
+            </div>
+
+            <div class="option-row">
+                <label class="option-check">
+                    <input type="checkbox" id="global-combined-schedule" ${combinedSchedule ? 'checked' : ''}>
+                    <span>Combined time schedule of the day after the cover page</span>
                 </label>
             </div>
 
@@ -1243,6 +1257,11 @@ async function init() {
         omitToggle.addEventListener('change', () => {
             omitSegmentCoverFor = omitToggle.checked ? data.id : null;
             applyOmit();
+        });
+
+        const combinedToggle = document.getElementById('global-combined-schedule') as HTMLInputElement;
+        combinedToggle.addEventListener('change', () => {
+            combinedScheduleFor = combinedToggle.checked ? data.id : null;
         });
 
         globalToggle.addEventListener('change', () => {
