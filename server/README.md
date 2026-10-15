@@ -100,8 +100,7 @@ site root/
   (platform, the tools, the GDPR tool) with that target's `x-proxy-secret`,
   plus `HOVTP_HEALTH_URL` with none (the listener's health route is never
   gated), each capped at 10 s (cold starts). `status` is `ok` (2xx), `no_health_route`
-  (404 — Judge Papers, Score Modifier and Protocol Generator have no
-  `/api/health` today; the platform, HOVTP and the GDPR tool do), `error`
+  (404 — a backend without `/api/health`; every backend has one today), `error`
   (other status or a network failure), `timeout` or `not_configured`.
 
 ### `/changelog-live`
