@@ -11,6 +11,7 @@ import {
     readPlatformError,
     isGoneCompetitionError,
     platformErrorMessage,
+    isReadOnlyCompetition,
     extendCompetition,
     retentionInfo,
     subscribeActiveCompetition,
@@ -139,6 +140,10 @@ appElement.innerHTML = `
                 </div>
                 <div class="retention" id="retention"></div>
             </div>
+            <p id="view-only-note" class="view-only-note" role="note" hidden>
+                <strong>View only</strong> — you can look at this competition and download its papers.
+                Ask the owner for write access to upload, generate or send anything.
+            </p>
 
             <div class="detail-grid">
                 <!-- Info Box -->
@@ -280,7 +285,43 @@ async function uploadJudgePaperFile(file: File, competitionId: string): Promise<
     const url = `${API_BASE}/upload_file?competition=${encodeURIComponent(competitionId)}`
         + `&filename=${encodeURIComponent(file.name)}`;
     const resp = await fetch(url, { method: 'POST', body: file });
+    if (!resp.ok) {
+        const refusal = readOnlyRefusal(resp.status, await resp.text());
+        if (refusal) throw new ReadOnlyRefusal(refusal);
+    }
     return resp.ok;
+}
+
+/**
+ * The bound competition is shared with the user view-only: uploads, imports,
+ * deletes, settings, generating and sending are hidden. Cosmetic — the backend
+ * refuses every write with 403 `platform_read_only` anyway.
+ */
+function viewOnly(): boolean {
+    const active = getActiveCompetition();
+    return Boolean(active && boundPlatformId && active.id === boundPlatformId && isReadOnlyCompetition(active));
+}
+
+/** An upload the backend refused because the user only has view access */
+class ReadOnlyRefusal extends Error {}
+
+/** Show or hide the write controls for the current role (CSS does the hiding) */
+function applyViewOnly(): void {
+    const ro = viewOnly();
+    document.getElementById('view-competition-details')?.classList.toggle('view-only', ro);
+    const note = document.getElementById('view-only-note');
+    if (note) note.hidden = !ro;
+}
+
+/**
+ * The shared wording for a write the backend refused because the user only
+ * has view access — null for any other failure. Also refreshes the selection,
+ * so the view drops its write controls (the role changed since it loaded).
+ */
+function readOnlyRefusal(status: number, text: string): string | null {
+    if (readPlatformError(status, text) !== 'platform_read_only') return null;
+    void refreshActiveCompetition();
+    return platformErrorMessage('platform_read_only', boundLabel ?? '');
 }
 
 /** Render one card into the "pick a competition" view */
@@ -480,8 +521,8 @@ function renderRetention() {
     const warn = info.dueSoon || info.beforeEvent;
     el.innerHTML = `<span class="retention-date${warn ? ' retention-date--warn' : ''}"${warn
         ? ` title="${info.beforeEvent ? 'Deleted before the competition starts' : 'Deleted within a week'}"` : ''}>Auto-deletes ${escapeHtml(formatDateFi(info.day))}</span>
-        <span class="retention-sep">·</span>
-        <button class="btn btn-xs btn-ghost" id="btn-extend" title="Keep this competition's data one week longer">Extend</button>`;
+        ${viewOnly() ? '' : `<span class="retention-sep">·</span>
+        <button class="btn btn-xs btn-ghost" id="btn-extend" title="Keep this competition's data one week longer">Extend</button>`}`;
     document.getElementById('btn-extend')?.addEventListener('click', () => void extendBoundCompetition());
 }
 
@@ -563,6 +604,8 @@ async function init() {
         void bindActiveCompetition();
         // An extend (here, on the home page or in another tab) moves the date
         renderRetention();
+        // The owner may have changed this user's role
+        applyViewOnly();
     });
 
     // List Details Logic
@@ -791,6 +834,7 @@ async function init() {
                 const code = group.dataset.code!;
                 const defaultMethod = group.dataset.default || '';
                 if (el.classList.contains('is-on')) return; // already the active choice
+                if (viewOnly()) return;                     // a setting: view-only can't change it
                 void setJudgingMethodOverride(code, method, defaultMethod);
             });
         });
@@ -965,7 +1009,10 @@ async function init() {
                  }, 3000);
             } else {
                 const errText = await resp.text();
-                openErrorModal('Generation Failed', `An error occurred while generating papers:<br><br>${errText}`);
+                const refusal = readOnlyRefusal(resp.status, errText);
+                openErrorModal('Generation Failed', refusal
+                    ? escapeHtml(refusal)
+                    : `An error occurred while generating papers:<br><br>${errText}`);
                 // Reset immediately on error
                 btn.innerHTML = originalText;
                 btn.disabled = false; 
@@ -1520,6 +1567,7 @@ async function init() {
         const statusEl = document.getElementById('upload-status')!;
         let successCount = 0;
         let errors: string[] = [];
+        let refusal: string | null = null;
 
         statusEl.innerHTML = `<span style="color: var(--text-secondary);">Uploading ${files.length} files...</span>`;
 
@@ -1538,6 +1586,11 @@ async function init() {
                 }
             } catch (e) {
                 errors.push(`${file.name}: Error`);
+                // View-only access: the rest would be refused the same way
+                if (e instanceof ReadOnlyRefusal) {
+                    refusal = e.message;
+                    break;
+                }
             }
         }
         
@@ -1545,6 +1598,7 @@ async function init() {
         if (errors.length > 0) {
             msg += ` <span style="color: var(--error-color);">Errors: ${errors.length}</span>`;
         }
+        if (refusal) msg = `<span style="color: var(--error-color);">${escapeHtml(refusal)}</span>`;
         statusEl.innerHTML = msg;
         
         if (successCount > 0) {
@@ -1558,6 +1612,7 @@ async function init() {
 
         titleEl.textContent = name;
         renderRetention();   // the platform date is already known
+        applyViewOnly();
 
         // Update Info Box
         document.getElementById('info-comp-name')!.textContent = name;
@@ -1588,6 +1643,7 @@ async function init() {
         dropArea.ondrop = (e) => {
             e.preventDefault();
             dropArea.classList.remove('dragover');
+            if (viewOnly()) return;
             if (e.dataTransfer && e.dataTransfer.files.length > 0) {
                 handleFiles(e.dataTransfer.files, id);
             }
@@ -1676,7 +1732,7 @@ async function init() {
                 modalOverlay.classList.add('hidden');
                 if (currentCompetitionData) loadCompetitionDetails(currentCompetitionData.id);
             } else {
-                alert('Failed to delete file.');
+                alert(readOnlyRefusal(resp.status, await resp.text()) ?? 'Failed to delete file.');
             }
         } catch (_error) {
             alert('Error deleting item');

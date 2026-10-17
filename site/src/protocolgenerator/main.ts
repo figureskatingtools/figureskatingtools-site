@@ -11,6 +11,7 @@ import {
   readPlatformError,
   isGoneCompetitionError,
   platformErrorMessage,
+  isReadOnlyCompetition,
   extendCompetition,
   retentionInfo,
   openEditCompetitionDialog,
@@ -75,6 +76,8 @@ let poolFiles: PoolFile[] | null = null;
 let poolDisabled = false;
 /** The "uploaded to this tool only" notice is worth saying once, not per file. */
 let poolNoticeShown = false;
+/** View-only state the detail view was last rendered with — a role change re-renders it */
+let renderedViewOnly = false;
 /**
  * `<competition>::<pool file>::<uploadedUtc>` of every pool schedule this page
  * session already parsed *by itself*. A parse that fails (or a schedule that
@@ -146,6 +149,10 @@ const APP_HTML = `
             </div>
             <div class="retention" id="retention"></div>
           </div>
+          <p id="view-only-note" class="view-only-note" role="note" hidden>
+            <strong>View only</strong> — you can look at this competition and download its protocols.
+            Ask the owner for write access to change anything.
+          </p>
           <div id="detail-body"></div>
         </div>
       </div>
@@ -310,6 +317,44 @@ async function bindActiveCompetition(force = false): Promise<void> {
   }
 }
 
+/**
+ * The bound competition is shared with the user view-only: every write control
+ * is hidden or disabled and nothing is written on their behalf (auto-parse,
+ * auto-import). Cosmetic — the backend answers 403 `platform_read_only` anyway.
+ */
+function viewOnly(): boolean {
+  const active = getActiveCompetition();
+  return Boolean(active && boundPlatformId && active.id === boundPlatformId && isReadOnlyCompetition(active));
+}
+
+/**
+ * Text of a failed response for an alert. A tool error about the platform
+ * competition gets the shared wording; `platform_read_only` (the role changed
+ * since the page loaded) also refreshes the selection, which re-renders the
+ * view without its write controls.
+ */
+async function failureText(resp: Response): Promise<string> {
+  const text = await resp.text();
+  const code = readPlatformError(resp.status, text);
+  if (!code) return text;
+  if (code === 'platform_read_only') void refreshActiveCompetition();
+  return platformErrorMessage(code, boundLabel ?? '');
+}
+
+/** Mark the detail view view-only (CSS hides the write buttons) and lock its inputs */
+function applyViewOnly(): void {
+  const ro = viewOnly();
+  renderedViewOnly = ro;
+  document.getElementById('view-detail')?.classList.toggle('view-only', ro);
+  const note = document.getElementById('view-only-note');
+  if (note) note.hidden = !ro;
+  if (!ro) return;
+  const body = document.getElementById('detail-body');
+  body?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input, select, textarea')
+    .forEach(el => { el.disabled = true; });
+  body?.querySelectorAll<HTMLElement>('[draggable="true"]').forEach(el => el.setAttribute('draggable', 'false'));
+}
+
 // ── API helpers ──
 // Paths are relative to this tool's API prefix, e.g. apiGet('/get_competition_details').
 async function apiGet(path: string): Promise<Response> {
@@ -360,8 +405,8 @@ function renderRetention() {
   const warn = info.dueSoon || info.beforeEvent;
   el.innerHTML = `<span class="retention-date${warn ? ' retention-date--warn' : ''}"${warn
     ? ` title="${info.beforeEvent ? 'Deleted before the competition starts' : 'Deleted within a week'}"` : ''}>Auto-deletes ${escapeHtml(formatDateFi(info.day))}</span>
-    <span class="retention-sep">·</span>
-    <button class="btn btn-xs btn-ghost" id="btn-extend" title="Keep this competition's data one week longer">Extend</button>`;
+    ${viewOnly() ? '' : `<span class="retention-sep">·</span>
+    <button class="btn btn-xs btn-ghost" id="btn-extend" title="Keep this competition's data one week longer">Extend</button>`}`;
   document.getElementById('btn-extend')?.addEventListener('click', extendRetention);
 }
 
@@ -391,6 +436,7 @@ async function openCompetition(id: string, name: string) {
   document.getElementById('detail-title')!.textContent = name;
   document.getElementById('retention')!.innerHTML = '';
   document.getElementById('detail-body')!.innerHTML = '<p class="text-muted">Loading…</p>';
+  applyViewOnly();
   await loadDetails();
   // The pool listing is fresh now (loadDetails refreshes it), so this is the
   // first moment we can tell whether the schedule is already sitting there.
@@ -1025,6 +1071,7 @@ function renderDetails() {
   `;
 
   wireDetail();
+  applyViewOnly();
 }
 
 // ── wiring ──
@@ -1046,11 +1093,15 @@ function wireDetail() {
 
   // Drop zones: slots + tray.
   body.querySelectorAll<HTMLElement>('[data-target]').forEach(zone => {
-    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+    zone.addEventListener('dragover', e => {
+      if (viewOnly()) return;   // no drop target: the browser shows "not allowed"
+      e.preventDefault(); zone.classList.add('dragover');
+    });
     zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
     zone.addEventListener('drop', e => {
       e.preventDefault();
       zone.classList.remove('dragover');
+      if (viewOnly()) return;
       const target = JSON.parse(zone.getAttribute('data-target')!) as SlotTarget;
       if (e.dataTransfer?.files?.length) {
         uploadFiles(e.dataTransfer.files, target);
@@ -1245,6 +1296,7 @@ function wireDetail() {
   schedDrop?.addEventListener('dragleave', () => schedDrop.classList.remove('dragover'));
   schedDrop?.addEventListener('drop', e => {
     e.preventDefault(); schedDrop.classList.remove('dragover');
+    if (viewOnly()) return;
     if (e.dataTransfer?.files?.[0]) parseSchedule(e.dataTransfer.files[0]);
   });
   // Parse the schedule the pool already holds (no download, no upload).
@@ -1307,7 +1359,7 @@ function deleteProtocol(fileName: string) {
       const resp = await fetch(
         apiUrl(`/delete_protocol?competition=${encodeURIComponent(currentId!)}&fileName=${encodeURIComponent(fileName)}`),
         { method: 'DELETE' });
-      if (!resp.ok) { alert('Delete failed: ' + (await resp.text())); throw new Error('delete failed'); }
+      if (!resp.ok) { alert('Delete failed: ' + (await failureText(resp))); throw new Error('delete failed'); }
       await loadDetails();
     },
   });
@@ -1328,7 +1380,7 @@ async function assignFile(fileId: string, target: SlotTarget) {
   if (!currentId) return;
   try {
     const resp = await apiJson('/assign_file', { id: currentId, fileId, target });
-    if (!resp.ok) { alert('Could not move file: ' + (await resp.text())); return; }
+    if (!resp.ok) { alert('Could not move file: ' + (await failureText(resp))); return; }
     await learnFromManualAssign(fileId, target);
     await loadDetails();
   } catch { alert('Network error moving file.'); }
@@ -1816,7 +1868,7 @@ async function uploadOneFile(file: File, params: URLSearchParams): Promise<void>
   }
   try {
     const resp = await apiRaw(`/upload_file?${params.toString()}`, file);
-    if (!resp.ok) alert(`Upload failed for ${file.name}: ${await resp.text()}`);
+    if (!resp.ok) alert(`Upload failed for ${file.name}: ${await failureText(resp)}`);
   } catch { alert(`Upload error for ${file.name}.`); }
 }
 
@@ -1853,7 +1905,8 @@ async function uploadFiles(files: FileList, target?: SlotTarget) {
 async function deleteFile(fileId: string) {
   if (!currentId) return;
   try {
-    await fetch(apiUrl(`/delete_file?competition=${encodeURIComponent(currentId)}&fileId=${encodeURIComponent(fileId)}`), { method: 'DELETE' });
+    const resp = await fetch(apiUrl(`/delete_file?competition=${encodeURIComponent(currentId)}&fileId=${encodeURIComponent(fileId)}`), { method: 'DELETE' });
+    if (!resp.ok) alert('Could not delete file: ' + (await failureText(resp)));
     await loadDetails();
   } catch { alert('Could not delete file.'); }
 }
@@ -1896,7 +1949,7 @@ async function editStructure(payload: any, reload: boolean) {
   if (!currentId) return;
   try {
     const resp = await apiJson('/edit_structure', { id: currentId, ...payload });
-    if (!resp.ok) { alert('Edit failed: ' + (await resp.text())); return; }
+    if (!resp.ok) { alert('Edit failed: ' + (await failureText(resp))); return; }
     if (reload) await loadDetails();
   } catch { alert('Network error editing competition.'); }
 }
@@ -1912,7 +1965,7 @@ async function parseSchedule(file: File, force = false) {
       }
       return;
     }
-    if (!resp.ok) { alert('Schedule parse failed: ' + (await resp.text())); return; }
+    if (!resp.ok) { alert('Schedule parse failed: ' + (await failureText(resp))); return; }
     await loadDetails();
   } catch { alert('Network error parsing schedule.'); }
 }
@@ -1941,7 +1994,7 @@ async function parseScheduleFromPool(file: PoolFile, force = false): Promise<voi
       }
       return;
     }
-    if (!resp.ok) { alert('Schedule parse failed: ' + (await resp.text())); return; }
+    if (!resp.ok) { alert('Schedule parse failed: ' + (await failureText(resp))); return; }
     await loadDetails();
     flash(`Schedule parsed from competition files: ${file.name}`);
   } catch { alert('Network error parsing schedule.'); }
@@ -1957,6 +2010,7 @@ async function parseScheduleFromPool(file: PoolFile, force = false): Promise<voi
  */
 async function autoParsePoolSchedule(): Promise<void> {
   if (!currentId || !details || details.structure.id !== currentId) return;
+  if (viewOnly()) return;   // never write on behalf of a view-only user
   const s = details.structure;
   if (s.scheduleParsed || (s.categories || []).length) return;
   const candidate = scheduleCandidates()[0];
@@ -1979,6 +2033,7 @@ async function autoImportPoolRosters(): Promise<void> {
   // A details response for the previously opened competition may still be what
   // `details` holds; its state must not authorize a write to this one.
   if (!currentId || !details || details.structure.id !== currentId) return;
+  if (viewOnly()) return;   // never write on behalf of a view-only user
   const s = details.structure;
   if (s.rosterImport || !(s.categories || []).some(c => c.discipline === 'synchro')) return;
   const plan = poolRosterPlan(s);
@@ -2054,7 +2109,7 @@ async function importRosters(teamsXml: string, particXml: string) {
       ...(particXml ? { particXml } : {}),
     };
     const resp = await apiJson('/import_rosters', body);
-    if (!resp.ok) { alert('Roster import failed: ' + (await resp.text())); return; }
+    if (!resp.ok) { alert('Roster import failed: ' + (await failureText(resp))); return; }
     const data = await resp.json();
     await loadDetails();
     // Details (withdrawn / not placed) live in the persistent panel, not here.
@@ -2070,7 +2125,7 @@ async function uploadFallbackZip(file: File) {
   try {
     const resp = await apiRaw(
       '/upload_fallback_photos?' + new URLSearchParams({ competition: currentId }), file);
-    if (!resp.ok) { alert('Fallback picture import failed: ' + (await resp.text())); return; }
+    if (!resp.ok) { alert('Fallback picture import failed: ' + (await failureText(resp))); return; }
     const data = await resp.json();
     await loadDetails();
     const parts = [`Matched ${data.matched} fallback picture(s)`];
@@ -2110,7 +2165,7 @@ async function generate() {
       btn.classList.add('btn-success');
       setTimeout(() => { btn.classList.remove('btn-success'); btn.textContent = 'Generate Protocol'; btn.disabled = false; loadDetails(); }, 1500);
     } else {
-      alert('Generation failed: ' + (await resp.text()));
+      alert('Generation failed: ' + (await failureText(resp)));
       btn.textContent = 'Generate Protocol'; btn.disabled = false;
     }
   } catch {
@@ -2181,6 +2236,8 @@ async function init() {
       void bindActiveCompetition();
       // An extend (here, on the home page or in another tab) moves the date
       renderRetention();
+      // The owner changed this user's role: show or hide the write controls
+      if (details && viewOnly() !== renderedViewOnly) renderDetails();
     });
 
     // Header pencil — edits the platform record every tool shares.

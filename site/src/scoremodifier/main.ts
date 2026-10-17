@@ -11,6 +11,8 @@ import {
     readPlatformError,
     isGoneCompetitionError,
     platformErrorMessage,
+    isReadOnlyCompetition,
+    ownerLabel,
     competitionLabel,
     formatDateFi,
     type PlatformCompetition,
@@ -95,6 +97,15 @@ appElement.innerHTML = `
         <p class="lead">Choose or create a competition from the selector in the top bar —
           every tool works on the same selected competition, and what you generate here is
           kept with it and deleted together with its data.</p>
+      </div>
+
+      <div id="readonly-view" class="card reveal hidden" style="max-width: 860px; margin: 0 auto;">
+        <span class="micro-label">Score Modifier</span>
+        <h2 style="margin-bottom: 0.75rem;">View-only access</h2>
+        <p class="lead">View-only access — ask the owner for write access.</p>
+        <p id="readonly-owner" class="text-muted"></p>
+        <p class="text-muted">Everything Score Modifier makes is stored with the selected competition,
+          so generating needs write access to it.</p>
       </div>
 
       <div id="tool-view" class="card reveal hidden" style="max-width: 860px; margin: 0 auto;">
@@ -249,6 +260,9 @@ async function showFailure(resp: Response, requested: PlatformCompetition): Prom
     // Name the competition the request was made for — the selection may have
     // changed while it was in flight
     const label = competitionLabel(requested);
+    // The owner made this view-only since the page loaded: the message, and a
+    // refreshed selection that swaps the form for the view-only card
+    if (code === 'platform_read_only') void refreshActiveCompetition();
     if (isGoneCompetitionError(code)) {
         const message = platformErrorMessage(code!, label);
         if (getActiveCompetition()?.id === requested.id) {
@@ -529,12 +543,22 @@ async function init() {
     void refreshActiveCompetition();
 }
 
-/** The tool with a competition selected, the "pick a competition" card without */
+/**
+ * The tool with a competition selected, the "pick a competition" card without —
+ * and the view-only card instead of the form when the competition is shared
+ * with this user read-only (generating stores the output with it, a write).
+ */
 function showForActiveCompetition() {
     const active = getActiveCompetition();
+    const readOnly = Boolean(active) && isReadOnlyCompetition(active);
     document.getElementById('pick-view')!.classList.toggle('hidden', Boolean(active));
-    document.getElementById('tool-view')!.classList.toggle('hidden', !active);
-    if (active) {
+    document.getElementById('readonly-view')!.classList.toggle('hidden', !readOnly);
+    document.getElementById('tool-view')!.classList.toggle('hidden', !active || readOnly);
+    const owner = ownerLabel(active?.owner);
+    document.getElementById('readonly-owner')!.textContent = readOnly
+        ? `“${competitionLabel(active!)}” is shared with you${owner ? ` by ${owner}` : ''}.`
+        : '';
+    if (active && !readOnly) {
         showPickNotice(null);
         prefillFromActiveCompetition();
     }

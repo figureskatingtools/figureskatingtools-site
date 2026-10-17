@@ -998,3 +998,45 @@ input[type="checkbox"] { accent-color: var(--ink); }
   color: var(--gold);
   font-weight: 600;
 }
+
+/* ── View-only access (a competition shared with the user to read) ──
+   Cosmetic: the backend refuses every write with 403 platform_read_only. */
+.view-only-note {
+  margin: 0 0 1rem;
+  padding: 0.55rem 0.8rem;
+  border-left: 2px solid var(--rink);
+  border-radius: 0.3rem;
+  background-color: var(--rink-tint);
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.view-only-note[hidden] { display: none; }
+
+.view-only #detail-edit,
+.view-only #btn-save-event,
+.view-only #btn-reparse,
+.view-only #btn-pool-schedule,
+.view-only #schedule-drop,
+.view-only #btn-auto-place,
+.view-only #tray-browse,
+.view-only #btn-add-cat,
+.view-only #btn-import-rosters,
+.view-only #btn-upload-fallbacks,
+.view-only #btn-pool-rosters,
+.view-only #btn-generate,
+.view-only .pool-import,
+.view-only .chip-x,
+.view-only [data-del-protocol],
+.view-only [data-rm-seg],
+.view-only [data-rm-cat],
+.view-only [data-add-seg],
+.view-only [data-add-team],
+.view-only [data-rm-team],
+.view-only [data-add-text],
+.view-only [data-rm-text] {
+  display: none !important;
+}
+
+.view-only .file-chip { cursor: default; }
+.view-only .slot-empty { visibility: hidden; }
