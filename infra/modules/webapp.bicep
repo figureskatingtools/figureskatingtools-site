@@ -165,8 +165,8 @@ resource authConfig 'Microsoft.Web/sites/config@2022-09-01' = if (!empty(authCli
 // the deploy-frontend job's az CLI step; any run that failed in between left the
 // router with no proxy targets and every /api call 502'd. They are now part of
 // the same deployment as the Web App itself, which makes infra atomic.
-// Empty values are written deliberately (PROXY_SHARED_SECRET_PLATFORM is
-// normally empty — the backend fails open when its own secret is unset).
+// Empty values are written as they come, but the backends fail CLOSED: an
+// empty PROXY_SHARED_SECRET_* means every call to that backend is a 401.
 resource siteAppSettings 'Microsoft.Web/sites/config@2022-09-01' = {
   parent: webApp
   name: 'appsettings'
