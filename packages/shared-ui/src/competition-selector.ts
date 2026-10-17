@@ -11,12 +11,14 @@
 
 import {
   clearActiveCompetition,
+  competitionAccess,
   competitionLabel,
   createCompetition,
   CompetitionApiError,
   getActiveCompetition,
   listCompetitions,
   normalizeCompetitionCode,
+  ownerLabel,
   retentionInfo,
   setActiveCompetition,
   subscribeActiveCompetition,
@@ -110,6 +112,21 @@ function closeMenu(container: HTMLElement): void {
   container.querySelector('[data-fst-comp-menu]')?.classList.remove('fst-comp-menu--open');
 }
 
+/**
+ * "Shared" badge for a competition someone else owns, "View only" when the
+ * caller may not change it. Nothing for your own.
+ */
+function accessBadgeHtml(c: PlatformCompetition): string {
+  const access = competitionAccess(c);
+  if (access === 'owner') return '';
+  const owner = ownerLabel(c.owner);
+  const title = owner ? `Shared with you by ${owner}` : 'Shared with you';
+  return `<span class="fst-comp-item-badge" title="${esc(title)}">Shared</span>` +
+    (access === 'read'
+      ? '<span class="fst-comp-item-badge fst-comp-item-badge--read" title="You can look and download, not change">View only</span>'
+      : '');
+}
+
 function buildSelectorHtml(
   competitions: PlatformCompetition[],
   active: PlatformCompetition | null
@@ -126,7 +143,7 @@ function buildSelectorHtml(
         `aria-label="Data is deleted on ${esc(formatDateFi(retention.day))}"></span>`
       : '';
     return `<button type="button" class="fst-comp-item${selected}" data-competition-id="${esc(c.id)}">
-      <span class="fst-comp-item-name">${esc(competitionLabel(c))}${due}</span>
+      <span class="fst-comp-item-name">${esc(competitionLabel(c))}${due}${accessBadgeHtml(c)}</span>
       ${meta ? `<span class="fst-comp-item-meta">${esc(meta)}</span>` : ''}
     </button>`;
   }).join('');
