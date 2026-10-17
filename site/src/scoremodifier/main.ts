@@ -20,6 +20,7 @@ import {
     usableDownloadUrl,
 } from '@figureskatingtools/shared-ui';
 import {
+    escapeAttr,
     escapeHtml,
     fetchUser,
     isTenantBlocked,
@@ -219,12 +220,6 @@ function showError(msg: string) {
         `<div class="result-card result-card--error"><p class="status-error">${escapeHtml(msg)}</p></div>`;
 }
 
-/** Attribute-safe escape — `escapeHtml` leaves quotes alone, which is fine for
- * text nodes but lets a `"` break out of an HTML attribute value. */
-function escapeAttr(s: string): string {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
 
 function downloadLink(url: string, fileName: string, label: string, primary = true): string {
     const cls = primary ? 'btn btn-primary' : 'btn btn-secondary';

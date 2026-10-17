@@ -26,6 +26,7 @@ import {
   type UserRef,
   type UserSearchHit,
 } from './competition.js';
+import { createKeyedLock } from './keyed-lock.js';
 
 /** Escape text for interpolation into HTML (also safe inside quoted attributes) */
 function esc(value: string): string {
@@ -179,6 +180,17 @@ export function openShareCompetitionDialog(competition: PlatformCompetition): Pr
     let changed = false;
     let searchTimer: number | null = null;
     let searchSeq = 0;
+    let settled = false;
+    /**
+     * People with an access change in flight. One mutation per person at a time:
+     * their row's controls (and Share, when they are the picked person) stay
+     * disabled until it settles, so a slow PUT can never land after a DELETE.
+     */
+    const busy = createKeyedLock(() => {
+      if (settled) return;
+      renderGrants();
+      syncAddButton();
+    });
 
     const showError = (message: string | null): void => {
       errorEl.hidden = !message;
@@ -203,12 +215,13 @@ export function openShareCompetitionDialog(competition: PlatformCompetition): Pr
         if (g.role === 'owner') {
           return `<li class="fst-share-row">${who}<span class="fst-share-owner">${ROLE_LABELS.owner}</span></li>`;
         }
+        const disabled = busy.has(g.userId) ? ' disabled' : '';
         return `<li class="fst-share-row">${who}
-            <select class="fst-share-role" data-fst-grant-role="${esc(g.userId)}">
+            <select class="fst-share-role" data-fst-grant-role="${esc(g.userId)}"${disabled}>
               <option value="read"${g.role === 'read' ? ' selected' : ''}>${ROLE_LABELS.read}</option>
               <option value="write"${g.role === 'write' ? ' selected' : ''}>${ROLE_LABELS.write}</option>
             </select>
-            <button type="button" class="fst-share-remove" data-fst-grant-remove="${esc(g.userId)}">Remove</button>
+            <button type="button" class="fst-share-remove" data-fst-grant-remove="${esc(g.userId)}"${disabled}>Remove</button>
           </li>`;
       }).join('');
 
@@ -217,7 +230,7 @@ export function openShareCompetitionDialog(competition: PlatformCompetition): Pr
         const grant = grantFor(userId);
         if (grant) select.setAttribute('aria-label', `Access for ${personLabel(grant)}`);
         select.addEventListener('change', () => {
-          void saveGrant(userId, select.value as ShareRole, select);
+          void saveGrant(userId, select.value as ShareRole);
         });
       });
       listEl.querySelectorAll<HTMLButtonElement>('[data-fst-grant-remove]').forEach((btn) => {
@@ -225,7 +238,7 @@ export function openShareCompetitionDialog(competition: PlatformCompetition): Pr
         const grant = grantFor(userId);
         if (grant) btn.setAttribute('aria-label', `Remove ${personLabel(grant)}`);
         btn.addEventListener('click', () => {
-          void dropGrant(userId, btn);
+          void dropGrant(userId);
         });
       });
     };
@@ -236,49 +249,49 @@ export function openShareCompetitionDialog(competition: PlatformCompetition): Pr
       else grants.push(grant);
     };
 
-    const saveGrant = async (
-      userId: string,
-      role: ShareRole,
-      control: HTMLSelectElement | HTMLButtonElement
-    ): Promise<boolean> => {
-      showError(null);
-      control.disabled = true;
-      try {
-        upsertGrant(await setAccess(competition.id, userId, role));
-        changed = true;
-        renderGrants();
-        renderRecent();
-        return true;
-      } catch (err: unknown) {
-        showError(shareErrorMessage(err, 'Could not change the access. Please try again.'));
-        renderGrants(); // puts a changed select back to the stored role
-        return false;
-      } finally {
-        control.disabled = false;
-      }
+    /** Share is usable only with a picked person whose access isn't already changing */
+    const syncAddButton = (): void => {
+      addBtn.disabled = !picked || busy.has(picked.userId);
     };
 
-    const dropGrant = async (userId: string, btn: HTMLButtonElement): Promise<void> => {
+    const saveGrant = async (userId: string, role: ShareRole): Promise<boolean> => {
       showError(null);
-      btn.disabled = true;
-      try {
-        await removeAccess(competition.id, userId);
-      } catch (err: unknown) {
-        btn.disabled = false;
-        showError(shareErrorMessage(err, 'Could not remove the access. Please try again.'));
-        return;
-      }
-      grants = grants.filter((g) => g.userId !== userId);
-      changed = true;
-      renderGrants();
-      renderRecent();
+      const ok = await busy.run(userId, async () => {
+        try {
+          upsertGrant(await setAccess(competition.id, userId, role));
+          changed = true;
+          renderRecent();
+          return true;
+        } catch (err: unknown) {
+          // The re-render when the lock is released puts a changed select back
+          showError(shareErrorMessage(err, 'Could not change the access. Please try again.'));
+          return false;
+        }
+      });
+      if (ok === undefined) renderGrants(); // refused: undo the select change
+      return ok === true;
+    };
+
+    const dropGrant = async (userId: string): Promise<void> => {
+      showError(null);
+      await busy.run(userId, async () => {
+        try {
+          await removeAccess(competition.id, userId);
+        } catch (err: unknown) {
+          showError(shareErrorMessage(err, 'Could not remove the access. Please try again.'));
+          return;
+        }
+        grants = grants.filter((g) => g.userId !== userId);
+        changed = true;
+        renderRecent();
+      });
     };
 
     /* ── Picking the person to add ── */
 
     const setPicked = (user: UserSearchHit | null): void => {
       picked = user;
-      addBtn.disabled = !user;
+      syncAddButton();
       if (user) {
         searchInput.value = personLabel(user);
         const existing = grantFor(user.userId);
@@ -375,15 +388,17 @@ export function openShareCompetitionDialog(competition: PlatformCompetition): Pr
 
     searchInput.addEventListener('input', () => {
       if (picked && searchInput.value !== personLabel(picked)) setPicked(null);
+      // Every keystroke invalidates the previous search: its pending timer, its
+      // in-flight response and the suggestions on screen, so Enter can never pick
+      // a result that belongs to an earlier query.
       if (searchTimer !== null) window.clearTimeout(searchTimer);
+      searchTimer = null;
+      searchSeq++;
+      results = [];
+      closeResults();
+      if (!picked) hintEl.textContent = defaultHint;
       const query = searchInput.value.trim();
-      if (query.length < USER_SEARCH_MIN_CHARS) {
-        searchSeq++; // drop any search still in flight
-        results = [];
-        closeResults();
-        if (!picked) hintEl.textContent = defaultHint;
-        return;
-      }
+      if (query.length < USER_SEARCH_MIN_CHARS) return;
       searchTimer = window.setTimeout(() => {
         searchTimer = null;
         void runSearch(query);
@@ -420,8 +435,8 @@ export function openShareCompetitionDialog(competition: PlatformCompetition): Pr
     const addPicked = async (): Promise<void> => {
       if (!picked) return;
       const user = picked;
-      const ok = await saveGrant(user.userId, roleSelect.value as ShareRole, addBtn);
-      if (!ok) return;
+      const ok = await saveGrant(user.userId, roleSelect.value as ShareRole);
+      if (!ok || picked !== user) return; // failed, or the user moved on meanwhile
       searchInput.value = '';
       setPicked(null);
       hintEl.textContent = `Shared with ${personLabel(user)}.`;
@@ -458,7 +473,6 @@ export function openShareCompetitionDialog(competition: PlatformCompetition): Pr
 
     /* ── Lifecycle ── */
 
-    let settled = false;
     const finish = (): void => {
       if (settled) return;
       settled = true;

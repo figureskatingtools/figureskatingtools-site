@@ -38,7 +38,7 @@ import {
   type PlatformCompetition,
   type PoolFile,
 } from '@figureskatingtools/shared-ui'
-import { escapeHtml, fetchUser, renderSignInView, setupUserMenu, type UserInfo } from './shell.js'
+import { escapeAttr, escapeHtml, fetchUser, renderSignInView, setupUserMenu, type UserInfo } from './shell.js'
 
 interface ChangelogEntry {
   /** Commit day, ISO `YYYY-MM-DD` — stored ISO (cache + changelog.json),
@@ -838,7 +838,7 @@ function createdLineHtml(c: PlatformCompetition, cls: string): string {
     if (!c.createdBy && !c.createdUtc) return '';
     text = [created, c.createdBy ? `by ${c.createdBy}` : ''].filter(Boolean).join(' ');
   }
-  const title = c.owner?.email ? ` title="${escapeHtml(c.owner.email)}"` : '';
+  const title = c.owner?.email ? ` title="${escapeAttr(c.owner.email)}"` : '';
   return `<span class="${cls}"${title}>${escapeHtml(text)}</span>`;
 }
 

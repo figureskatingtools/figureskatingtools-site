@@ -1180,10 +1180,12 @@ async function init() {
                 if (!isDownloadLinkStale(generatedFetchedAt, link.dataset.expiration)) return;
                 e.preventDefault();
                 const fileName = link.dataset.genFile!;
+                const competitionId = currentCompetitionData?.id;
+                if (!competitionId) return;
                 void openFreshDownload({
                     newTab: true,
-                    refresh: async () => (await refreshGeneratedFiles())?.find(g => g.fileName === fileName)?.url,
-                    onUnavailable: () => markGeneratedUnavailable(fileName),
+                    refresh: async () => (await refreshGeneratedFiles(competitionId))?.find(g => g.fileName === fileName)?.url,
+                    onUnavailable: () => markGeneratedUnavailable(competitionId, fileName),
                 });
             });
         });
@@ -1196,13 +1198,17 @@ async function init() {
                 const fileName = el.dataset.filename!;
                 let url: string | null = el.dataset.url ?? null;
                 if (isDownloadLinkStale(generatedFetchedAt, el.dataset.expiration)) {
+                    const competitionId = currentCompetitionData?.id;
+                    if (!competitionId) return;
                     try {
-                        const fresh = await refreshGeneratedFiles();
+                        const fresh = await refreshGeneratedFiles(competitionId);
                         url = usableDownloadUrl(fresh?.find(g => g.fileName === fileName)?.url);
                     } catch (_e) {
                         url = null;
                     }
-                    if (!url) { markGeneratedUnavailable(fileName); return; }
+                    // Another competition was opened meanwhile: this click no longer applies
+                    if (currentCompetitionData?.id !== competitionId) return;
+                    if (!url) { markGeneratedUnavailable(competitionId, fileName); return; }
                     // The list was re-rendered: confirm on the new button
                     const again = Array.from(genContainer.querySelectorAll<HTMLElement>('.copy-link-btn'))
                         .find(b => b.dataset.filename === fileName);
@@ -1246,11 +1252,10 @@ async function init() {
     /**
      * Re-read the competition (same call as `loadCompetitionDetails`) for fresh
      * download links and re-render only the generated papers list. Null when the
-     * fetch failed or another competition was opened meanwhile.
+     * fetch failed or `id` is not (or no longer) the open competition.
      */
-    async function refreshGeneratedFiles(): Promise<GeneratedPaperFile[] | null> {
-        const id = currentCompetitionData?.id;
-        if (!id) return null;
+    async function refreshGeneratedFiles(id: string): Promise<GeneratedPaperFile[] | null> {
+        if (currentCompetitionData?.id !== id) return null;
         const resp = await fetch(`${API_BASE}/get_competition_details?id=${encodeURIComponent(id)}`);
         if (!resp.ok) return null;
         const data = await resp.json();
@@ -1264,8 +1269,13 @@ async function init() {
         return files;
     }
 
-    /** No fresh link for this file: list it unlinked, with the hint */
-    function markGeneratedUnavailable(fileName: string) {
+    /**
+     * No fresh link for this file: list it unlinked, with the hint. Only while
+     * `competitionId` is still open — a refresh started in another competition
+     * must not touch this one's list.
+     */
+    function markGeneratedUnavailable(competitionId: string, fileName: string) {
+        if (currentCompetitionData?.id !== competitionId) return;
         const files: GeneratedPaperFile[] = currentCompetitionData?.generatedFiles || [];
         const item = files.find(f => f.fileName === fileName);
         if (!item) return;   // gone from the fresh listing: the re-rendered list already shows that

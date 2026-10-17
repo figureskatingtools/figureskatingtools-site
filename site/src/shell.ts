@@ -5,17 +5,18 @@
  */
 
 /** Escape HTML */
+/**
+ * Escape for HTML text **and** quoted attribute values: the pages interpolate
+ * names, e-mails and file names into `title="…"`/`data-*="…"` too, and an
+ * e-mail may legally contain a quote, so quotes are always escaped.
+ */
 export function escapeHtml(str: string): string {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
-
-/** `escapeHtml` that is also safe inside a quoted HTML attribute value */
-export function escapeAttr(str: string): string {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+  return String(str ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
+
+/** Same as `escapeHtml`; kept as the explicit name for attribute values */
+export const escapeAttr = escapeHtml;
 
 /** The signed-in user, as reported by the router's `/userinfo` endpoint */
 export interface UserInfo {

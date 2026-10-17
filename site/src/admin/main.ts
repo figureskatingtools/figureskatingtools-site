@@ -74,9 +74,9 @@ function esc(value: unknown): string {
   return escapeHtml(value === null || value === undefined ? '' : String(value));
 }
 
-/** Attribute values: escapeHtml leaves quotes alone, so add them */
+/** Attribute values (escapeHtml escapes quotes too; the name marks the context) */
 function attr(value: unknown): string {
-  return esc(value).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  return esc(value);
 }
 
 function badge(text: string, kind: 'ok' | 'warn' | 'error' | 'muted' | 'info'): string {

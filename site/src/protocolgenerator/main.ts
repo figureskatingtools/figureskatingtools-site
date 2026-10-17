@@ -1389,21 +1389,23 @@ function onGenListClick(e: MouseEvent): void {
   // The link is (nearly) expired: fetch fresh ones, then open this file's
   e.preventDefault();
   const fileName = link.dataset.genFile!;
+  const competitionId = currentId;
+  if (!competitionId) return;
   void openFreshDownload({
     newTab: true,
-    refresh: async () => (await refreshGeneratedFiles())?.find(g => g.fileName === fileName)?.url,
-    onUnavailable: () => markGeneratedUnavailable(fileName),
+    refresh: async () => (await refreshGeneratedFiles(competitionId))?.find(g => g.fileName === fileName)?.url,
+    onUnavailable: () => markGeneratedUnavailable(competitionId, fileName),
   });
 }
 
 /**
  * Re-read the competition's generated protocols (same call as `loadDetails`)
  * and re-render only that list, leaving the rest of the view — and any unsaved
- * input — alone. Null when the fetch failed or another competition was opened.
+ * input — alone. Null when the fetch failed or `id` is not (or no longer) the
+ * open competition.
  */
-async function refreshGeneratedFiles(): Promise<GeneratedFile[] | null> {
-  const id = currentId;
-  if (!id) return null;
+async function refreshGeneratedFiles(id: string): Promise<GeneratedFile[] | null> {
+  if (currentId !== id) return null;
   const resp = await apiGet(`/get_competition_details?id=${encodeURIComponent(id)}`);
   if (!resp.ok) return null;
   const fresh: CompetitionDetails = await resp.json();
@@ -1414,8 +1416,13 @@ async function refreshGeneratedFiles(): Promise<GeneratedFile[] | null> {
   return details.generatedFiles;
 }
 
-/** No fresh link for this file: show it unlinked, with the hint */
-function markGeneratedUnavailable(fileName: string): void {
+/**
+ * No fresh link for this file: show it unlinked, with the hint. Only while
+ * `competitionId` is still open — a refresh started in another competition
+ * must not touch this one's list.
+ */
+function markGeneratedUnavailable(competitionId: string, fileName: string): void {
+  if (currentId !== competitionId) return;
   const item = details?.generatedFiles?.find(g => g.fileName === fileName);
   if (!item) return;   // gone from the fresh listing: the re-rendered list already shows that
   item.url = null;
