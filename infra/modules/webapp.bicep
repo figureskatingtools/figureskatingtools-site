@@ -57,6 +57,9 @@ param proxySharedSecretGdprtool string = ''
 @description('Comma-separated admin e-mail addresses (ADMIN_EMAILS). The router serves /admin/ and proxies /api/manage/* only for these; the platform Function App checks its own copy. Empty = nobody is admin.')
 param adminEmails string = ''
 
+@description('Comma-separated Entra tenant ids whose principals may use the APIs (ALLOWED_TENANT_IDS). Defaults to the deployment tenant; any other tenant gets 403 tenant_not_allowed from the router. Empty = nobody (fail closed).')
+param allowedTenantIds string = tenant().tenantId
+
 @description('Health URL of the HOVTP listener, probed by the admin diagnostics (HOVTP_HEALTH_URL).')
 param hovtpHealthUrl string = ''
 
@@ -181,6 +184,7 @@ resource siteAppSettings 'Microsoft.Web/sites/config@2022-09-01' = {
       PROXY_SHARED_SECRET_GDPRTOOL: proxySharedSecretGdprtool
       AUTH_LOGIN_PROVIDER: empty(authLoginProvider) ? 'aad' : authLoginProvider
       ADMIN_EMAILS: adminEmails
+      ALLOWED_TENANT_IDS: allowedTenantIds
       HOVTP_HEALTH_URL: hovtpHealthUrl
       // Hard-disables DEV_FAKE_USER in the router, which the admin check relies on.
       NODE_ENV: 'production'

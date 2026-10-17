@@ -66,10 +66,13 @@ def test_an_update_writes_one_audit_row_with_only_the_changed_fields(admin, tabl
 
 def test_an_owner_change_is_audited_with_both_addresses(admin, table):
     created = create()
-    call(fa._admin_update_competition, "PATCH", created["id"],
-         body={"createdBy": "new-owner@example.com"})
+    new_owner = table.seed_user("new-owner@example.com", "New Owner")
+    call(fa._admin_set_owner, "PUT", created["id"], body={"userId": new_owner})
     [audit] = table.audit_rows()
-    assert changes(audit) == {"createdBy": [USER_EMAIL, "new-owner@example.com"]}
+    assert audit["Action"] == "competition.owner"
+    assert audit["Actor"] == ADMIN_EMAIL
+    assert audit["Target"] == "new-owner@example.com"
+    assert changes(audit) == {"owner": [USER_EMAIL, "new-owner@example.com"]}
 
 
 def test_a_no_op_update_writes_no_audit_row(admin, table):
@@ -258,6 +261,9 @@ def test_diagnostics_reports_config_and_counts(admin, table, blobs, monkeypatch)
         "retentionPurgeEnabled": True, "hovtpEnabled": False,
         "retentionDays": 60, "extensionDays": 7, "clockTable": "retentionclock",
         "adminLogTable": "adminlog", "auditRetentionDays": 365,
+        "usersTable": "users", "userIdentitiesTable": "useridentities",
+        "competitionAccessTable": "competitionaccess", "allowedTenantCount": 1,
+        "inactiveUserDays": 365,
     }
     assert body["storage"] == {"ok": True, "error": None}
     counts = body["counts"]

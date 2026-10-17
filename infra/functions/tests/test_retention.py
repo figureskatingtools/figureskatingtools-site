@@ -66,6 +66,7 @@ def seed_competition(table, competition_id, code=None, **columns):
     table.create_entity(entity)
     table.create_entity({"PartitionKey": fa.PK_CODE, "RowKey": code,
                          "CompetitionId": competition_id, "CreatedUtc": entity["CreatedUtc"]})
+    table.grant(competition_id)   # the default user owns it
     return entity
 
 
@@ -186,7 +187,8 @@ def test_an_overdue_competition_is_extended_from_today(table):
 
 def test_extend_does_not_record_who_extended(table):
     created = create()
-    extend(created["id"], user_email="other@example.com")
+    table.grant(created["id"], table.seed_user("other@example.com"), "write")
+    assert extend(created["id"], user_email="other@example.com").status_code == 200
 
     stored = row(table, created["id"])
     assert "other@example.com" not in [str(v) for v in stored.values()]
@@ -203,7 +205,8 @@ def test_extend_of_an_unknown_or_deleted_competition_is_a_404(table):
 def test_extend_requires_a_user(table):
     created = create()
 
-    assert extend(created["id"], user_email=None).status_code == 401
+    assert extend(created["id"], oid=None).status_code == 401
+    assert extend(created["id"], tid=None).status_code == 401
     assert extend(created["id"], proxy_secret="wrong").status_code == 401
     assert row(table, created["id"])["DeletionDate"] == created["deletionDate"]
 

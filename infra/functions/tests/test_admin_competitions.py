@@ -223,23 +223,17 @@ def test_the_user_patch_still_ignores_a_deletion_date(admin, table):
     assert row(table, created["id"])["DeletionDate"] == created["deletionDate"]
 
 
-def test_the_owner_can_be_changed_and_cleared(admin, table):
+def test_created_by_is_read_only_history(admin, table):
+    """The owner is the competitionaccess owner row (PUT …/owner); CreatedBy
+    only records who created it, so the admin PATCH refuses to touch it."""
     created = create()
-
-    changed = payload(admin_patch(admin, created["id"], {"createdBy": " owner@example.com "}))
-    assert changed["competition"]["createdBy"] == "owner@example.com"
-    assert row(table, created["id"])["CreatedBy"] == "owner@example.com"
-
-    cleared = payload(admin_patch(admin, created["id"], {"createdBy": ""}))
-    assert cleared["competition"]["createdBy"] is None
-
-
-def test_an_invalid_owner_is_rejected(admin, table):
-    created = create()
-    for value in ("not-an-email", "two@@example.com", "a b@example.com", 42, "x" * 250 + "@example.com"):
-        response = admin_patch(admin, created["id"], {"createdBy": value})
+    for value in (" owner@example.com ", "", None, 42):
+        response = admin_patch(admin, created["id"], {"createdBy": value, "venue": "Tampere"})
         assert response.status_code == 400, value
-        assert payload(response)["error"] == "invalid_created_by"
+        assert payload(response)["error"] == "created_by_read_only"
+    assert row(table, created["id"])["CreatedBy"] == USER_EMAIL
+    assert row(table, created["id"])["Venue"] == ""
+    assert table.audit_rows() == []
 
 
 def test_the_shared_fields_get_the_same_validation_and_code_move(admin, table):

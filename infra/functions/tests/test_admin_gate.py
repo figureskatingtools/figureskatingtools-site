@@ -1,10 +1,11 @@
 """The admin gate (`_require_admin`) in front of every /api/manage/* route.
 
 The router already 403s non-admins, but this Function App's hostname is public,
-so the platform decides again from its own ADMIN_EMAILS. Unlike the user gate
-it fails CLOSED: an unset PROXY_SHARED_SECRET means nobody gets in, and the
-identity is taken only from the router's X-Forwarded-User-Email. Every refusal
-must happen before any storage is touched.
+so the platform decides again from its own ADMIN_EMAILS. Like the user gate
+it fails CLOSED: an unset PROXY_SHARED_SECRET means nobody gets in, the router's
+X-Forwarded-User-Tid/-Oid must be present, and the admin e-mail is taken only
+from its X-Forwarded-User-Email. Every refusal must happen before any storage
+is touched.
 """
 import function_app as fa
 from conftest import ADMIN_EMAIL, OTHER_ADMIN_EMAIL, USER_EMAIL, make_request, payload
@@ -35,7 +36,7 @@ def _assert_all_routes(table, status, error, **request_kwargs):
 
 
 def test_the_gate_fails_closed_when_no_shared_secret_is_configured(admin, table, monkeypatch):
-    """The user gate fails open without a secret (local dev); this one never does."""
+    """No secret configured: nobody gets in (the user gate behaves the same)."""
     monkeypatch.delenv("PROXY_SHARED_SECRET", raising=False)
     _assert_all_routes(table, 401, "unauthorized", user_email=admin, proxy_secret=None)
     _assert_all_routes(table, 401, "unauthorized", user_email=admin, proxy_secret="")
@@ -65,7 +66,7 @@ def test_an_empty_admin_list_means_nobody_is_an_admin(table, monkeypatch):
 
 
 def test_the_identity_comes_only_from_the_forwarded_header(admin, table):
-    """The user gate also trusts X-MS-* and unverified JWTs; the admin gate must not."""
+    """X-MS-* headers and unverified JWTs are never an identity."""
     request = make_request("GET", user_email=None,
                            headers={"x-ms-client-principal-name": ADMIN_EMAIL})
     assert fa._admin_list_competitions(request).status_code == 403

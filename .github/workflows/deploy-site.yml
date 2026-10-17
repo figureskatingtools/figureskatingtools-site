@@ -143,6 +143,10 @@ jobs:
           # Admin panel allow-list (comma-separated e-mails), written to both the
           # router and the platform Function App. Unset = nobody is admin.
           ADMIN_EMAILS: ${{ vars.ADMIN_EMAILS }}
+          # Entra tenants whose users may use the site (comma-separated), written
+          # to the router and the platform Function App. Unset = the deployment
+          # tenant only.
+          ALLOWED_TENANT_IDS: ${{ vars.ALLOWED_TENANT_IDS }}
         run: |
           set -euo pipefail
           ENV_NAME="${{ needs.set-environment.outputs.env_name }}"
