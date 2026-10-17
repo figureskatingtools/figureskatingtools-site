@@ -12,6 +12,9 @@ const {
     createServer,
     loadConfig,
     isAdminRequest,
+    requestIdentity,
+    devObjectId,
+    DEV_TENANT_ID,
     buildCsp,
     safeReturnPath,
     isHiddenFromChangelog,
@@ -59,6 +62,12 @@ function principalHeader(obj) {
     return Buffer.from(JSON.stringify(obj), 'utf-8').toString('base64');
 }
 
+const TENANT_ID = '72f988bf-86f1-41af-91ab-2d7cd011db47';
+const OTHER_TENANT_ID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+const OID = '0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0';
+const OID_CLAIM = 'http://schemas.microsoft.com/identity/claims/objectidentifier';
+const TID_CLAIM = 'http://schemas.microsoft.com/identity/claims/tenantid';
+
 const PRINCIPAL = {
     userId: 'abc123',
     identityProvider: 'aad',
@@ -67,8 +76,13 @@ const PRINCIPAL = {
     claims: [
         { typ: 'name', val: 'Skater Person' },
         { typ: 'preferred_username', val: 'skater@example.com' },
+        { typ: OID_CLAIM, val: OID },
+        { typ: TID_CLAIM, val: TENANT_ID },
     ],
 };
+
+// A signed-in browser as Easy Auth presents it to the router.
+const AUTH = { 'x-ms-client-principal': principalHeader(PRINCIPAL) };
 
 // Fixture public/ tree mirroring the single Vite dist layout.
 function makePublicFixture() {
@@ -100,7 +114,7 @@ async function startUpstream(handler) {
 }
 
 async function startRouter(overrides = {}) {
-    const config = { ...loadConfig({}), ...overrides };
+    const config = { ...loadConfig({ ALLOWED_TENANT_IDS: TENANT_ID }), ...overrides };
     const server = createServer(config);
     const port = await listen(server);
     return { server, port, config };
@@ -165,17 +179,32 @@ test('GET /userinfo decodes a base64 X-MS-CLIENT-PRINCIPAL', async () => {
     }
 });
 
-test('GET /userinfo falls back to the principal-name header and survives garbage principals', async () => {
+test('GET /userinfo: a principal-name header, a garbage principal or one without oid/tid is signed out', async () => {
+    const { server, port } = await startRouter();
+    try {
+        const noClaims = { ...PRINCIPAL, claims: PRINCIPAL.claims.filter((c) => c.typ !== OID_CLAIM) };
+        for (const headers of [
+            { 'x-ms-client-principal': 'not-base64-json!!', 'x-ms-client-principal-name': 'fallback@example.com' },
+            { 'x-ms-client-principal-name': 'fallback@example.com' },
+            { 'x-ms-client-principal': principalHeader(noClaims) },
+        ]) {
+            const res = await request(port, '/userinfo', { headers });
+            assert.equal(res.status, 200);
+            assert.deepEqual(json(res), { authenticated: false });
+        }
+    } finally {
+        await close(server);
+    }
+});
+
+test('GET /userinfo answers 403 tenant_not_allowed for a principal of another tenant', async () => {
     const { server, port } = await startRouter();
     try {
         const res = await request(port, '/userinfo', {
-            headers: {
-                'x-ms-client-principal': 'not-base64-json!!',
-                'x-ms-client-principal-name': 'fallback@example.com',
-            },
+            headers: { 'x-ms-client-principal': principalFor('skater@example.com', { tid: OTHER_TENANT_ID }) },
         });
-        assert.equal(res.status, 200);
-        assert.deepEqual(json(res), { authenticated: true, userDetails: 'fallback@example.com', isAdmin: false });
+        assert.equal(res.status, 403);
+        assert.equal(json(res).error, 'tenant_not_allowed');
     } finally {
         await close(server);
     }
@@ -271,6 +300,8 @@ test('/<tool>/api/* strips the prefix and injects proxy secret + user email', as
         assert.equal(seen.method, 'POST');
         assert.equal(seen.headers['x-proxy-secret'], 'jp-secret');
         assert.equal(seen.headers['x-forwarded-user-email'], 'skater@example.com');
+        assert.equal(seen.headers['x-forwarded-user-tid'], TENANT_ID);
+        assert.equal(seen.headers['x-forwarded-user-oid'], OID);
         assert.equal(seen.headers['content-type'], 'application/json');
         assert.equal(seen.headers['accept'], 'application/json');
         assert.equal(seen.headers['content-length'], String(Buffer.byteLength(JSON.stringify({ hello: 'world' }))));
@@ -295,9 +326,9 @@ test('each tool gets its own secret and /api/* goes to the platform backend', as
         }),
     });
     try {
-        await request(port, '/judgepapers/api/list');
-        await request(port, '/protocolgenerator/api/list');
-        await request(port, '/api/competitions');
+        await request(port, '/judgepapers/api/list', { headers: AUTH });
+        await request(port, '/protocolgenerator/api/list', { headers: AUTH });
+        await request(port, '/api/competitions', { headers: AUTH });
 
         assert.deepEqual(
             upstream.received.map((r) => [r.url, r.headers['x-proxy-secret']]),
@@ -379,7 +410,7 @@ test('/tools/gdpr/api/* goes to the GDPR tool backend with its own secret and pr
 test('unconfigured GDPR tool backend returns 502 naming FUNCTION_APP_URL_GDPRTOOL', async () => {
     const { server, port } = await startRouter();
     try {
-        const res = await request(port, '/tools/gdpr/api/scan', { method: 'POST' });
+        const res = await request(port, '/tools/gdpr/api/scan', { method: 'POST', headers: AUTH });
         assert.equal(res.status, 502);
         const body = json(res);
         assert.equal(body.tool, 'gdprtool');
@@ -392,7 +423,7 @@ test('unconfigured GDPR tool backend returns 502 naming FUNCTION_APP_URL_GDPRTOO
 test('unconfigured tool backend returns 502 with a JSON error naming the env var', async () => {
     const { server, port } = await startRouter();
     try {
-        const res = await request(port, '/scoremodifier/api/anything');
+        const res = await request(port, '/scoremodifier/api/anything', { headers: AUTH });
         assert.equal(res.status, 502);
         assert.match(res.headers['content-type'], /application\/json/);
         const body = json(res);
@@ -430,7 +461,7 @@ test('multi-MB request and response bodies stream through the proxy uncorrupted'
     try {
         const res = await request(port, '/judgepapers/api/upload_file', {
             method: 'POST',
-            headers: { 'content-type': 'application/octet-stream', 'content-length': String(payload.length) },
+            headers: { ...AUTH, 'content-type': 'application/octet-stream', 'content-length': String(payload.length) },
             body: payload,
         });
 
@@ -462,7 +493,7 @@ test('upstream response headers are forwarded and hop-by-hop headers dropped', a
         targets: targets({ platform: { url: upstream.url } }),
     });
     try {
-        const res = await request(port, '/api/competitions/nope');
+        const res = await request(port, '/api/competitions/nope', { headers: AUTH });
         assert.equal(res.status, 404);
         assert.equal(res.headers['x-custom-header'], 'kept');
         assert.equal(json(res).error, 'not found');
@@ -1156,8 +1187,12 @@ test('/changelog-live 502s when the sources file is missing', async () => {
 
 const ADMIN_EMAIL = 'admin@example.com';
 
-function principalFor(email) {
-    return principalHeader({ ...PRINCIPAL, userDetails: email, claims: [{ typ: 'preferred_username', val: email }] });
+function principalFor(email, { tid = TENANT_ID, oid = OID, name = '' } = {}) {
+    const claims = [{ typ: 'preferred_username', val: email }];
+    if (name) claims.push({ typ: 'name', val: name });
+    if (oid) claims.push({ typ: 'oid', val: oid });
+    if (tid) claims.push({ typ: 'tid', val: tid });
+    return principalHeader({ ...PRINCIPAL, userDetails: email, claims });
 }
 
 // Two admins, listed with stray case and whitespace.
@@ -1179,11 +1214,17 @@ test('ADMIN_EMAILS is parsed into a trimmed, lowercased set', () => {
 });
 
 test('isAdminRequest: listed e-mail in any case, nobody else, never a bare principal-name header', () => {
-    const config = { ...loadConfig({}), ...adminConfig() };
+    const config = { ...loadConfig({ ALLOWED_TENANT_IDS: TENANT_ID }), ...adminConfig() };
     assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor('ADMIN@example.COM') }), config), true);
     assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor('skater@example.com') }), config), false);
     assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal-name': ADMIN_EMAIL }), config), false);
     assert.equal(isAdminRequest(fakeReq({}), config), false);
+    // The admin's e-mail from another tenant, or without oid/tid, is nobody.
+    assert.equal(
+        isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor(ADMIN_EMAIL, { tid: OTHER_TENANT_ID }) }), config),
+        false
+    );
+    assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor(ADMIN_EMAIL, { oid: '' }) }), config), false);
     // An empty list means nobody, whatever the identity.
     const nobody = loadConfig({});
     assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor(ADMIN_EMAIL) }), nobody), false);
@@ -1462,6 +1503,265 @@ test('diagnostics report a null commit without build info', async () => {
         assert.equal(json(res).router.commit, null);
     } finally {
         await close(server);
+    }
+});
+
+// ── Identity: oid/tid, tenants, x-forwarded-user-* ───────────────────────────
+
+const IDENTITY_HEADERS = [
+    'x-forwarded-user-tid',
+    'x-forwarded-user-oid',
+    'x-forwarded-user-email',
+    'x-forwarded-user-name',
+    'x-forwarded-user-admin',
+];
+
+// Everything a malicious browser could try to smuggle to a backend.
+const SPOOFED = {
+    'x-forwarded-user-tid': '99999999-9999-9999-9999-999999999999',
+    'x-forwarded-user-oid': '88888888-8888-8888-8888-888888888888',
+    'x-forwarded-user-email': 'victim@example.com',
+    'x-forwarded-user-name': 'Victim',
+    'x-forwarded-user-admin': '1',
+    'x-ms-client-principal-name': 'victim@example.com',
+    'x-proxy-secret': 'guess',
+    authorization: 'Bearer a.b.c',
+};
+
+test('requestIdentity reads oid/tid from the long and the short claim types, lowercased', () => {
+    const config = loadConfig({});
+    const long = requestIdentity(fakeReq(AUTH), config);
+    assert.deepEqual(long, { tid: TENANT_ID, oid: OID, email: 'skater@example.com', name: 'Skater Person', dev: false });
+
+    const short = requestIdentity(
+        fakeReq({ 'x-ms-client-principal': principalFor('Coach@Example.COM', { oid: OID.toUpperCase(), tid: TENANT_ID.toUpperCase() }) }),
+        config
+    );
+    assert.equal(short.oid, OID);
+    assert.equal(short.tid, TENANT_ID);
+    assert.equal(short.email, 'coach@example.com');
+
+    // Missing or non-GUID claims: no identity at all.
+    assert.equal(requestIdentity(fakeReq({ 'x-ms-client-principal': principalFor('a@example.com', { oid: '' }) }), config), null);
+    assert.equal(requestIdentity(fakeReq({ 'x-ms-client-principal': principalFor('a@example.com', { tid: '' }) }), config), null);
+    assert.equal(requestIdentity(fakeReq({ 'x-ms-client-principal': principalFor('a@example.com', { oid: 'not-a-guid' }) }), config), null);
+    assert.equal(requestIdentity(fakeReq({ 'x-ms-client-principal-name': 'a@example.com' }), config), null);
+    assert.equal(requestIdentity(fakeReq({}), config), null);
+});
+
+test('DEV_FAKE_USER gets a fixed dev tenant and a deterministic uuid-shaped oid, never in production', () => {
+    const dev = requestIdentity(fakeReq({}), loadConfig({ DEV_FAKE_USER: 'Dev@Example.com' }));
+    assert.equal(dev.tid, DEV_TENANT_ID);
+    assert.match(dev.oid, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    assert.equal(dev.oid, devObjectId('dev@example.com'));
+    assert.equal(dev.email, 'dev@example.com');
+    assert.notEqual(devObjectId('dev@example.com'), devObjectId('other@example.com'));
+    assert.equal(requestIdentity(fakeReq({}), loadConfig({ DEV_FAKE_USER: 'dev@example.com', NODE_ENV: 'production' })), null);
+});
+
+test('every backend gets tid/oid/email/name from the principal; client copies are dropped', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter({
+        targets: targets({
+            judgepapers: { url: upstream.url, secret: 'jp' },
+            scoremodifier: { url: upstream.url, secret: 'sm' },
+            protocolgenerator: { url: upstream.url, secret: 'pg' },
+            gdprtool: { url: upstream.url, secret: 'gd' },
+            platform: { url: upstream.url, secret: 'pf' },
+        }),
+    });
+    const principal = principalFor('Arra.Ohman@Example.com', { name: 'Ärrä Öhman 张伟' });
+    try {
+        const paths = [
+            '/judgepapers/api/x',
+            '/scoremodifier/api/x',
+            '/protocolgenerator/api/x',
+            '/tools/gdpr/api/scan',
+            '/api/competitions',
+        ];
+        for (const p of paths) {
+            const res = await request(port, p, { headers: { ...SPOOFED, 'x-ms-client-principal': principal } });
+            assert.equal(res.status, 200, p);
+        }
+        assert.equal(upstream.received.length, paths.length);
+        for (const seen of upstream.received) {
+            assert.equal(seen.headers['x-forwarded-user-tid'], TENANT_ID, seen.url);
+            assert.equal(seen.headers['x-forwarded-user-oid'], OID, seen.url);
+            assert.equal(seen.headers['x-forwarded-user-email'], 'arra.ohman@example.com', seen.url);
+            assert.equal(decodeURIComponent(seen.headers['x-forwarded-user-name']), 'Ärrä Öhman 张伟', seen.url);
+            assert.equal(seen.headers['x-forwarded-user-admin'], undefined, seen.url);
+            assert.notEqual(seen.headers['x-proxy-secret'], 'guess', seen.url);
+            assert.equal(seen.headers['x-ms-client-principal-name'], undefined, seen.url);
+            assert.equal(seen.headers['x-ms-client-principal'], undefined, seen.url);
+            assert.equal(seen.headers.authorization, undefined, seen.url);
+        }
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('the forwarded e-mail is lowercased and trimmed; the name travels percent-encoded', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter({ targets: targets({ platform: { url: upstream.url, secret: 'pf' } }) });
+    try {
+        await request(port, '/api/competitions', {
+            headers: { 'x-ms-client-principal': principalFor('  Coach@Example.COM ', { name: 'Jörö Ääkkönen' }) },
+        });
+        const seen = upstream.received[0];
+        assert.equal(seen.headers['x-forwarded-user-email'], 'coach@example.com');
+        assert.equal(seen.headers['x-forwarded-user-name'], encodeURIComponent('Jörö Ääkkönen'));
+        // A non-ASCII address cannot travel in a header: left out, request still proxied.
+        const res = await request(port, '/api/competitions', {
+            headers: { 'x-ms-client-principal': principalFor('张伟@example.com') },
+        });
+        assert.equal(res.status, 200);
+        assert.equal(upstream.received[1].headers['x-forwarded-user-email'], undefined);
+        assert.equal(upstream.received[1].headers['x-forwarded-user-oid'], OID);
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('x-forwarded-user-admin: 1 reaches the backends for admins only', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter(
+        adminConfig({
+            targets: targets({
+                platform: { url: upstream.url, secret: 'pf' },
+                judgepapers: { url: upstream.url, secret: 'jp' },
+                gdprtool: { url: upstream.url, secret: 'gd' },
+            }),
+        })
+    );
+    const admin = { 'x-ms-client-principal': principalFor(ADMIN_EMAIL) };
+    try {
+        await request(port, '/api/competitions', { headers: admin });
+        await request(port, '/judgepapers/api/list', { headers: admin });
+        await request(port, '/tools/gdpr/api/scan', { headers: admin });
+        await request(port, '/api/manage/competitions', { headers: admin });
+        await request(port, '/api/competitions', { headers: { ...AUTH, 'x-forwarded-user-admin': '1' } });
+        assert.deepEqual(
+            upstream.received.map((r) => r.headers['x-forwarded-user-admin']),
+            ['1', '1', '1', '1', undefined]
+        );
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('APIs without an oid/tid identity are 401 and never proxied', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter({
+        targets: targets({
+            platform: { url: upstream.url, secret: 'pf' },
+            judgepapers: { url: upstream.url, secret: 'jp' },
+            gdprtool: { url: upstream.url, secret: 'gd' },
+        }),
+    });
+    const noOid = { 'x-ms-client-principal': principalFor('skater@example.com', { oid: '' }) };
+    try {
+        for (const headers of [{}, noOid, { 'x-ms-client-principal-name': 'skater@example.com' }, SPOOFED]) {
+            for (const p of ['/api/competitions', '/judgepapers/api/list', '/tools/gdpr/api/scan']) {
+                const res = await request(port, p, { headers });
+                assert.equal(res.status, 401, p);
+                assert.equal(json(res).error, 'unauthorized', p);
+            }
+        }
+        assert.equal(upstream.received.length, 0);
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('a principal of a tenant outside ALLOWED_TENANT_IDS gets 403 tenant_not_allowed and is not proxied', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter(
+        adminConfig({
+            targets: targets({
+                platform: { url: upstream.url, secret: 'pf' },
+                scoremodifier: { url: upstream.url, secret: 'sm' },
+                gdprtool: { url: upstream.url, secret: 'gd' },
+            }),
+        })
+    );
+    const foreign = { 'x-ms-client-principal': principalFor('skater@example.com', { tid: OTHER_TENANT_ID }) };
+    const foreignAdmin = { 'x-ms-client-principal': principalFor(ADMIN_EMAIL, { tid: OTHER_TENANT_ID }) };
+    try {
+        for (const p of ['/api/competitions', '/scoremodifier/api/generate', '/tools/gdpr/api/scan']) {
+            const res = await request(port, p, { headers: foreign });
+            assert.equal(res.status, 403, p);
+            assert.equal(json(res).error, 'tenant_not_allowed', p);
+        }
+        // The admin's own e-mail from a foreign tenant is not an admin.
+        const manage = await request(port, '/api/manage/competitions', { headers: foreignAdmin });
+        assert.equal(manage.status, 403);
+        assert.equal(json(manage).error, 'admin_required');
+        assert.equal(upstream.received.length, 0);
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('ALLOWED_TENANT_IDS is a trimmed, lowercased set; empty refuses every tenant', async () => {
+    assert.deepEqual([...loadConfig({ ALLOWED_TENANT_IDS: ` ${TENANT_ID.toUpperCase()} ,, ${OTHER_TENANT_ID}` }).allowedTenantIds], [
+        TENANT_ID,
+        OTHER_TENANT_ID,
+    ]);
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter({
+        allowedTenantIds: new Set(),
+        targets: targets({ platform: { url: upstream.url, secret: 'pf' } }),
+    });
+    try {
+        const res = await request(port, '/api/competitions', { headers: AUTH });
+        assert.equal(res.status, 403);
+        assert.equal(json(res).error, 'tenant_not_allowed');
+        assert.equal(upstream.received.length, 0);
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('DEV_FAKE_USER is forwarded with its synthetic tid/oid', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter({
+        devFakeUser: 'dev@example.com',
+        allowedTenantIds: new Set(),
+        targets: targets({ platform: { url: upstream.url, secret: 'pf' } }),
+    });
+    try {
+        assert.equal((await request(port, '/api/competitions')).status, 200);
+        const seen = upstream.received[0];
+        assert.equal(seen.headers['x-forwarded-user-tid'], DEV_TENANT_ID);
+        assert.equal(seen.headers['x-forwarded-user-oid'], devObjectId('dev@example.com'));
+        assert.equal(seen.headers['x-forwarded-user-email'], 'dev@example.com');
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('/judgepapers/download forwards no identity headers, not even spoofed ones', async () => {
+    const upstream = await startUpstream((req, res) => {
+        res.writeHead(302, { Location: 'https://acct.blob.core.windows.net/c/f.pdf' });
+        res.end();
+    });
+    const { server, port } = await startRouter({ targets: targets({ judgepapers: { url: upstream.url, secret: 'jp' } }) });
+    try {
+        const res = await request(port, '/judgepapers/download?t=abc', { headers: SPOOFED });
+        assert.equal(res.status, 302);
+        const seen = upstream.received[0];
+        assert.equal(seen.headers['x-proxy-secret'], 'jp');
+        for (const name of IDENTITY_HEADERS) assert.equal(seen.headers[name], undefined, name);
+    } finally {
+        await close(server);
+        await close(upstream.server);
     }
 });
 

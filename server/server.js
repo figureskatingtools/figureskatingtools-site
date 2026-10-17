@@ -27,6 +27,7 @@
 //
 // See server/README.md for the env-var contract and local dev usage.
 
+const crypto = require('crypto');
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
@@ -122,6 +123,16 @@ function secretEnvVar(tool) {
     return `PROXY_SHARED_SECRET_${envKeySuffix(tool)}`;
 }
 
+// ALLOWED_TENANT_IDS: comma-separated Entra tenant ids, compared lowercased.
+function parseTenantIds(raw) {
+    return new Set(
+        String(raw || '')
+            .split(',')
+            .map((t) => t.trim().toLowerCase())
+            .filter(Boolean)
+    );
+}
+
 // ADMIN_EMAILS: comma-separated, compared case-insensitively.
 function parseAdminEmails(raw) {
     return new Set(
@@ -158,6 +169,9 @@ function loadConfig(env = process.env) {
         nodeEnv: (env.NODE_ENV || '').trim(),
         // Who gets the admin panel and /api/manage/*. Empty = nobody.
         adminEmails: parseAdminEmails(env.ADMIN_EMAILS),
+        // Entra tenants whose principals may use the site's APIs. Empty =
+        // none (fail closed); webapp.bicep sets the deployment tenant.
+        allowedTenantIds: parseTenantIds(env.ALLOWED_TENANT_IDS),
         // The HOVTP listener is not proxied, so diagnostics need its URL apart.
         hovtpHealthUrl: (env.HOVTP_HEALTH_URL || '').trim(),
         buildInfoPath: path.join(__dirname, BUILD_INFO_FILE),
@@ -285,36 +299,111 @@ const EMAIL_CLAIMS = [
     'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress',
 ];
 
+// The two claims that identify a user for authorisation: the Entra object id
+// (stable, never reassigned) and the tenant it belongs to. The e-mail is
+// mutable and only ever forwarded for display and audit.
+const OID_CLAIMS = ['http://schemas.microsoft.com/identity/claims/objectidentifier', 'oid'];
+const TID_CLAIMS = ['http://schemas.microsoft.com/identity/claims/tenantid', 'tid'];
+const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+// DEV_FAKE_USER's synthetic identity (never in production): a fixed tenant
+// and an object id derived from the e-mail, so the same dev user is the same
+// platform user on every run. Add DEV_TENANT_ID to the local platform's
+// ALLOWED_TENANT_IDS.
+const DEV_TENANT_ID = '00000000-0000-0000-0000-000000000001';
+
+function devObjectId(email) {
+    const hex = crypto.createHash('sha256').update(`fst-dev-user:${email}`).digest('hex');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+function guidClaim(parsed, types) {
+    const value = String(findClaim(parsed, types) || '').trim().toLowerCase();
+    return GUID_PATTERN.test(value) ? value : '';
+}
+
+// The signed-in user as the backends get to see them:
+// {tid, oid, email (lowercased), name, dev} — or null when there is no usable
+// identity. Only a decodable Easy Auth principal that carries both oid and tid
+// counts (a bare X-MS-CLIENT-PRINCIPAL-NAME never does), or DEV_FAKE_USER
+// locally when no principal header is present at all.
+function requestIdentity(req, config) {
+    const parsed = decodePrincipal(req);
+    if (parsed) {
+        const tid = guidClaim(parsed, TID_CLAIMS);
+        const oid = guidClaim(parsed, OID_CLAIMS);
+        if (!tid || !oid) return null;
+        const email =
+            parsed.userDetails || findClaim(parsed, EMAIL_CLAIMS) || req.headers['x-ms-client-principal-name'] || '';
+        return {
+            tid,
+            oid,
+            email: String(email).trim().toLowerCase(),
+            name: String(findClaim(parsed, NAME_CLAIMS) || '').trim(),
+            dev: false,
+        };
+    }
+    if (config.devFakeUser && !req.headers['x-ms-client-principal-name']) {
+        const email = config.devFakeUser.toLowerCase();
+        return { tid: DEV_TENANT_ID, oid: devObjectId(email), email, name: config.devFakeUser, dev: true };
+    }
+    return null;
+}
+
+// ALLOWED_TENANT_IDS decides which Entra tenants may use the APIs. The dev
+// stand-in exists only outside production and is always let through here.
+function tenantAllowed(identity, config) {
+    if (identity.dev) return true;
+    return Boolean(config.allowedTenantIds) && config.allowedTenantIds.has(identity.tid);
+}
+
+// Gate for every proxied API and /userinfo: the identity, or null after a
+// 401 (no usable identity) / 403 tenant_not_allowed has been sent.
+function requireIdentity(req, res, config) {
+    const identity = requestIdentity(req, config);
+    if (!identity) {
+        sendJson(res, 401, { error: 'unauthorized', message: 'Sign-in required.' });
+        return null;
+    }
+    if (!tenantAllowed(identity, config)) {
+        sendJson(res, 403, {
+            error: 'tenant_not_allowed',
+            message: 'Accounts of your organisation cannot use this site.',
+        });
+        return null;
+    }
+    return identity;
+}
+
 // GET /userinfo — flat, token-free view of the signed-in user for the frontends.
 function handleUserInfo(req, res, config) {
-    const principalName = req.headers['x-ms-client-principal-name'];
-    const parsed = decodePrincipal(req);
     const json = (body) => {
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
         res.end(JSON.stringify(body));
     };
 
-    if (!parsed && !principalName) {
-        if (config.devFakeUser) {
-            json({
-                authenticated: true,
-                userId: 'dev-user',
-                identityProvider: 'dev',
-                userDetails: config.devFakeUser,
-                userRoles: ['authenticated'],
-                isAdmin: isAdminRequest(req, config),
-            });
-            return;
-        }
+    // No principal, or one without oid/tid: signed out as far as the APIs go.
+    if (!requestIdentity(req, config)) {
         json({ authenticated: false });
         return;
     }
+    const identity = requireIdentity(req, res, config);
+    if (!identity) return;
 
-    if (!parsed) {
-        json({ authenticated: true, userDetails: principalName || 'unknown', isAdmin: isAdminRequest(req, config) });
+    if (identity.dev) {
+        json({
+            authenticated: true,
+            userId: 'dev-user',
+            identityProvider: 'dev',
+            userDetails: config.devFakeUser,
+            userRoles: ['authenticated'],
+            isAdmin: isAdminRequest(req, config),
+        });
         return;
     }
 
+    const parsed = decodePrincipal(req);
+    const principalName = req.headers['x-ms-client-principal-name'];
     // Prefer email, then name, then userDetails, then the principal-name header.
     const displayName =
         findClaim(parsed, EMAIL_CLAIMS) ||
@@ -378,26 +467,17 @@ function handleSignIn(req, res, config, search) {
     res.end();
 }
 
-// Email forwarded to the Function Apps. Keeps the existing contract: the
-// principal's userDetails wins, exactly as the per-tool proxies did.
-function forwardedUserEmail(req, config) {
-    const parsed = decodePrincipal(req);
-    const fromPrincipal =
-        (parsed && (parsed.userDetails || findClaim(parsed, EMAIL_CLAIMS))) || '';
-    return fromPrincipal || req.headers['x-ms-client-principal-name'] || config.devFakeUser || '';
-}
-
-// Whether the request comes from an admin: the e-mail the backends would see,
-// in ADMIN_EMAILS (case-insensitive). Only a decodable Easy Auth principal
-// counts, or DEV_FAKE_USER locally with no principal headers at all (it is ''
-// under NODE_ENV=production) — a bare X-MS-CLIENT-PRINCIPAL-NAME is never
-// enough. Phase 2 (Entra External ID group membership) changes only this.
+// Whether the request comes from an admin: the identity's (lowercased) e-mail
+// in ADMIN_EMAILS, from an allowed tenant. Needs the same identity the APIs
+// need — a decodable Easy Auth principal with oid and tid, or DEV_FAKE_USER
+// locally (it is '' under NODE_ENV=production); a bare
+// X-MS-CLIENT-PRINCIPAL-NAME is never enough. Phase 2 (Entra External ID
+// group membership) changes only this.
 function isAdminRequest(req, config) {
     if (!config.adminEmails || config.adminEmails.size === 0) return false;
-    const devUser = Boolean(config.devFakeUser) && !req.headers['x-ms-client-principal-name'];
-    if (!decodePrincipal(req) && !devUser) return false;
-    const email = forwardedUserEmail(req, config).trim().toLowerCase();
-    return email !== '' && config.adminEmails.has(email);
+    const identity = requestIdentity(req, config);
+    if (!identity || !tenantAllowed(identity, config)) return false;
+    return identity.email !== '' && config.adminEmails.has(identity.email);
 }
 
 // CSRF guard for the state-changing admin API on top of the session cookie:
@@ -448,8 +528,10 @@ function sendJson(res, status, body) {
     res.end(JSON.stringify(body));
 }
 
-// Streams req → upstream → res. Nothing is buffered in between.
-function proxy(req, res, config, tool, targetPath) {
+// Streams req → upstream → res. Nothing is buffered in between. `identity`
+// (from requireIdentity) becomes the x-forwarded-user-* headers; null for the
+// public /judgepapers/download link, which Easy Auth does not gate.
+function proxy(req, res, config, tool, targetPath, identity) {
     const target = config.targets[tool];
 
     if (!target || !target.url) {
@@ -487,8 +569,21 @@ function proxy(req, res, config, tool, targetPath) {
     // so without it anyone could spoof the user-email header.
     if (target.secret) outHeaders['x-proxy-secret'] = target.secret;
 
-    const email = forwardedUserEmail(req, config);
-    if (email) outHeaders['x-forwarded-user-email'] = email;
+    // The identity headers. Built here from the decoded principal only: the
+    // outbound headers are an allow-list, so a browser's own copies of these
+    // names never reach a backend.
+    if (identity) {
+        outHeaders['x-forwarded-user-tid'] = identity.tid;
+        outHeaders['x-forwarded-user-oid'] = identity.oid;
+        // Display/audit only. Header values must be printable ASCII: an
+        // internationalised address is left out rather than mangled.
+        if (identity.email && /^[\x21-\x7e]+$/.test(identity.email)) {
+            outHeaders['x-forwarded-user-email'] = identity.email;
+        }
+        // Names are non-ASCII more often than not; headers must be ASCII.
+        if (identity.name) outHeaders['x-forwarded-user-name'] = encodeURIComponent(identity.name);
+        if (isAdminRequest(req, config)) outHeaders['x-forwarded-user-admin'] = '1';
+    }
 
     const proxyReq = transport.request(
         {
@@ -845,6 +940,7 @@ async function handleDiagnostics(res, config, runtime) {
             targets,
             hovtpHealthUrl: Boolean(config.hovtpHealthUrl),
             adminCount: config.adminEmails.size,
+            allowedTenantCount: config.allowedTenantIds.size,
             loginProvider: config.loginProvider,
             devFakeUser: Boolean(config.devFakeUser),
         },
@@ -1031,7 +1127,7 @@ function createRequestHandler(config) {
                 res.end();
                 return;
             }
-            proxy(req, res, config, 'judgepapers', '/api/download_judge_papers' + search);
+            proxy(req, res, config, 'judgepapers', '/api/download_judge_papers' + search, null);
             return;
         }
 
@@ -1084,7 +1180,8 @@ function createRequestHandler(config) {
         //    backends keep their default /api route prefix.
         const toolApi = /^\/([^/]+)(\/api(?:\/.*)?)$/.exec(pathname);
         if (toolApi && TOOLS.includes(toolApi[1])) {
-            proxy(req, res, config, toolApi[1], toolApi[2] + search);
+            const identity = requireIdentity(req, res, config);
+            if (identity) proxy(req, res, config, toolApi[1], toolApi[2] + search, identity);
             return;
         }
 
@@ -1092,7 +1189,8 @@ function createRequestHandler(config) {
         //     /tools/<name> prefix stripped.
         for (const [tool, prefix] of Object.entries(SMALL_TOOL_APIS)) {
             if (pathname === prefix + '/api' || pathname.startsWith(prefix + '/api/')) {
-                proxy(req, res, config, tool, pathname.slice(prefix.length) + search);
+                const identity = requireIdentity(req, res, config);
+                if (identity) proxy(req, res, config, tool, pathname.slice(prefix.length) + search, identity);
                 return;
             }
         }
@@ -1109,11 +1207,13 @@ function createRequestHandler(config) {
                 sendJson(res, 403, { error: 'cross_site', message: 'Cross-site requests are not allowed.' });
                 return;
             }
-            proxy(req, res, config, PLATFORM, pathname + search);
+            const identity = requireIdentity(req, res, config);
+            if (identity) proxy(req, res, config, PLATFORM, pathname + search, identity);
             return;
         }
         if (pathname === '/api' || pathname.startsWith('/api/')) {
-            proxy(req, res, config, PLATFORM, pathname + search);
+            const identity = requireIdentity(req, res, config);
+            if (identity) proxy(req, res, config, PLATFORM, pathname + search, identity);
             return;
         }
 
@@ -1145,6 +1245,9 @@ if (require.main === module) {
         console.log(`Proxy targets configured: ${configured.join(', ') || '(none)'}`);
         if (config.devFakeUser) console.log(`DEV_FAKE_USER active: ${config.devFakeUser}`);
         console.log(`Admins configured: ${config.adminEmails.size}`);
+        if (config.allowedTenantIds.size === 0) {
+            console.warn('ALLOWED_TENANT_IDS is empty: every signed-in API call is refused (403 tenant_not_allowed).');
+        }
     });
 }
 
@@ -1155,6 +1258,9 @@ module.exports = {
     SMALL_TOOL_APIS,
     loadConfig,
     isAdminRequest,
+    requestIdentity,
+    devObjectId,
+    DEV_TENANT_ID,
     createServer,
     createRequestHandler,
     buildCsp,
