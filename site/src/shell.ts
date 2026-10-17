@@ -42,13 +42,33 @@ export function logoutUrl(redirectPath = '/'): string {
 }
 
 /**
+ * Set by `fetchUser` when the router refused the signed-in account itself:
+ * 403 `tenant_not_allowed` = an Entra account from an organisation that is not
+ * on the site's tenant allow-list. Signing in again with the same account
+ * cannot help, so the sign-in views explain that instead of offering Sign In.
+ */
+let tenantBlocked = false;
+
+/** True when the last `fetchUser` hit 403 `tenant_not_allowed` */
+export function isTenantBlocked(): boolean {
+  return tenantBlocked;
+}
+
+/**
  * Check auth via the router's `/userinfo` endpoint, which flattens the Easy
  * Auth `x-ms-client-principal` header into `{authenticated, userId, …}`.
- * Returns null when unauthenticated or when the call fails.
+ * Returns null when unauthenticated or when the call fails — and also for an
+ * account from a tenant the site does not allow (then `isTenantBlocked()`).
  */
 export async function fetchUser(): Promise<UserInfo | null> {
+  tenantBlocked = false;
   try {
     const resp = await fetch('/userinfo', { headers: { Accept: 'application/json' } });
+    if (resp.status === 403) {
+      const body = await resp.json().catch(() => null);
+      tenantBlocked = body?.error === 'tenant_not_allowed';
+      return null;
+    }
     if (!resp.ok) return null;
     const data = await resp.json();
     if (data && data.authenticated) {
@@ -68,8 +88,57 @@ export async function fetchUser(): Promise<UserInfo | null> {
   return null;
 }
 
+const TENANT_BLOCKED_TITLE = "Your organisation's account isn't allowed on this site";
+const TENANT_BLOCKED_TEXT =
+  "You signed in with an account from an organisation that can't use figureskatingtools.com. " +
+  'Sign out and sign in again with another account.';
+
+/**
+ * The "your organisation's account isn't allowed" card, for the tool apps
+ * that keep their own landing markup (Judge Paper Creator, Score Modifier).
+ */
+export function tenantBlockedCardHtml(): string {
+  return `
+    <div class="card landing-card" role="alert">
+      <span class="micro-label">Account not allowed</span>
+      <h2>${escapeHtml(TENANT_BLOCKED_TITLE)}</h2>
+      <p class="lead">${escapeHtml(TENANT_BLOCKED_TEXT)}</p>
+      <div class="landing-contact">
+        <p>If you think your organisation should have access, contact:</p>
+        <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>
+      </div>
+      <div style="margin-top: 2rem;">
+        <a href="${logoutUrl()}" class="btn btn-primary">Sign out</a>
+      </div>
+    </div>
+  `;
+}
+
 /** Render the unauthenticated landing/sign-in view into `appElement` */
 export function renderSignInView(appElement: HTMLElement, redirectPath = '/'): void {
+  if (tenantBlocked) {
+    appElement.innerHTML = `
+      <div class="unauth-page">
+        <div class="unauth-header">
+          <a href="${logoutUrl()}" class="btn btn-primary btn-sm unauth-signin-btn">Sign out</a>
+        </div>
+        <div class="unauth-content" role="alert">
+          <img src="/logo.png" alt="Figure Skating Tools" class="unauth-logo">
+          <h1 class="unauth-title">${escapeHtml(TENANT_BLOCKED_TITLE)}</h1>
+          <p class="unauth-description">${escapeHtml(TENANT_BLOCKED_TEXT)}</p>
+          <p class="unauth-contact">
+            If you think your organisation should have access, contact
+            <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>
+          </p>
+          <a href="${logoutUrl()}" class="btn btn-primary">Sign out</a>
+          <p class="unauth-privacy">
+            <a href="/privacy/">Privacy notice</a> · <a href="/tietosuoja/" lang="fi">Tietosuojaseloste</a>
+          </p>
+        </div>
+      </div>
+    `;
+    return;
+  }
   const href = loginUrl(redirectPath);
   appElement.innerHTML = `
     <div class="unauth-page">

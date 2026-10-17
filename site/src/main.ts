@@ -6,7 +6,13 @@ import {
   initCompetitionSelector,
   openCreateCompetitionDialog,
   openEditCompetitionDialog,
+  openShareCompetitionDialog,
   listCompetitions,
+  leaveCompetition,
+  canManageCompetition,
+  competitionAccess,
+  isReadOnlyCompetition,
+  ownerLabel,
   deleteCompetition,
   extendCompetition,
   retentionInfo,
@@ -172,6 +178,7 @@ function renderCompetitionPanel(competitions: PlatformCompetition[] | null): voi
   const recent = competitions
     .filter((c) => !active || c.id !== active.id)
     .slice(0, RECENT_COMPETITIONS);
+  const activeAccess = active ? competitionAccess(active) : null;
 
   container.innerHTML = `
     <span class="micro-label">Competition</span>
@@ -185,9 +192,10 @@ function renderCompetitionPanel(competitions: PlatformCompetition[] | null): voi
                 <span class="comp-recent-name">${escapeHtml(competitionLabel(c))}</span>
                 <span class="comp-recent-meta">${escapeHtml([c.code, formatDateFi(c.date), c.venue].filter(Boolean).join(' · '))}</span>
                 ${createdLineHtml(c, 'comp-recent-created')}
+                ${sharedBadgeHtml(c)}
               </button>
-              <button type="button" class="comp-edit" data-edit-competition-id="${escapeHtml(c.id)}">✎</button>
-              <button type="button" class="comp-delete" data-delete-competition-id="${escapeHtml(c.id)}">×</button>
+              ${isReadOnlyCompetition(c) ? '' : `<button type="button" class="comp-edit" data-edit-competition-id="${escapeHtml(c.id)}">✎</button>`}
+              ${canManageCompetition(c) ? `<button type="button" class="comp-delete" data-delete-competition-id="${escapeHtml(c.id)}">×</button>` : ''}
             </li>`).join('')}</ul>`
         : '<p class="text-secondary comp-recent-empty">Nothing else yet.</p>'}
     </div>
@@ -196,8 +204,15 @@ function renderCompetitionPanel(competitions: PlatformCompetition[] | null): voi
       <button type="button" class="btn btn-secondary btn-sm" id="comp-create">New competition…</button>
       ${active
         ? `<span class="comp-actions-right">
-             <button type="button" class="btn-link comp-edit-link" data-edit-competition-id="${escapeHtml(active.id)}">Edit…</button>
-             <button type="button" class="btn-link comp-delete-link" data-delete-competition-id="${escapeHtml(active.id)}">Delete this competition</button>
+             ${activeAccess === 'owner'
+               ? '<button type="button" class="btn-link comp-share-link" id="comp-share">Share…</button>'
+               : ''}
+             ${activeAccess !== 'read'
+               ? `<button type="button" class="btn-link comp-edit-link" data-edit-competition-id="${escapeHtml(active.id)}">Edit…</button>`
+               : ''}
+             ${activeAccess === 'owner'
+               ? `<button type="button" class="btn-link comp-delete-link" data-delete-competition-id="${escapeHtml(active.id)}">Delete this competition</button>`
+               : '<button type="button" class="btn-link comp-delete-link" id="comp-leave">Leave</button>'}
            </span>`
         : ''}
     </div>
@@ -249,6 +264,20 @@ function renderCompetitionPanel(competitions: PlatformCompetition[] | null): voi
     extendBtn?.addEventListener('click', () => {
       void handleExtendCompetition(active, extendBtn);
     });
+
+    const shareBtn = document.getElementById('comp-share') as HTMLButtonElement | null;
+    shareBtn?.addEventListener('click', () => {
+      shareBtn.disabled = true;
+      void openShareCompetitionDialog(active).finally(() => { shareBtn.disabled = false; });
+    });
+
+    const leaveBtn = document.getElementById('comp-leave') as HTMLButtonElement | null;
+    if (leaveBtn) {
+      leaveBtn.title = `Remove your access to ${competitionLabel(active)}`;
+      leaveBtn.addEventListener('click', () => {
+        void handleLeaveCompetition(active, leaveBtn);
+      });
+    }
   }
 
   document.getElementById('comp-create')?.addEventListener('click', () => {
@@ -290,6 +319,8 @@ async function renderCompetitionFiles(competitionId: string): Promise<void> {
 
   // Collapsed by default, but a re-render (e.g. after a delete) keeps it open.
   const wasOpen = host.querySelector('details.comp-files-details')?.hasAttribute('open') ?? false;
+  // View-only access: look and download, never delete
+  const canDelete = !isReadOnlyCompetition(getActiveCompetition());
 
   host.innerHTML = `
     <details class="comp-files-details"${wasOpen ? ' open' : ''}>
@@ -305,7 +336,7 @@ async function renderCompetitionFiles(competitionId: string): Promise<void> {
             <a class="comp-file-link" href="${escapeHtml(competitionFileUrl(competitionId, f.name, f.source))}"
                target="_blank" rel="noopener noreferrer" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</a>
             <span class="comp-file-meta">${escapeHtml(meta)}</span>
-            ${f.source === 'upload'
+            ${f.source === 'upload' && canDelete
               ? `<button type="button" class="comp-delete comp-file-delete" data-delete-file="${escapeHtml(f.name)}">×</button>`
               : ''}
           </li>`;
@@ -409,7 +440,7 @@ function hovtpSourceMeta(source: HovtpSource): string {
 }
 
 /** A pending or expired source: the prompt that asks for a decision */
-function hovtpNoticeHtml(source: HovtpSource): string {
+function hovtpNoticeHtml(source: HovtpSource, readOnly: boolean): string {
   const expired = source.status === 'expired';
   const ip = `<span class="comp-source-ip">${escapeHtml(source.ip)}</span>`;
   const title = expired
@@ -421,10 +452,12 @@ function hovtpNoticeHtml(source: HovtpSource): string {
     <div class="comp-source-notice${expired ? ' comp-source-notice--expired' : ''}" role="status">
       <p class="comp-source-notice-title">${title}</p>
       <p class="comp-source-meta">${escapeHtml(hovtpSourceMeta(source))}</p>
-      <div class="comp-source-actions" data-actions-for="${escapeHtml(source.ip)}">
+      ${readOnly
+        ? '<p class="comp-source-meta">Someone who can edit this competition has to accept or reject it.</p>'
+        : `<div class="comp-source-actions" data-actions-for="${escapeHtml(source.ip)}">
         ${hovtpDayButtonsHtml(source.ip, 'Accept for')}
         <button type="button" class="btn-link comp-source-reject" data-reject="${escapeHtml(source.ip)}">Reject</button>
-      </div>
+      </div>`}
     </div>
   `;
 }
@@ -474,6 +507,7 @@ async function renderHovtpSources(competitionId: string): Promise<void> {
   if (getActiveCompetition()?.id !== competitionId) return;
   if (!sources.length) { host.innerHTML = ''; return; }
 
+  const readOnly = isReadOnlyCompetition(getActiveCompetition());
   const prompting = sources.filter((s) => s.status === 'pending' || s.status === 'expired');
   const accepted = sources.filter((s) => s.status === 'accepted');
   const rejected = sources.filter((s) => s.status === 'rejected');
@@ -489,7 +523,7 @@ async function renderHovtpSources(competitionId: string): Promise<void> {
       s.acceptedUntilUtc ? `accepted until ${formatDateFi(s.acceptedUntilUtc)}` : '',
       s.messageCount ? `${s.messageCount} messages` : '',
     ].filter(Boolean).join(' · '),
-    `<button type="button" class="btn-link" data-extend="${escapeHtml(s.ip)}">Extend</button>
+    readOnly ? '' : `<button type="button" class="btn-link" data-extend="${escapeHtml(s.ip)}">Extend</button>
      <button type="button" class="btn-link comp-source-reject" data-revoke="${escapeHtml(s.ip)}">Revoke</button>`
   )).join('');
 
@@ -497,11 +531,11 @@ async function renderHovtpSources(competitionId: string): Promise<void> {
     s,
     [s.origin, s.lastSeenUtc ? `last seen ${formatDateFi(s.lastSeenUtc)}` : '']
       .filter(Boolean).join(' · '),
-    hovtpDayButtonsHtml(s.ip, 'Accept anyway for')
+    readOnly ? '' : hovtpDayButtonsHtml(s.ip, 'Accept anyway for')
   )).join('');
 
   host.innerHTML = `
-    ${prompting.map(hovtpNoticeHtml).join('')}
+    ${prompting.map((s) => hovtpNoticeHtml(s, readOnly)).join('')}
     ${accepted.length ? hovtpDetailsHtml('comp-sources-accepted', 'Data sources', accepted.length, acceptedOpen, acceptedRows) : ''}
     ${rejected.length ? hovtpDetailsHtml('comp-sources-rejected', 'Rejected sources', rejected.length, rejectedOpen, rejectedRows) : ''}
   `;
@@ -667,6 +701,44 @@ async function handleDeleteCompetition(
 }
 
 /**
+ * A grantee removes their own access. The competition carries on for its
+ * owner and everyone else it is shared with; it just leaves this user's lists.
+ */
+async function handleLeaveCompetition(
+  competition: PlatformCompetition,
+  trigger: HTMLButtonElement
+): Promise<void> {
+  const label = competitionLabel(competition);
+  const owner = ownerLabel(competition.owner);
+  const confirmed = window.confirm(
+    `Leave "${label}"?\n\n`
+    + 'It disappears from your competition lists and tools. Nothing is deleted — '
+    + `${owner ? owner : 'the owner'} can share it with you again.`
+  );
+  if (!confirmed) return;
+
+  panelError = null;
+  trigger.disabled = true;
+  try {
+    await leaveCompetition(competition.id);
+  } catch (err: unknown) {
+    trigger.disabled = false;
+    panelError = err instanceof CompetitionApiError
+      ? `Could not leave "${label}": ${err.message}`
+      : `Could not leave "${label}". Please try again.`;
+    renderCompetitionPanel(knownCompetitions);
+    return;
+  }
+
+  knownCompetitions = (knownCompetitions ?? []).filter((c) => c.id !== competition.id);
+  if (getActiveCompetition()?.id === competition.id) {
+    setActiveCompetition(null); // the subscription re-renders the panel
+    return;
+  }
+  renderCompetitionPanel(knownCompetitions);
+}
+
+/**
  * Push the active competition's deletion date a week out. The registry owns
  * the date, so the updated competition goes through `setActiveCompetition`:
  * the panel, the nav selector, the tools and every other tab follow.
@@ -717,8 +789,8 @@ function retentionLineHtml(c: PlatformCompetition): string {
   return `
     <p class="comp-retention${warn ? ' comp-retention--warn' : ''}"${warn ? ' role="status"' : ''}>
       <span>Data is deleted automatically on ${escapeHtml(formatDateFi(info.day))}${escapeHtml(note)}</span>
-      <span class="comp-retention-sep" aria-hidden="true">·</span>
-      <button type="button" class="btn-link comp-extend" id="comp-extend">Extend by a week</button>
+      ${isReadOnlyCompetition(c) ? '' : `<span class="comp-retention-sep" aria-hidden="true">·</span>
+      <button type="button" class="btn-link comp-extend" id="comp-extend">Extend by a week</button>`}
     </p>`;
 }
 
@@ -749,15 +821,40 @@ async function handleEditCompetition(
 }
 
 /**
- * "Created <date> by <email>" line — the registry keeps every competition row
- * forever (deleted ones just flip status), so this doubles as the provenance
- * used later for statistical reporting.
+ * "Created <date> · Owner <name>" line. The owner is the platform's access
+ * owner (an admin can hand a competition over), so `createdBy` is only the
+ * fallback for an API that does not report an owner yet.
  */
 function createdLineHtml(c: PlatformCompetition, cls: string): string {
-  if (!c.createdBy && !c.createdUtc) return '';
-  const pretty = formatDateFi(c.createdUtc);
-  const text = ['Created', pretty, c.createdBy ? `by ${c.createdBy}` : ''].filter(Boolean).join(' ');
-  return `<span class="${cls}">${escapeHtml(text)}</span>`;
+  const created = ['Created', formatDateFi(c.createdUtc)].filter(Boolean).join(' ');
+  let text: string;
+  if (c.owner !== undefined) {
+    const owner = ownerLabel(c.owner);
+    text = [c.createdUtc ? created : '', owner ? `Owner ${owner}` : 'No owner'].filter(Boolean).join(' · ');
+  } else {
+    if (!c.createdBy && !c.createdUtc) return '';
+    text = [created, c.createdBy ? `by ${c.createdBy}` : ''].filter(Boolean).join(' ');
+  }
+  const title = c.owner?.email ? ` title="${escapeHtml(c.owner.email)}"` : '';
+  return `<span class="${cls}"${title}>${escapeHtml(text)}</span>`;
+}
+
+/** Small "Shared · view only" marker for a recent-list row the caller does not own */
+function sharedBadgeHtml(c: PlatformCompetition): string {
+  const access = competitionAccess(c);
+  if (access === 'owner') return '';
+  return `<span class="comp-shared-badge">${access === 'read' ? 'Shared · view only' : 'Shared'}</span>`;
+}
+
+/** "Shared with you by <owner> · view only" under a competition someone else owns */
+function sharedLineHtml(c: PlatformCompetition): string {
+  const access = competitionAccess(c);
+  if (access === 'owner') return '';
+  const owner = ownerLabel(c.owner);
+  const by = owner ? ` by ${owner}` : '';
+  const email = c.owner?.email && c.owner.email !== owner ? ` (${c.owner.email})` : '';
+  return `<p class="comp-shared">Shared with you${escapeHtml(by + email)} · ${
+    access === 'read' ? 'view only' : 'you can edit'}</p>`;
 }
 
 function activeCompetitionHtml(active: PlatformCompetition): string {
@@ -766,6 +863,7 @@ function activeCompetitionHtml(active: PlatformCompetition): string {
     <h2 class="comp-name">${escapeHtml(competitionLabel(active))}</h2>
     <p class="comp-code"><span class="comp-code-tag">${escapeHtml(active.code)}</span>${meta ? ` ${escapeHtml(meta)}` : ''}</p>
     ${createdLineHtml(active, 'comp-created')}
+    ${sharedLineHtml(active)}
     ${retentionLineHtml(active)}
     <div class="comp-open">
       <span class="comp-open-label">Open in</span>

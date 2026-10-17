@@ -15,7 +15,16 @@ import {
     formatDateFi,
     type PlatformCompetition,
 } from '@figureskatingtools/shared-ui';
-import { escapeHtml, fetchUser, loginUrl, setupUserMenu, type UserInfo } from '../shell.js';
+import {
+    escapeHtml,
+    fetchUser,
+    isTenantBlocked,
+    loginUrl,
+    logoutUrl,
+    setupUserMenu,
+    tenantBlockedCardHtml,
+    type UserInfo,
+} from '../shell.js';
 
 // Inject the shared figureskatingtools.com nav styles once at startup
 injectSiteNavStyles();
@@ -492,7 +501,13 @@ async function init() {
     const userSection = document.getElementById('fst-nav-right')!;
 
     if (!user) {
-        userSection.innerHTML = `<a href="${loginUrl(APP_PATH)}" class="btn btn-primary btn-sm">Sign In</a>`;
+        if (isTenantBlocked()) {
+            // Signed in, but with an account from a tenant the site refuses
+            userSection.innerHTML = `<a href="${logoutUrl()}" class="btn btn-primary btn-sm">Sign out</a>`;
+            landingView.innerHTML = tenantBlockedCardHtml();
+        } else {
+            userSection.innerHTML = `<a href="${loginUrl(APP_PATH)}" class="btn btn-primary btn-sm">Sign In</a>`;
+        }
         loadingView.classList.add('hidden');
         landingView.classList.remove('hidden');
         return;
