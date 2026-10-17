@@ -182,7 +182,10 @@ function renderCompetitionPanel(competitions: PlatformCompetition[] | null): voi
 
   container.innerHTML = `
     <span class="micro-label">Competition</span>
-    ${active ? activeCompetitionHtml(active) : noCompetitionHtml()}
+    ${active
+      // The stored selection lacks createdUtc; the list entry has it
+      ? activeCompetitionHtml({ ...(competitions.find((c) => c.id === active.id) ?? {}), ...active })
+      : noCompetitionHtml()}
     <div class="comp-recent">
       <h3 class="comp-recent-title">Recent competitions</h3>
       ${recent.length > 0
