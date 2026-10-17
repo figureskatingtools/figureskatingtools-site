@@ -133,12 +133,23 @@ function parseTenantIds(raw) {
     );
 }
 
-// ADMIN_EMAILS: comma-separated, compared case-insensitively.
+// An e-mail as the router compares and forwards it: printable ASCII only,
+// tested BEFORE lowercasing — toLowerCase() folds some non-ASCII letters into
+// ASCII ones (U+212A KELVIN SIGN becomes 'k'), which would let a look-alike
+// address match an admin's. Anything else is no e-mail at all ('').
+const PRINTABLE_ASCII = /^[\x21-\x7e]+$/;
+
+function normalizeEmail(value) {
+    const text = String(value || '').trim();
+    return PRINTABLE_ASCII.test(text) ? text.toLowerCase() : '';
+}
+
+// ADMIN_EMAILS: comma-separated, compared case-insensitively (ASCII only).
 function parseAdminEmails(raw) {
     return new Set(
         String(raw || '')
             .split(',')
-            .map((e) => e.trim().toLowerCase())
+            .map(normalizeEmail)
             .filter(Boolean)
     );
 }
@@ -338,13 +349,13 @@ function requestIdentity(req, config) {
         return {
             tid,
             oid,
-            email: String(email).trim().toLowerCase(),
+            email: normalizeEmail(email),
             name: String(findClaim(parsed, NAME_CLAIMS) || '').trim(),
             dev: false,
         };
     }
     if (config.devFakeUser && !req.headers['x-ms-client-principal-name']) {
-        const email = config.devFakeUser.toLowerCase();
+        const email = normalizeEmail(config.devFakeUser);
         return { tid: DEV_TENANT_ID, oid: devObjectId(email), email, name: config.devFakeUser, dev: true };
     }
     return null;
@@ -480,10 +491,14 @@ function isAdminRequest(req, config) {
     return identity.email !== '' && config.adminEmails.has(identity.email);
 }
 
-// CSRF guard for the state-changing admin API on top of the session cookie:
-// the browser must say the call is same-origin, or send a matching Origin.
+// CSRF guard for every state-changing API call on top of the session cookie:
+// the browser must say the call is same-origin (Sec-Fetch-Site, sent by every
+// current browser), or — only when it sends no Sec-Fetch-Site at all — an
+// Origin whose host is this host. A Sec-Fetch-Site other than same-origin is
+// never overruled by a matching Origin.
 function isSameOriginRequest(req) {
-    if (req.headers['sec-fetch-site'] === 'same-origin') return true;
+    const site = req.headers['sec-fetch-site'];
+    if (site !== undefined) return site === 'same-origin';
     const origin = req.headers.origin;
     if (!origin || !req.headers.host) return false;
     try {
@@ -493,18 +508,50 @@ function isSameOriginRequest(req) {
     }
 }
 
+// GET and HEAD are the only methods proxied without the same-origin check.
+function isSafeMethod(method) {
+    return method === 'GET' || method === 'HEAD';
+}
+
+// Refused with 400 before any routing: a path whose meaning depends on who
+// decodes or normalises it. Dot segments ('.', '..', also percent-encoded),
+// encoded slashes or backslashes (%2F, %5C), raw backslashes, NUL and
+// undecodable escapes. Nothing the site's own pages request looks like this,
+// so the gates below never have to reason about two readings of one URL.
+const ENCODED_SEPARATOR = /%(2f|5c|2e|00)/i;
+
+function isUnsafePath(pathname) {
+    if (!pathname.startsWith('/')) return true;
+    if (pathname.includes('\\') || ENCODED_SEPARATOR.test(pathname)) return true;
+    let decoded;
+    try {
+        decoded = decodeURIComponent(pathname);
+    } catch (_e) {
+        return true;
+    }
+    if (/[\\\u0000]/.test(decoded) || ENCODED_SEPARATOR.test(decoded)) return true;
+    return decoded.split('/').some((segment) => segment === '.' || segment === '..');
+}
+
 // The path as the static server and the backends will interpret it: decoded
-// and dot-segment/double-slash normalised. Gates match on this, so
-// /%61dmin/ or //admin/ cannot slip past them. Undecodable → as is (the
-// static server answers those 400).
+// and double-slash normalised (dot segments never get this far — see
+// isUnsafePath). Every route matches on this, so /%61dmin/ or //admin/
+// cannot slip past a gate.
 function canonicalPath(pathname) {
     let decoded = pathname;
     try {
         decoded = decodeURIComponent(pathname);
     } catch (_e) {
-        // keep the raw form
+        // isUnsafePath refused it already
     }
     return path.posix.normalize(decoded);
+}
+
+// A canonical (decoded) path re-encoded for the wire: each segment through
+// encodeURIComponent — exactly how the site's own pages encode a path
+// parameter, so what they send is forwarded byte for byte.
+function encodePath(canonical) {
+    return canonical.split('/').map(encodeURIComponent).join('/');
 }
 
 function isUnder(pathname, prefix) {
@@ -575,9 +622,9 @@ function proxy(req, res, config, tool, targetPath, identity) {
     if (identity) {
         outHeaders['x-forwarded-user-tid'] = identity.tid;
         outHeaders['x-forwarded-user-oid'] = identity.oid;
-        // Display/audit only. Header values must be printable ASCII: an
-        // internationalised address is left out rather than mangled.
-        if (identity.email && /^[\x21-\x7e]+$/.test(identity.email)) {
+        // Display/audit only. requestIdentity already dropped anything that
+        // is not printable ASCII (header values must be).
+        if (identity.email && PRINTABLE_ASCII.test(identity.email)) {
             outHeaders['x-forwarded-user-email'] = identity.email;
         }
         // Names are non-ASCII more often than not; headers must be ASCII.
@@ -989,7 +1036,7 @@ function fallbackIndexFor(config, pathname) {
         : path.join(config.publicDir, 'index.html');
 }
 
-function serveStatic(req, res, config, pathname) {
+function serveStatic(req, res, config, pathname, search = '') {
     let urlPath;
     try {
         urlPath = decodeURIComponent(pathname);
@@ -1025,8 +1072,7 @@ function serveStatic(req, res, config, pathname) {
 
         if (!err && stats.isDirectory()) {
             // /judgepapers → /judgepapers/ so relative asset URLs resolve.
-            const search = req.url.slice(pathname.length);
-            res.writeHead(301, { Location: urlPath + '/' + search, 'Cache-Control': 'no-cache' });
+            res.writeHead(301, { Location: pathname + '/' + search, 'Cache-Control': 'no-cache' });
             res.end();
             return;
         }
@@ -1052,17 +1098,17 @@ function serveStatic(req, res, config, pathname) {
 
 // / for a visitor without a session → the public landing page. The answer
 // depends on the session, so shared caches must not hand one to the other.
-function serveRootDocument(req, res, config, pathname) {
+function serveRootDocument(req, res, config, pathname, search = '') {
     res.setHeader('Vary', 'Cookie');
     if (hasSignedInSession(req, config)) {
-        serveStatic(req, res, config, pathname);
+        serveStatic(req, res, config, pathname, search);
         return;
     }
     const landingPath = path.join(config.publicDir, LANDING_DIR, 'index.html');
     fs.stat(landingPath, (err, stats) => {
         if (err || !stats.isFile()) {
             // No landing page in this build: the home page's own sign-in view.
-            serveStatic(req, res, config, pathname);
+            serveStatic(req, res, config, pathname, search);
             return;
         }
         sendFile(res, landingPath, '/landing/index.html');
@@ -1078,8 +1124,25 @@ function createRequestHandler(config) {
     return function handleRequest(req, res) {
         const url = req.url || '/';
         const queryIndex = url.indexOf('?');
-        const pathname = queryIndex === -1 ? url : url.slice(0, queryIndex);
+        const rawPath = queryIndex === -1 ? url : url.slice(0, queryIndex);
         const search = queryIndex === -1 ? '' : url.slice(queryIndex);
+
+        // 0. Paths with two readings are refused before any routing, then
+        //    every route below sees only the canonical (decoded, normalised)
+        //    form, and the proxy and the static server get exactly that form
+        //    re-encoded — never the raw path the browser sent.
+        if (isUnsafePath(rawPath)) {
+            applySecurityHeaders(res, '/');
+            res.writeHead(400, {
+                'Content-Type': 'text/plain; charset=utf-8',
+                'Cache-Control': 'no-store',
+                Connection: 'close',
+            });
+            res.end('Bad Request');
+            return;
+        }
+        const pathname = canonicalPath(rawPath);
+        const wirePath = encodePath(pathname);
 
         applySecurityHeaders(res, pathname);
 
@@ -1113,7 +1176,7 @@ function createRequestHandler(config) {
 
         // 4. Easy Auth owns /.auth/* at the platform level; if anything reaches
         //    Node it must not be swallowed by the SPA fallback.
-        if (pathname === '/.auth' || pathname.startsWith('/.auth/')) {
+        if (isUnder(pathname, '/.auth')) {
             notFound(res);
             return;
         }
@@ -1122,7 +1185,7 @@ function createRequestHandler(config) {
         //     account (?t=<token>). Easy Auth excludes this exact path; the
         //     backend checks the token and 302s to a short-lived blob URL.
         if (pathname === JUDGEPAPERS_DOWNLOAD_PATH) {
-            if (req.method !== 'GET' && req.method !== 'HEAD') {
+            if (!isSafeMethod(req.method)) {
                 res.writeHead(405, { Allow: 'GET, HEAD', 'Cache-Control': 'no-store' });
                 res.end();
                 return;
@@ -1139,7 +1202,7 @@ function createRequestHandler(config) {
 
         // 4d. The root document: home page or public landing page.
         if (LANDING_DOCUMENT_PATHS.includes(pathname)) {
-            serveRootDocument(req, res, config, pathname);
+            serveRootDocument(req, res, config, wirePath, search);
             return;
         }
 
@@ -1147,15 +1210,14 @@ function createRequestHandler(config) {
         //     a plain 404 for everyone but admins, so the page does not even
         //     advertise itself (its bundle under /assets/* is public anyway —
         //     the real gates are this check and the platform's own).
-        const canonical = canonicalPath(pathname);
-        if (isUnder(canonical, '/' + ADMIN_PREFIX)) {
+        if (isUnder(pathname, '/' + ADMIN_PREFIX)) {
             const admin = isAdminRequest(req, config);
-            if (isUnder(canonical, '/' + ADMIN_PREFIX + '/api')) {
-                if (canonical !== ADMIN_DIAGNOSTICS_PATH) {
+            if (isUnder(pathname, '/' + ADMIN_PREFIX + '/api')) {
+                if (pathname !== ADMIN_DIAGNOSTICS_PATH) {
                     sendJson(res, 404, { error: 'not_found' });
                 } else if (!admin) {
                     sendJson(res, 403, { error: 'admin_required' });
-                } else if (req.method !== 'GET' && req.method !== 'HEAD') {
+                } else if (!isSafeMethod(req.method)) {
                     res.writeHead(405, { Allow: 'GET, HEAD', 'Cache-Control': 'no-store' });
                     res.end();
                 } else {
@@ -1172,25 +1234,37 @@ function createRequestHandler(config) {
             }
             // Same URL, different answer per user: shared caches must not mix them.
             res.setHeader('Vary', 'Cookie');
-            serveStatic(req, res, config, pathname);
+            serveStatic(req, res, config, wirePath, search);
             return;
         }
+
+        // Every proxied API call: a state change must be same-origin (CSRF),
+        // refused before anything is proxied; then the identity gate.
+        const proxyApi = (tool, targetPath) => {
+            if (!isSafeMethod(req.method) && !isSameOriginRequest(req)) {
+                // The body is never read: close the connection rather than
+                // leave the client's keep-alive socket half-consumed.
+                res.setHeader('Connection', 'close');
+                sendJson(res, 403, { error: 'cross_site', message: 'Cross-site requests are not allowed.' });
+                return;
+            }
+            const identity = requireIdentity(req, res, config);
+            if (identity) proxy(req, res, config, tool, targetPath + search, identity);
+        };
 
         // 5. /<tool>/api/* → that tool's Function App, /<tool> stripped so the
         //    backends keep their default /api route prefix.
         const toolApi = /^\/([^/]+)(\/api(?:\/.*)?)$/.exec(pathname);
         if (toolApi && TOOLS.includes(toolApi[1])) {
-            const identity = requireIdentity(req, res, config);
-            if (identity) proxy(req, res, config, toolApi[1], toolApi[2] + search, identity);
+            proxyApi(toolApi[1], wirePath.slice(toolApi[1].length + 1));
             return;
         }
 
         // 5b. /tools/<name>/api/* → that small tool's Function App, its
         //     /tools/<name> prefix stripped.
         for (const [tool, prefix] of Object.entries(SMALL_TOOL_APIS)) {
-            if (pathname === prefix + '/api' || pathname.startsWith(prefix + '/api/')) {
-                const identity = requireIdentity(req, res, config);
-                if (identity) proxy(req, res, config, tool, pathname.slice(prefix.length) + search, identity);
+            if (isUnder(pathname, prefix + '/api')) {
+                proxyApi(tool, wirePath.slice(prefix.length));
                 return;
             }
         }
@@ -1198,34 +1272,28 @@ function createRequestHandler(config) {
         // 6. /api/* → platform Function App (competitions registry).
         //    /api/manage/* is admin-only: refused here without proxying. The
         //    match is case-insensitive like the Functions host's routing.
-        if (isUnder(canonical.toLowerCase(), MANAGE_API_PREFIX)) {
+        if (isUnder(pathname.toLowerCase(), MANAGE_API_PREFIX)) {
             if (!isAdminRequest(req, config)) {
                 sendJson(res, 403, { error: 'admin_required', message: 'This action needs an administrator.' });
                 return;
             }
-            if (req.method !== 'GET' && req.method !== 'HEAD' && !isSameOriginRequest(req)) {
-                sendJson(res, 403, { error: 'cross_site', message: 'Cross-site requests are not allowed.' });
-                return;
-            }
-            const identity = requireIdentity(req, res, config);
-            if (identity) proxy(req, res, config, PLATFORM, pathname + search, identity);
+            proxyApi(PLATFORM, wirePath);
             return;
         }
-        if (pathname === '/api' || pathname.startsWith('/api/')) {
-            const identity = requireIdentity(req, res, config);
-            if (identity) proxy(req, res, config, PLATFORM, pathname + search, identity);
+        if (isUnder(pathname, '/api')) {
+            proxyApi(PLATFORM, wirePath);
             return;
         }
 
         // 7. /<tool> → /<tool>/ (guaranteed even before the dist exists).
         if (TOOLS.includes(pathname.slice(1))) {
-            res.writeHead(301, { Location: pathname + '/' + search, 'Cache-Control': 'no-cache' });
+            res.writeHead(301, { Location: wirePath + '/' + search, 'Cache-Control': 'no-cache' });
             res.end();
             return;
         }
 
         // 8. Static files + per-prefix SPA fallback.
-        serveStatic(req, res, config, pathname);
+        serveStatic(req, res, config, wirePath, search);
     };
 }
 

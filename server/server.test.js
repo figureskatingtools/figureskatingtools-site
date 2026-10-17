@@ -83,6 +83,8 @@ const PRINCIPAL = {
 
 // A signed-in browser as Easy Auth presents it to the router.
 const AUTH = { 'x-ms-client-principal': principalHeader(PRINCIPAL) };
+// What a browser adds to a fetch() from one of the site's own pages.
+const SAME_ORIGIN = { 'sec-fetch-site': 'same-origin' };
 
 // Fixture public/ tree mirroring the single Vite dist layout.
 function makePublicFixture() {
@@ -286,6 +288,7 @@ test('/<tool>/api/* strips the prefix and injects proxy secret + user email', as
         const res = await request(port, '/judgepapers/api/upload_file?competition=1a2b3c4d', {
             method: 'POST',
             headers: {
+                ...SAME_ORIGIN,
                 'content-type': 'application/json',
                 accept: 'application/json',
                 'x-ms-client-principal': principalHeader(PRINCIPAL),
@@ -355,7 +358,7 @@ test('POST /api/competitions/{id}/extend reaches the platform backend with its s
     try {
         const res = await request(port, '/api/competitions/x/extend', {
             method: 'POST',
-            headers: { 'x-ms-client-principal': principalHeader(PRINCIPAL) },
+            headers: { ...SAME_ORIGIN, 'x-ms-client-principal': principalHeader(PRINCIPAL) },
         });
 
         assert.equal(res.status, 200);
@@ -386,6 +389,7 @@ test('/tools/gdpr/api/* goes to the GDPR tool backend with its own secret and pr
         const res = await request(port, '/tools/gdpr/api/scan', {
             method: 'POST',
             headers: {
+                ...SAME_ORIGIN,
                 'content-type': 'application/json',
                 'x-ms-client-principal': principalHeader(PRINCIPAL),
             },
@@ -410,7 +414,7 @@ test('/tools/gdpr/api/* goes to the GDPR tool backend with its own secret and pr
 test('unconfigured GDPR tool backend returns 502 naming FUNCTION_APP_URL_GDPRTOOL', async () => {
     const { server, port } = await startRouter();
     try {
-        const res = await request(port, '/tools/gdpr/api/scan', { method: 'POST', headers: AUTH });
+        const res = await request(port, '/tools/gdpr/api/scan', { method: 'POST', headers: { ...AUTH, ...SAME_ORIGIN } });
         assert.equal(res.status, 502);
         const body = json(res);
         assert.equal(body.tool, 'gdprtool');
@@ -461,7 +465,12 @@ test('multi-MB request and response bodies stream through the proxy uncorrupted'
     try {
         const res = await request(port, '/judgepapers/api/upload_file', {
             method: 'POST',
-            headers: { ...AUTH, 'content-type': 'application/octet-stream', 'content-length': String(payload.length) },
+            headers: {
+                ...AUTH,
+                ...SAME_ORIGIN,
+                'content-type': 'application/octet-stream',
+                'content-length': String(payload.length),
+            },
             body: payload,
         });
 
@@ -555,9 +564,9 @@ test('static serving: root statics win, SPA fallback is per prefix', async () =>
         assert.equal((await request(port, '/assets/gone-999.js')).status, 404);
         assert.equal((await request(port, '/judgepapers/assets/gone.css')).status, 404);
 
-        // Path traversal is refused.
+        // Path traversal is refused before any routing.
         const escape = await request(port, '/../server.js');
-        assert.ok(escape.status === 403 || escape.status === 404, `got ${escape.status}`);
+        assert.equal(escape.status, 400);
 
         // /.auth/* is never handled here (Easy Auth owns it).
         assert.equal((await request(port, '/.auth/me')).status, 404);
@@ -1270,7 +1279,7 @@ test('/admin/ is a plain 404 for non-admins and the admin document (with deep li
     const userHeaders = { 'x-ms-client-principal': principalHeader(PRINCIPAL) };
     try {
         // Encoded and non-normalised spellings are gated like the plain one.
-        const spellings = ['/admin', '/admin/', '/admin/index.html', '/admin/competitions/x', '/%61dmin/', '//admin/', '/x/../admin/'];
+        const spellings = ['/admin', '/admin/', '/admin/index.html', '/admin/competitions/x', '/%61dmin/', '//admin/'];
         for (const p of spellings) {
             const res = await request(port, p, { headers: userHeaders });
             assert.equal(res.status, 404, p);
@@ -1314,7 +1323,6 @@ test('/api/manage/* is refused for non-admins without reaching the platform', as
             '/api/manage/competitions',
             '/api/Manage/competitions',
             '/api/%6Danage/audit',
-            '/api/x/../manage/diagnostics',
             '/api/manage',
         ];
         for (const p of spellings) {
@@ -1790,4 +1798,212 @@ test('loadConfig reads the documented env-var contract', () => {
     assert.equal(config.targets.gdprtool.secret, 'gd');
     assert.equal(loadConfig({}).port, 8080);
     assert.ok(loadConfig({}).publicDir.endsWith(path.join('server', 'public')));
+});
+
+// ── CSRF: every proxied state change must be same-origin ─────────────────────
+
+test('every non-GET/HEAD API call needs Sec-Fetch-Site: same-origin (or a matching Origin without it)', async () => {
+    const upstream = await startUpstream((req, res) => {
+        req.resume();
+        req.on('end', () => {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end('{}');
+        });
+    });
+    const all = { url: upstream.url, secret: 's' };
+    const { server, port } = await startRouter({
+        targets: targets({ judgepapers: all, scoremodifier: all, protocolgenerator: all, gdprtool: all, platform: all }),
+    });
+    // A browser always frames its body with a Content-Length.
+    const BODY = { 'content-type': 'application/json', 'content-length': '2' };
+    const endpoints = [
+        ['POST', '/api/competitions'],
+        ['PATCH', '/api/competitions/x'],
+        ['DELETE', '/api/competitions/x'],
+        ['PUT', '/api/competitions/x/access/y'],
+        ['POST', '/judgepapers/api/delete_competition'],
+        ['DELETE', '/judgepapers/api/delete_file'],
+        ['POST', '/scoremodifier/api/generate'],
+        ['POST', '/protocolgenerator/api/upload'],
+        ['POST', '/tools/gdpr/api/scan'],
+        ['OPTIONS', '/api/competitions'],
+    ];
+    const refused = [
+        { 'sec-fetch-site': 'cross-site', origin: 'https://attacker.example.com' },
+        { 'sec-fetch-site': 'same-site' },
+        { 'sec-fetch-site': 'none' },
+        // A matching Origin never overrules a Sec-Fetch-Site that is not same-origin.
+        { 'sec-fetch-site': 'cross-site', origin: `http://127.0.0.1:${port}` },
+        // Neither header at all: an old or non-browser client, refused.
+        {},
+        { origin: 'https://attacker.example.com' },
+        { origin: 'null' },
+    ];
+    try {
+        for (const [method, p] of endpoints) {
+            for (const headers of refused) {
+                const res = await request(port, p, { method, headers: { ...AUTH, ...headers, ...BODY }, body: '{}' });
+                assert.equal(res.status, 403, `${method} ${p} ${JSON.stringify(headers)}`);
+                assert.equal(json(res).error, 'cross_site');
+            }
+        }
+        assert.equal(upstream.received.length, 0);
+
+        // Same-origin by Sec-Fetch-Site, or by Origin when the browser sends no Sec-Fetch-Site.
+        for (const [method, p] of endpoints) {
+            const bySite = await request(port, p, { method, headers: { ...AUTH, ...SAME_ORIGIN, ...BODY }, body: '{}' });
+            assert.equal(bySite.status, 200, `${method} ${p}`);
+            const byOrigin = await request(port, p, {
+                method,
+                headers: { ...AUTH, ...BODY, origin: `http://127.0.0.1:${port}` },
+                body: '{}',
+            });
+            assert.equal(byOrigin.status, 200, `${method} ${p} by Origin`);
+        }
+        assert.equal(upstream.received.length, endpoints.length * 2);
+
+        // Reads are not state changes: a cross-site GET/HEAD is proxied as before
+        // (the response is still unreadable to the other site).
+        const get = await request(port, '/api/competitions', {
+            headers: { ...AUTH, 'sec-fetch-site': 'cross-site', origin: 'https://attacker.example.com' },
+        });
+        assert.equal(get.status, 200);
+        const head = await request(port, '/judgepapers/api/list', { method: 'HEAD', headers: { ...AUTH, 'sec-fetch-site': 'cross-site' } });
+        assert.equal(head.status, 200);
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('the CSRF check comes before the identity gate and never proxies', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter({ targets: targets({ platform: { url: upstream.url, secret: 's' } }) });
+    try {
+        // Signed out and cross-site: refused as cross-site, nothing proxied.
+        const res = await request(port, '/api/competitions', { method: 'POST', headers: { 'sec-fetch-site': 'cross-site' } });
+        assert.equal(res.status, 403);
+        assert.equal(json(res).error, 'cross_site');
+        // Signed out and same-origin: the identity gate answers.
+        const anon = await request(port, '/api/competitions', { method: 'POST', headers: SAME_ORIGIN });
+        assert.equal(anon.status, 401);
+        assert.equal(upstream.received.length, 0);
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+// ── Path handling: one reading of every URL ──────────────────────────────────
+
+test('paths with dot segments, encoded separators or backslashes are a 400 before any routing', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const publicDir = makePublicFixture();
+    const all = { url: upstream.url, secret: 's' };
+    const { server, port } = await startRouter(
+        adminConfig({ publicDir, targets: targets({ judgepapers: all, platform: all, gdprtool: all }) })
+    );
+    const admin = { 'x-ms-client-principal': principalFor(ADMIN_EMAIL), ...SAME_ORIGIN };
+    const bad = [
+        '/landing/../api/manage/x',
+        '/api/manage/%2e%2e/competitions',
+        '/api/manage/%2E%2E/competitions',
+        '/api/manage/.%2e/competitions',
+        '/api/%2e/competitions',
+        '/api/./competitions',
+        '/api/competitions/..',
+        '/api/competitions/.',
+        '/x/../admin/',
+        '/../server.js',
+        '/judgepapers/api/a%2fb',
+        '/judgepapers/api/a%2Fb',
+        '/api/competitions%5c..%5cmanage',
+        '/api\\manage\\competitions',
+        '/api/competitions/%252e%252e/manage',
+        '/api/competitions/%252f',
+        '/api/competitions/x%00',
+        '/api/%ZZ',
+        '/tools/gdpr/api/../../api/manage/audit',
+    ];
+    try {
+        for (const p of bad) {
+            for (const method of ['GET', 'POST']) {
+                const res = await request(port, p, { method, headers: admin });
+                assert.equal(res.status, 400, `${method} ${p}`);
+                assert.equal(res.text, 'Bad Request');
+                assert.ok(res.headers['content-security-policy'], 'security headers on the 400 too');
+            }
+        }
+        assert.equal(upstream.received.length, 0);
+    } finally {
+        await close(server);
+        await close(upstream.server);
+        fs.rmSync(publicDir, { recursive: true, force: true });
+    }
+});
+
+test('the backends get the canonical path, re-encoded, never the raw one', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const all = { url: upstream.url, secret: 's' };
+    const { server, port } = await startRouter({ targets: targets({ judgepapers: all, platform: all, gdprtool: all }) });
+    const cases = [
+        ['/api//competitions', '/api/competitions'],
+        ['/%61pi/competitions?x=1', '/api/competitions?x=1'],
+        ['/judgepapers/%61pi/list', '/api/list'],
+        ['/judgepapers//api//list', '/api/list'],
+        ['/tools/gdpr/api/scan', '/api/scan'],
+        ['/api/competitions/abc/files/a%20b%23c.pdf', '/api/competitions/abc/files/a%20b%23c.pdf'],
+        ['/api/competitions/abc/files/r%C3%A4%C3%A4.pdf', '/api/competitions/abc/files/r%C3%A4%C3%A4.pdf'],
+        ['/api/competitions/abc/hovtp/sources/2001%3Adb8%3A%3A1/accept', '/api/competitions/abc/hovtp/sources/2001%3Adb8%3A%3A1/accept'],
+        ['/api/competitions/abc/hovtp/sources/2001:db8::1', '/api/competitions/abc/hovtp/sources/2001%3Adb8%3A%3A1'],
+        ['/api/users/search?q=a%2Fb', '/api/users/search?q=a%2Fb'],
+    ];
+    try {
+        for (const [sent] of cases) {
+            const res = await request(port, sent, { headers: AUTH });
+            assert.equal(res.status, 200, sent);
+        }
+        assert.deepEqual(
+            upstream.received.map((r) => r.url),
+            cases.map(([, expected]) => expected)
+        );
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+// ── E-mail: printable ASCII is checked before lowercasing ────────────────────
+
+test('a non-ASCII e-mail is no e-mail: the Kelvin sign cannot become an admin "k"', async () => {
+    const config = {
+        ...loadConfig({ ALLOWED_TENANT_IDS: TENANT_ID, ADMIN_EMAILS: 'kim@example.com, Kate@example.com' }),
+    };
+    // The look-alike entry in ADMIN_EMAILS is dropped, the real one kept.
+    assert.deepEqual([...config.adminEmails], ['kim@example.com']);
+    assert.equal('Kim@example.com'.toLowerCase(), 'kim@example.com'); // the trick itself
+
+    const lookalike = fakeReq({ 'x-ms-client-principal': principalFor('KIM@example.com') });
+    assert.equal(requestIdentity(lookalike, config).email, '');
+    assert.equal(isAdminRequest(lookalike, config), false);
+    const real = fakeReq({ 'x-ms-client-principal': principalFor('KIM@example.com') });
+    assert.equal(requestIdentity(real, config).email, 'kim@example.com');
+    assert.equal(isAdminRequest(real, config), true);
+
+    // Not forwarded either, and not let through the /api/manage gate.
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter({ ...config, targets: targets({ platform: { url: upstream.url, secret: 's' } }) });
+    try {
+        await request(port, '/api/competitions', { headers: lookalike.headers });
+        assert.equal(upstream.received[0].headers['x-forwarded-user-email'], undefined);
+        assert.equal(upstream.received[0].headers['x-forwarded-user-admin'], undefined);
+        const manage = await request(port, '/api/manage/competitions', { headers: lookalike.headers });
+        assert.equal(manage.status, 403);
+        assert.equal(upstream.received.length, 1);
+        const info = json(await request(port, '/userinfo', { headers: lookalike.headers }));
+        assert.equal(info.isAdmin, false);
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
 });
