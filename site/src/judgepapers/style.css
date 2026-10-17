@@ -1061,6 +1061,21 @@ input[type="checkbox"] {
   border-color: #aecfe6;
 }
 
+/* A file whose download link could not be signed: listed, not linked */
+.gen-file-link--unavailable {
+  cursor: default;
+}
+
+.gen-file-link--unavailable:hover {
+  background: var(--rink-tint);
+  border-color: #c8ddee;
+}
+
+.gen-file-unavailable {
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+}
+
 .gen-file-head {
   display: flex;
   justify-content: space-between;
@@ -1699,3 +1714,28 @@ dialog.send-dialog.send-dialog--preview {
   color: var(--gold);
   font-weight: 600;
 }
+
+/* ── View-only access (a competition shared with the user to read) ──
+   Cosmetic: the backend refuses every write with 403 platform_read_only. */
+.view-only-note {
+  margin: 0 0 1rem;
+  padding: 0.55rem 0.8rem;
+  border-left: 2px solid var(--rink);
+  border-radius: 0.3rem;
+  background-color: var(--rink-tint);
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.view-only-note[hidden] { display: none; }
+
+.view-only #comp-upload-area,
+.view-only #pool-import-container,
+.view-only #right-panel,
+.view-only .delete-file-btn,
+.view-only .delete-gen-file-btn,
+.view-only .send-papers-btn {
+  display: none !important;
+}
+
+.view-only .method-switch-btn { pointer-events: none; }

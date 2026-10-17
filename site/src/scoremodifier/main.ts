@@ -11,11 +11,25 @@ import {
     readPlatformError,
     isGoneCompetitionError,
     platformErrorMessage,
+    isReadOnlyCompetition,
+    ownerLabel,
     competitionLabel,
     formatDateFi,
     type PlatformCompetition,
+    DOWNLOAD_EXPIRY_MARGIN_MS,
+    usableDownloadUrl,
 } from '@figureskatingtools/shared-ui';
-import { escapeHtml, fetchUser, loginUrl, setupUserMenu, type UserInfo } from '../shell.js';
+import {
+    escapeAttr,
+    escapeHtml,
+    fetchUser,
+    isTenantBlocked,
+    loginUrl,
+    logoutUrl,
+    setupUserMenu,
+    tenantBlockedCardHtml,
+    type UserInfo,
+} from '../shell.js';
 
 // Inject the shared figureskatingtools.com nav styles once at startup
 injectSiteNavStyles();
@@ -86,6 +100,15 @@ appElement.innerHTML = `
         <p class="lead">Choose or create a competition from the selector in the top bar —
           every tool works on the same selected competition, and what you generate here is
           kept with it and deleted together with its data.</p>
+      </div>
+
+      <div id="readonly-view" class="card reveal hidden" style="max-width: 860px; margin: 0 auto;">
+        <span class="micro-label">Score Modifier</span>
+        <h2 style="margin-bottom: 0.75rem;">View-only access</h2>
+        <p class="lead">View-only access — ask the owner for write access.</p>
+        <p id="readonly-owner" class="text-muted"></p>
+        <p class="text-muted">Everything Score Modifier makes is stored with the selected competition,
+          so generating needs write access to it.</p>
       </div>
 
       <div id="tool-view" class="card reveal hidden" style="max-width: 860px; margin: 0 auto;">
@@ -197,17 +220,43 @@ function showError(msg: string) {
         `<div class="result-card result-card--error"><p class="status-error">${escapeHtml(msg)}</p></div>`;
 }
 
-/** Attribute-safe escape — `escapeHtml` leaves quotes alone, which is fine for
- * text nodes but lets a `"` break out of an HTML attribute value. */
-function escapeAttr(s: string): string {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
 
 function downloadLink(url: string, fileName: string, label: string, primary = true): string {
     const cls = primary ? 'btn btn-primary' : 'btn btn-secondary';
-    return `<a class="${cls}" href="${escapeAttr(url)}" download="${escapeAttr(fileName)}">${escapeHtml(label)}</a>`;
+    return `<a class="${cls}" href="${escapeAttr(url)}" download="${escapeAttr(fileName)}" data-expiring-link>${escapeHtml(label)}</a>`;
 }
+
+/**
+ * The download links of a result are short-lived (15 min from generation).
+ * One clicked after `RESULT_LINK_MAX_AGE_MS`, or within a minute of its
+ * `expiration`, is not followed: generating again is the only way to a new
+ * link, and that is the user's call, so the link turns into a note.
+ */
+const RESULT_LINK_MAX_AGE_MS = 14 * 60 * 1000;
+/** When the shown result arrived (epoch ms), and when its links expire (ISO, if reported) */
+let resultReceivedAt = 0;
+let resultExpiration: string | null = null;
+
+function noteResultReceived(data: GenerateResult): void {
+    resultReceivedAt = Date.now();
+    resultExpiration = data.expiration ?? null;
+}
+
+function resultLinksExpired(now = Date.now()): boolean {
+    if (!resultReceivedAt || now - resultReceivedAt > RESULT_LINK_MAX_AGE_MS) return true;
+    const expires = resultExpiration ? Date.parse(resultExpiration) : NaN;
+    return Number.isFinite(expires) && expires - now <= DOWNLOAD_EXPIRY_MARGIN_MS;
+}
+
+const LINK_EXPIRED_HTML = '<span class="text-muted link-expired">Link expired — generate again</span>';
+
+// One delegated listener: the result area is re-rendered on every generate
+document.addEventListener('click', (e) => {
+    const link = (e.target as Element | null)?.closest?.<HTMLAnchorElement>('a[data-expiring-link]');
+    if (!link || !resultLinksExpired()) return;
+    e.preventDefault();
+    link.outerHTML = LINK_EXPIRED_HTML;
+});
 
 /**
  * The selected platform competition, sent as `platformId` on every generate
@@ -240,6 +289,9 @@ async function showFailure(resp: Response, requested: PlatformCompetition): Prom
     // Name the competition the request was made for — the selection may have
     // changed while it was in flight
     const label = competitionLabel(requested);
+    // The owner made this view-only since the page loaded: the message, and a
+    // refreshed selection that swaps the form for the view-only card
+    if (code === 'platform_read_only') void refreshActiveCompetition();
     if (isGoneCompetitionError(code)) {
         const message = platformErrorMessage(code!, label);
         if (getActiveCompetition()?.id === requested.id) {
@@ -275,15 +327,17 @@ async function runPerSkater(requested: PlatformCompetition) {
         return;
     }
     const data: GenerateResult = await resp.json();
-    if (!data.downloadUrl) {
+    const downloadUrl = usableDownloadUrl(data.downloadUrl);
+    if (!downloadUrl) {
         showError('Generated, but no download link was returned.');
         return;
     }
+    noteResultReceived(data);
     resultArea.innerHTML = `
         <div class="result-card">
             <p class="status-success">Done — ${data.pages} page${data.pages === 1 ? '' : 's'} created.</p>
             <p class="text-muted">${escapeHtml(data.name)}</p>
-            ${downloadLink(data.downloadUrl, data.fileName, `Download ${data.fileName}`)}
+            ${downloadLink(downloadUrl, data.fileName, `Download ${data.fileName}`)}
         </div>`;
 }
 
@@ -313,19 +367,25 @@ async function runResults(requested: PlatformCompetition) {
         return;
     }
     const data: GenerateResult = await resp.json();
-    if (!data.downloadUrl) {
+    const downloadUrl = usableDownloadUrl(data.downloadUrl);
+    if (!downloadUrl) {
         showError('Generated, but no download link was returned.');
         return;
     }
-    const htmlBtn = data.htmlUrl && data.htmlFileName
-        ? downloadLink(data.htmlUrl, data.htmlFileName, `Download ${data.htmlFileName}`, false)
+    noteResultReceived(data);
+    // The HTML page's link can fail to sign on its own: say so instead of a dead button
+    const htmlUrl = usableDownloadUrl(data.htmlUrl);
+    const htmlBtn = data.htmlFileName
+        ? (htmlUrl
+            ? downloadLink(htmlUrl, data.htmlFileName, `Download ${data.htmlFileName}`, false)
+            : `<span class="text-muted">${escapeHtml(data.htmlFileName)}: link unavailable — generate again</span>`)
         : '';
     resultArea.innerHTML = `
         <div class="result-card">
             <p class="status-success">Results page created.</p>
             <p class="text-muted">${escapeHtml(data.name)}</p>
             <div class="result-actions">
-                ${downloadLink(data.downloadUrl, data.fileName, `Download ${data.fileName}`)}
+                ${downloadLink(downloadUrl, data.fileName, `Download ${data.fileName}`)}
                 ${htmlBtn}
             </div>
         </div>`;
@@ -492,7 +552,13 @@ async function init() {
     const userSection = document.getElementById('fst-nav-right')!;
 
     if (!user) {
-        userSection.innerHTML = `<a href="${loginUrl(APP_PATH)}" class="btn btn-primary btn-sm">Sign In</a>`;
+        if (isTenantBlocked()) {
+            // Signed in, but with an account from a tenant the site refuses
+            userSection.innerHTML = `<a href="${logoutUrl()}" class="btn btn-primary btn-sm">Sign out</a>`;
+            landingView.innerHTML = tenantBlockedCardHtml();
+        } else {
+            userSection.innerHTML = `<a href="${loginUrl(APP_PATH)}" class="btn btn-primary btn-sm">Sign In</a>`;
+        }
         loadingView.classList.add('hidden');
         landingView.classList.remove('hidden');
         return;
@@ -514,12 +580,22 @@ async function init() {
     void refreshActiveCompetition();
 }
 
-/** The tool with a competition selected, the "pick a competition" card without */
+/**
+ * The tool with a competition selected, the "pick a competition" card without —
+ * and the view-only card instead of the form when the competition is shared
+ * with this user read-only (generating stores the output with it, a write).
+ */
 function showForActiveCompetition() {
     const active = getActiveCompetition();
+    const readOnly = Boolean(active) && isReadOnlyCompetition(active);
     document.getElementById('pick-view')!.classList.toggle('hidden', Boolean(active));
-    document.getElementById('tool-view')!.classList.toggle('hidden', !active);
-    if (active) {
+    document.getElementById('readonly-view')!.classList.toggle('hidden', !readOnly);
+    document.getElementById('tool-view')!.classList.toggle('hidden', !active || readOnly);
+    const owner = ownerLabel(active?.owner);
+    document.getElementById('readonly-owner')!.textContent = readOnly
+        ? `“${competitionLabel(active!)}” is shared with you${owner ? ` by ${owner}` : ''}.`
+        : '';
+    if (active && !readOnly) {
         showPickNotice(null);
         prefillFromActiveCompetition();
     }

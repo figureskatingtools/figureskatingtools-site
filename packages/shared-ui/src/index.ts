@@ -5,39 +5,75 @@ export type { SiteNavOptions, NavSubItem, NavTool, NavSmallTool } from './types.
 export { formatDateFi, formatDateTimeFi, formatFileSize } from './format.js';
 
 export {
+  DOWNLOAD_DETAILS_MAX_AGE_MS,
+  DOWNLOAD_EXPIRY_MARGIN_MS,
+  DOWNLOAD_LINK_UNAVAILABLE,
+  isDownloadLinkStale,
+  openFreshDownload,
+  usableDownloadUrl,
+} from './download-links.js';
+export type { FreshDownloadOptions } from './download-links.js';
+
+export {
   ACTIVE_COMPETITION_KEY,
   COMPETITIONS_API,
   CompetitionApiError,
+  USERS_API,
+  USER_SEARCH_MIN_CHARS,
+  canManageCompetition,
   clearActiveCompetition,
+  competitionAccess,
   competitionLabel,
   createCompetition,
   deleteCompetition,
   extendCompetition,
   extractCompetitionList,
   getActiveCompetition,
+  getMe,
+  isCompetitionAccess,
   isGoneCompetitionError,
   isPlatformCompetition,
+  isReadOnlyCompetition,
+  leaveCompetition,
+  listAccess,
   listCompetitions,
   normalizeCompetitionCode,
+  ownerLabel,
   parseActiveCompetition,
   platformErrorMessage,
   readPlatformError,
+  recentShareUsers,
   refreshActiveCompetition,
+  removeAccess,
   retentionInfo,
   RETENTION_WARN_DAYS,
+  searchHitEmail,
+  searchUsers,
   serializeActiveCompetition,
+  setAccess,
   setActiveCompetition,
   subscribeActiveCompetition,
   syncCompetitionSnapshot,
+  toAccessGrant,
   toPlatformCompetition,
+  toUserRef,
+  toUserSearchHit,
   updateCompetition,
+  userRefToSearchHit,
 } from './competition.js';
 export type {
+  AccessGrant,
+  CompetitionAccess,
   NewCompetitionInput,
   PlatformCompetition,
   PlatformErrorCode,
+  PlatformMe,
+  RemoveAccessResult,
   RetentionInfo,
+  ShareRole,
   UpdateCompetitionInput,
+  UserRef,
+  UserSearchHit,
 } from './competition.js';
 
 export {
@@ -112,3 +148,5 @@ export {
   openCreateCompetitionDialog,
   openEditCompetitionDialog,
 } from './competition-selector.js';
+
+export { openShareCompetitionDialog } from './share-dialog.js';

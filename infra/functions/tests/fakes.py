@@ -18,9 +18,13 @@ gets the storage contract wrong fails a test:
   * every row carries an etag, and `update_entity(..., etag=,
     match_condition=)` raises `ResourceModifiedError` when it no longer matches
     — the listener's serial-number bookkeeping is optimistic-concurrency based.
-  * `query_entities` understands the two filters the apps issue:
-    `PartitionKey eq '<pk>'` with an optional `RowKey ge '<a>' and RowKey lt
-    '<b>'` range.
+  * `query_entities` understands the filters the apps issue: `and`-joined
+    `<Property> eq|ne|ge|gt|le|lt '<string>'` clauses (PartitionKey, RowKey or
+    any column — a row missing the column never matches), e.g. the
+    `PartitionKey eq '<pk>' and RowKey ge '<a>' and RowKey lt '<b>'` range or
+    the access model's `RowKey eq '<userId>'` cross-partition scan.
+  * `submit_transaction` is all-or-nothing and single-partition, like the
+    service: a failing operation rolls every earlier one back.
   * blobs support prefix listing, metadata that is returned ONLY when
     `list_blobs` was asked for it, overwrite semantics, and
     `ResourceNotFoundError` on a missing blob.
@@ -142,17 +146,45 @@ class FakeTableClient:
 
     def query_entities(self, query_filter, select=None, **kwargs):
         self.calls.append(("query_entities", query_filter))
-        wanted_pk, row_key_ge, row_key_lt = _parse_filter(query_filter)
+        clauses = _parse_filter(query_filter)
         results = []
         for (pk, rk), row in sorted(self.rows.items()):
-            if wanted_pk is not None and pk != wanted_pk:
-                continue
-            if row_key_ge is not None and rk < row_key_ge:
-                continue
-            if row_key_lt is not None and rk >= row_key_lt:
+            if not _matches(clauses, pk, rk, row):
                 continue
             results.append(FakeEntity(row, {"etag": self.etags[(pk, rk)]}))
         return results
+
+    def list_entities(self, **kwargs):
+        self.calls.append(("list_entities",))
+        return [FakeEntity(row, {"etag": self.etags[key]})
+                for key, row in sorted(self.rows.items())]
+
+    def submit_transaction(self, operations):
+        """All-or-nothing over the single-entity methods above."""
+        operations = list(operations)
+        self.calls.append(("submit_transaction", len(operations)))
+        if len({op[1]["PartitionKey"] for op in operations}) > 1:
+            raise ValueError("a transaction must stay within one partition")
+        rows, etags = dict(self.rows), dict(self.etags)
+        try:
+            for operation in operations:
+                kind, entity = operation[0], operation[1]
+                options = dict(operation[2]) if len(operation) > 2 else {}
+                kind = str(getattr(kind, "value", kind)).lower()
+                if kind == "create":
+                    self.create_entity(entity)
+                elif kind == "upsert":
+                    self.upsert_entity(entity, **options)
+                elif kind == "update":
+                    self.update_entity(entity, **options)
+                elif kind == "delete":
+                    self.delete_entity(entity["PartitionKey"], entity["RowKey"], **options)
+                else:
+                    raise ValueError(f"unknown transaction operation {kind!r}")
+        except Exception:
+            self.rows, self.etags = rows, etags
+            raise
+        return [{} for _ in operations]
 
     # -- test conveniences ------------------------------------------------
     def rows_with_pk(self, partition_key):
@@ -164,18 +196,33 @@ def _is_replace(mode) -> bool:
     return isinstance(value, str) and value.lower() == "replace"
 
 
+_CLAUSE_RE = re.compile(r"(\w+) (eq|ne|ge|gt|le|lt) '([^']*)'")
+_OPERATORS = {
+    "eq": lambda a, b: a == b,
+    "ne": lambda a, b: a != b,
+    "ge": lambda a, b: a >= b,
+    "gt": lambda a, b: a > b,
+    "le": lambda a, b: a <= b,
+    "lt": lambda a, b: a < b,
+}
+
+
 def _parse_filter(query_filter: str):
-    """`PartitionKey eq 'x'[ and RowKey ge 'a' and RowKey lt 'b']` -> parts."""
-    partition_key = None
-    match = re.search(r"PartitionKey eq '([^']*)'", query_filter)
-    if match:
-        partition_key = match.group(1)
+    """`A eq 'x' and B ge 'y' …` -> [(property, operator, value), …]."""
+    return _CLAUSE_RE.findall(query_filter or "")
 
-    def _bound(operator):
-        found = re.search(rf"RowKey {operator} '([^']*)'", query_filter)
-        return found.group(1) if found else None
 
-    return partition_key, _bound("ge"), _bound("lt")
+def _matches(clauses, partition_key, row_key, row) -> bool:
+    for name, operator, value in clauses:
+        if name == "PartitionKey":
+            actual = partition_key
+        elif name == "RowKey":
+            actual = row_key
+        else:
+            actual = row.get(name)
+        if actual is None or not _OPERATORS[operator](str(actual), value):
+            return False
+    return True
 
 
 class FakeBlob:

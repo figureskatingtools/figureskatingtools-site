@@ -11,6 +11,7 @@ import {
   readPlatformError,
   isGoneCompetitionError,
   platformErrorMessage,
+  isReadOnlyCompetition,
   extendCompetition,
   retentionInfo,
   openEditCompetitionDialog,
@@ -32,11 +33,15 @@ import {
   type StructureLike,
   type TrayReason,
   type PoolFile,
+  DOWNLOAD_LINK_UNAVAILABLE,
+  isDownloadLinkStale,
+  openFreshDownload,
+  usableDownloadUrl,
 } from '@figureskatingtools/shared-ui';
-import type { CompetitionDetails, Structure, Category, Segment, SlotTarget, FileMeta,
+import type { CompetitionDetails, GeneratedFile, Structure, Category, Segment, SlotTarget, FileMeta,
   NameMode, TeamPageSettings, TeamTextField } from './types';
 import { attachPreview } from './preview';
-import { escapeHtml, fetchUser, renderSignInView, setupUserMenu, type UserInfo } from '../shell.js';
+import { escapeAttr, escapeHtml, fetchUser, renderSignInView, setupUserMenu, type UserInfo } from '../shell.js';
 
 /** Where this app lives on the site — login round-trips back into it. */
 const APP_PATH = '/protocolgenerator/';
@@ -67,6 +72,8 @@ let boundLabel: string | null = null;
 /** Guards against an out-of-order resolve when the selection changes mid-flight. */
 let bindToken = 0;
 let details: CompetitionDetails | null = null;
+/** When `details` was fetched (epoch ms) — its download links live 15 minutes */
+let detailsFetchedAt = 0;
 /** Why the selection was dropped (deleted / no longer exists) — shown once on the pick card */
 let deletedNotice: string | null = null;
 /** Files in the platform competition pool; null = unbound or pool unavailable. */
@@ -75,6 +82,8 @@ let poolFiles: PoolFile[] | null = null;
 let poolDisabled = false;
 /** The "uploaded to this tool only" notice is worth saying once, not per file. */
 let poolNoticeShown = false;
+/** View-only state the detail view was last rendered with — a role change re-renders it */
+let renderedViewOnly = false;
 /**
  * `<competition>::<pool file>::<uploadedUtc>` of every pool schedule this page
  * session already parsed *by itself*. A parse that fails (or a schedule that
@@ -146,6 +155,10 @@ const APP_HTML = `
             </div>
             <div class="retention" id="retention"></div>
           </div>
+          <p id="view-only-note" class="view-only-note" role="note" hidden>
+            <strong>View only</strong> — you can look at this competition and download its protocols.
+            Ask the owner for write access to change anything.
+          </p>
           <div id="detail-body"></div>
         </div>
       </div>
@@ -310,6 +323,45 @@ async function bindActiveCompetition(force = false): Promise<void> {
   }
 }
 
+/**
+ * The bound competition is shared with the user view-only: every write control
+ * is hidden or disabled and nothing is written on their behalf (auto-parse,
+ * auto-import). Cosmetic — the backend answers 403 `platform_read_only` anyway.
+ */
+function viewOnly(): boolean {
+  const active = getActiveCompetition();
+  return Boolean(active && boundPlatformId && active.id === boundPlatformId && isReadOnlyCompetition(active));
+}
+
+/**
+ * Text of a failed response for an alert. A tool error about the platform
+ * competition gets the shared wording; `platform_read_only` (the role changed
+ * since the page loaded) also refreshes the selection, which re-renders the
+ * view without its write controls.
+ */
+async function failureText(resp: Response): Promise<string> {
+  const text = await resp.text();
+  const code = readPlatformError(resp.status, text);
+  if (!code) return text;
+  // The role changed since the page loaded (view-only now, or no longer the owner)
+  if (code === 'platform_read_only' || code === 'platform_owner_required') void refreshActiveCompetition();
+  return platformErrorMessage(code, boundLabel ?? '');
+}
+
+/** Mark the detail view view-only (CSS hides the write buttons) and lock its inputs */
+function applyViewOnly(): void {
+  const ro = viewOnly();
+  renderedViewOnly = ro;
+  document.getElementById('view-detail')?.classList.toggle('view-only', ro);
+  const note = document.getElementById('view-only-note');
+  if (note) note.hidden = !ro;
+  if (!ro) return;
+  const body = document.getElementById('detail-body');
+  body?.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('input, select, textarea')
+    .forEach(el => { el.disabled = true; });
+  body?.querySelectorAll<HTMLElement>('[draggable="true"]').forEach(el => el.setAttribute('draggable', 'false'));
+}
+
 // ── API helpers ──
 // Paths are relative to this tool's API prefix, e.g. apiGet('/get_competition_details').
 async function apiGet(path: string): Promise<Response> {
@@ -360,8 +412,8 @@ function renderRetention() {
   const warn = info.dueSoon || info.beforeEvent;
   el.innerHTML = `<span class="retention-date${warn ? ' retention-date--warn' : ''}"${warn
     ? ` title="${info.beforeEvent ? 'Deleted before the competition starts' : 'Deleted within a week'}"` : ''}>Auto-deletes ${escapeHtml(formatDateFi(info.day))}</span>
-    <span class="retention-sep">·</span>
-    <button class="btn btn-xs btn-ghost" id="btn-extend" title="Keep this competition's data one week longer">Extend</button>`;
+    ${viewOnly() ? '' : `<span class="retention-sep">·</span>
+    <button class="btn btn-xs btn-ghost" id="btn-extend" title="Keep this competition's data one week longer">Extend</button>`}`;
   document.getElementById('btn-extend')?.addEventListener('click', extendRetention);
 }
 
@@ -391,6 +443,7 @@ async function openCompetition(id: string, name: string) {
   document.getElementById('detail-title')!.textContent = name;
   document.getElementById('retention')!.innerHTML = '';
   document.getElementById('detail-body')!.innerHTML = '<p class="text-muted">Loading…</p>';
+  applyViewOnly();
   await loadDetails();
   // The pool listing is fresh now (loadDetails refreshes it), so this is the
   // first moment we can tell whether the schedule is already sitting there.
@@ -406,6 +459,7 @@ async function loadDetails() {
     const resp = await apiGet(`/get_competition_details?id=${encodeURIComponent(currentId)}`);
     if (!resp.ok) throw new Error(String(resp.status));
     details = await resp.json();
+    detailsFetchedAt = Date.now();
     await refreshPoolFiles();
     renderDetails();
   } catch {
@@ -870,15 +924,7 @@ function renderDetails() {
            s.scheduleParsed ? 'Replace from it' : 'Use it'}</button></p>`
     : '';
 
-  const gen = details.generatedFiles || [];
-  const genHtml = gen.length ? gen.map(g => `
-      <div class="gen-file">
-        <a class="gen-file-link" href="${g.url}" target="_blank" rel="noopener noreferrer">
-          <span>${escapeHtml(g.fileName)}</span>
-          <span class="gen-badge">${g.size ? Math.round(Number(g.size) / 1024) + ' KB' : ''}</span>
-        </a>
-        <button class="btn btn-xs btn-ghost btn-ghost--danger" data-del-protocol="${escapeHtml(g.fileName)}" title="Delete this protocol">×</button>
-      </div>`).join('') : '<p class="section-sub">No protocol generated yet.</p>';
+  const genHtml = generatedListHtml(details.generatedFiles || []);
 
   document.getElementById('detail-body')!.innerHTML = `
     <div class="section">
@@ -1019,12 +1065,13 @@ function renderDetails() {
       placed automatically (<span class="chip-auto">auto</span>) — check they sit in the right slots
       before generating. Dragging a file by hand confirms it and clears the tag.</p>` : ''}
     <div class="action-bar">
-      <div class="gen-list">${genHtml}</div>
+      <div class="gen-list" id="gen-list">${genHtml}</div>
       <button class="btn btn-primary btn-generate" id="btn-generate">Generate Protocol</button>
     </div>
   `;
 
   wireDetail();
+  applyViewOnly();
 }
 
 // ── wiring ──
@@ -1046,11 +1093,15 @@ function wireDetail() {
 
   // Drop zones: slots + tray.
   body.querySelectorAll<HTMLElement>('[data-target]').forEach(zone => {
-    zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('dragover'); });
+    zone.addEventListener('dragover', e => {
+      if (viewOnly()) return;   // no drop target: the browser shows "not allowed"
+      e.preventDefault(); zone.classList.add('dragover');
+    });
     zone.addEventListener('dragleave', () => zone.classList.remove('dragover'));
     zone.addEventListener('drop', e => {
       e.preventDefault();
       zone.classList.remove('dragover');
+      if (viewOnly()) return;
       const target = JSON.parse(zone.getAttribute('data-target')!) as SlotTarget;
       if (e.dataTransfer?.files?.length) {
         uploadFiles(e.dataTransfer.files, target);
@@ -1245,6 +1296,7 @@ function wireDetail() {
   schedDrop?.addEventListener('dragleave', () => schedDrop.classList.remove('dragover'));
   schedDrop?.addEventListener('drop', e => {
     e.preventDefault(); schedDrop.classList.remove('dragover');
+    if (viewOnly()) return;
     if (e.dataTransfer?.files?.[0]) parseSchedule(e.dataTransfer.files[0]);
   });
   // Parse the schedule the pool already holds (no download, no upload).
@@ -1283,9 +1335,9 @@ function wireDetail() {
     syncPoolImportButton();
   });
 
-  // Delete a generated protocol file.
-  body.querySelectorAll<HTMLElement>('[data-del-protocol]').forEach(b =>
-    b.addEventListener('click', () => deleteProtocol(b.dataset.delProtocol!)));
+  // Generated protocols: delete, and download links that may need a fresh
+  // signature. Delegated, so a list re-rendered after a refresh keeps working.
+  document.getElementById('gen-list')?.addEventListener('click', onGenListClick);
 
   // Footer band toggle.
   document.getElementById('footer-enabled')?.addEventListener('change', e => {
@@ -1298,6 +1350,86 @@ function wireDetail() {
   document.getElementById('btn-generate')?.addEventListener('click', generate);
 }
 
+// ── generated protocols ──
+/** The generated protocols list. A file without a signed link is shown, unlinked, with a hint. */
+function generatedListHtml(gen: GeneratedFile[]): string {
+  if (!gen.length) return '<p class="section-sub">No protocol generated yet.</p>';
+  return gen.map(g => {
+    const url = usableDownloadUrl(g.url);
+    const name = `<span>${escapeHtml(g.fileName)}</span>`;
+    const size = `<span class="gen-badge">${g.size ? Math.round(Number(g.size) / 1024) + ' KB' : ''}</span>`;
+    const link = url
+      ? `<a class="gen-file-link" href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer"
+            data-gen-file="${escapeAttr(g.fileName)}" data-expiration="${escapeAttr(g.expiration ?? '')}">
+          ${name}${size}
+        </a>`
+      : `<div class="gen-file-link gen-file-link--unavailable">
+          ${name}<span class="gen-file-unavailable">${escapeHtml(DOWNLOAD_LINK_UNAVAILABLE)}</span>
+        </div>`;
+    return `
+      <div class="gen-file">
+        ${link}
+        <button class="btn btn-xs btn-ghost btn-ghost--danger" data-del-protocol="${escapeAttr(g.fileName)}" title="Delete this protocol">×</button>
+      </div>`;
+  }).join('');
+}
+
+function renderGeneratedList(): void {
+  const list = document.getElementById('gen-list');
+  if (list && details) list.innerHTML = generatedListHtml(details.generatedFiles || []);
+}
+
+function onGenListClick(e: MouseEvent): void {
+  const target = e.target as Element;
+  const del = target.closest<HTMLElement>('[data-del-protocol]');
+  if (del) { deleteProtocol(del.dataset.delProtocol!); return; }
+
+  const link = target.closest<HTMLAnchorElement>('a[data-gen-file]');
+  if (!link || !isDownloadLinkStale(detailsFetchedAt, link.dataset.expiration)) return;
+  // The link is (nearly) expired: fetch fresh ones, then open this file's
+  e.preventDefault();
+  const fileName = link.dataset.genFile!;
+  const competitionId = currentId;
+  if (!competitionId) return;
+  void openFreshDownload({
+    newTab: true,
+    refresh: async () => (await refreshGeneratedFiles(competitionId))?.find(g => g.fileName === fileName)?.url,
+    onUnavailable: () => markGeneratedUnavailable(competitionId, fileName),
+  });
+}
+
+/**
+ * Re-read the competition's generated protocols (same call as `loadDetails`)
+ * and re-render only that list, leaving the rest of the view — and any unsaved
+ * input — alone. Null when the fetch failed or `id` is not (or no longer) the
+ * open competition.
+ */
+async function refreshGeneratedFiles(id: string): Promise<GeneratedFile[] | null> {
+  if (currentId !== id) return null;
+  const resp = await apiGet(`/get_competition_details?id=${encodeURIComponent(id)}`);
+  if (!resp.ok) return null;
+  const fresh: CompetitionDetails = await resp.json();
+  if (currentId !== id || !details) return null;
+  details.generatedFiles = fresh.generatedFiles || [];
+  detailsFetchedAt = Date.now();
+  renderGeneratedList();
+  return details.generatedFiles;
+}
+
+/**
+ * No fresh link for this file: show it unlinked, with the hint. Only while
+ * `competitionId` is still open — a refresh started in another competition
+ * must not touch this one's list.
+ */
+function markGeneratedUnavailable(competitionId: string, fileName: string): void {
+  if (currentId !== competitionId) return;
+  const item = details?.generatedFiles?.find(g => g.fileName === fileName);
+  if (!item) return;   // gone from the fresh listing: the re-rendered list already shows that
+  item.url = null;
+  item.expiration = null;
+  renderGeneratedList();
+}
+
 function deleteProtocol(fileName: string) {
   if (!currentId) return;
   openConfirmModal({
@@ -1307,7 +1439,7 @@ function deleteProtocol(fileName: string) {
       const resp = await fetch(
         apiUrl(`/delete_protocol?competition=${encodeURIComponent(currentId!)}&fileName=${encodeURIComponent(fileName)}`),
         { method: 'DELETE' });
-      if (!resp.ok) { alert('Delete failed: ' + (await resp.text())); throw new Error('delete failed'); }
+      if (!resp.ok) { alert('Delete failed: ' + (await failureText(resp))); throw new Error('delete failed'); }
       await loadDetails();
     },
   });
@@ -1328,7 +1460,7 @@ async function assignFile(fileId: string, target: SlotTarget) {
   if (!currentId) return;
   try {
     const resp = await apiJson('/assign_file', { id: currentId, fileId, target });
-    if (!resp.ok) { alert('Could not move file: ' + (await resp.text())); return; }
+    if (!resp.ok) { alert('Could not move file: ' + (await failureText(resp))); return; }
     await learnFromManualAssign(fileId, target);
     await loadDetails();
   } catch { alert('Network error moving file.'); }
@@ -1816,7 +1948,7 @@ async function uploadOneFile(file: File, params: URLSearchParams): Promise<void>
   }
   try {
     const resp = await apiRaw(`/upload_file?${params.toString()}`, file);
-    if (!resp.ok) alert(`Upload failed for ${file.name}: ${await resp.text()}`);
+    if (!resp.ok) alert(`Upload failed for ${file.name}: ${await failureText(resp)}`);
   } catch { alert(`Upload error for ${file.name}.`); }
 }
 
@@ -1853,7 +1985,8 @@ async function uploadFiles(files: FileList, target?: SlotTarget) {
 async function deleteFile(fileId: string) {
   if (!currentId) return;
   try {
-    await fetch(apiUrl(`/delete_file?competition=${encodeURIComponent(currentId)}&fileId=${encodeURIComponent(fileId)}`), { method: 'DELETE' });
+    const resp = await fetch(apiUrl(`/delete_file?competition=${encodeURIComponent(currentId)}&fileId=${encodeURIComponent(fileId)}`), { method: 'DELETE' });
+    if (!resp.ok) alert('Could not delete file: ' + (await failureText(resp)));
     await loadDetails();
   } catch { alert('Could not delete file.'); }
 }
@@ -1896,7 +2029,7 @@ async function editStructure(payload: any, reload: boolean) {
   if (!currentId) return;
   try {
     const resp = await apiJson('/edit_structure', { id: currentId, ...payload });
-    if (!resp.ok) { alert('Edit failed: ' + (await resp.text())); return; }
+    if (!resp.ok) { alert('Edit failed: ' + (await failureText(resp))); return; }
     if (reload) await loadDetails();
   } catch { alert('Network error editing competition.'); }
 }
@@ -1912,7 +2045,7 @@ async function parseSchedule(file: File, force = false) {
       }
       return;
     }
-    if (!resp.ok) { alert('Schedule parse failed: ' + (await resp.text())); return; }
+    if (!resp.ok) { alert('Schedule parse failed: ' + (await failureText(resp))); return; }
     await loadDetails();
   } catch { alert('Network error parsing schedule.'); }
 }
@@ -1941,7 +2074,7 @@ async function parseScheduleFromPool(file: PoolFile, force = false): Promise<voi
       }
       return;
     }
-    if (!resp.ok) { alert('Schedule parse failed: ' + (await resp.text())); return; }
+    if (!resp.ok) { alert('Schedule parse failed: ' + (await failureText(resp))); return; }
     await loadDetails();
     flash(`Schedule parsed from competition files: ${file.name}`);
   } catch { alert('Network error parsing schedule.'); }
@@ -1957,6 +2090,7 @@ async function parseScheduleFromPool(file: PoolFile, force = false): Promise<voi
  */
 async function autoParsePoolSchedule(): Promise<void> {
   if (!currentId || !details || details.structure.id !== currentId) return;
+  if (viewOnly()) return;   // never write on behalf of a view-only user
   const s = details.structure;
   if (s.scheduleParsed || (s.categories || []).length) return;
   const candidate = scheduleCandidates()[0];
@@ -1979,6 +2113,7 @@ async function autoImportPoolRosters(): Promise<void> {
   // A details response for the previously opened competition may still be what
   // `details` holds; its state must not authorize a write to this one.
   if (!currentId || !details || details.structure.id !== currentId) return;
+  if (viewOnly()) return;   // never write on behalf of a view-only user
   const s = details.structure;
   if (s.rosterImport || !(s.categories || []).some(c => c.discipline === 'synchro')) return;
   const plan = poolRosterPlan(s);
@@ -2054,7 +2189,7 @@ async function importRosters(teamsXml: string, particXml: string) {
       ...(particXml ? { particXml } : {}),
     };
     const resp = await apiJson('/import_rosters', body);
-    if (!resp.ok) { alert('Roster import failed: ' + (await resp.text())); return; }
+    if (!resp.ok) { alert('Roster import failed: ' + (await failureText(resp))); return; }
     const data = await resp.json();
     await loadDetails();
     // Details (withdrawn / not placed) live in the persistent panel, not here.
@@ -2070,7 +2205,7 @@ async function uploadFallbackZip(file: File) {
   try {
     const resp = await apiRaw(
       '/upload_fallback_photos?' + new URLSearchParams({ competition: currentId }), file);
-    if (!resp.ok) { alert('Fallback picture import failed: ' + (await resp.text())); return; }
+    if (!resp.ok) { alert('Fallback picture import failed: ' + (await failureText(resp))); return; }
     const data = await resp.json();
     await loadDetails();
     const parts = [`Matched ${data.matched} fallback picture(s)`];
@@ -2110,7 +2245,7 @@ async function generate() {
       btn.classList.add('btn-success');
       setTimeout(() => { btn.classList.remove('btn-success'); btn.textContent = 'Generate Protocol'; btn.disabled = false; loadDetails(); }, 1500);
     } else {
-      alert('Generation failed: ' + (await resp.text()));
+      alert('Generation failed: ' + (await failureText(resp)));
       btn.textContent = 'Generate Protocol'; btn.disabled = false;
     }
   } catch {
@@ -2181,6 +2316,8 @@ async function init() {
       void bindActiveCompetition();
       // An extend (here, on the home page or in another tab) moves the date
       renderRetention();
+      // The owner changed this user's role: show or hide the write controls
+      if (details && viewOnly() !== renderedViewOnly) renderDetails();
     });
 
     // Header pencil — edits the platform record every tool shares.

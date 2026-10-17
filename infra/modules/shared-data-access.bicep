@@ -15,6 +15,12 @@
 //          Storage Table Data Reader on the `retentionclock` table only: that
 //          table holds nothing else, while the registry's `competitions` table
 //          (operators' e-mails, FS Manager sender IPs) stays out of reach.
+//   table  the access model — `useridentities` (tid_oid -> userId) and
+//          `competitionaccess` (PK=<competition guid>, RK=<userId>, Role), so
+//          each tool can answer "may this caller read / write this
+//          competition?" (platform_access.py). Storage Table Data Reader on
+//          those two tables only. Neither holds personal data; the `users`
+//          table (e-mails, names) is NEVER granted to the tools.
 //
 // Read-only on purpose: the platform Function App is the only writer.
 //
@@ -39,6 +45,12 @@ param dataContainerName string = 'competition-data'
 @description('Table holding the platform retention clock (DeletionDate / Status / PurgedUtc only).')
 param clockTableName string = 'retentionclock'
 
+@description('Table linking sign-in identities (tid_oid) to platform user ids.')
+param userIdentitiesTableName string = 'useridentities'
+
+@description('Table of the competition access grants (owner/write/read).')
+param competitionAccessTableName string = 'competitionaccess'
+
 @description('System-assigned principal ids of the tool Function Apps. Empty strings are ignored.')
 param toolPrincipalIds array = []
 
@@ -58,6 +70,14 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' existing 
 
     resource clockTable 'tables' existing = {
       name: clockTableName
+    }
+
+    resource userIdentitiesTable 'tables' existing = {
+      name: userIdentitiesTableName
+    }
+
+    resource competitionAccessTable 'tables' existing = {
+      name: competitionAccessTableName
     }
   }
 }
@@ -85,6 +105,30 @@ resource toolTableReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = 
   for principalId in validPrincipalIds: {
     name: guid(storageAccount::tableService::clockTable.id, string(principalId), storageTableDataReaderId)
     scope: storageAccount::tableService::clockTable
+    properties: {
+      roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageTableDataReaderId)
+      principalId: string(principalId)
+      principalType: 'ServicePrincipal'
+    }
+  }
+]
+
+resource toolIdentitiesReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
+  for principalId in validPrincipalIds: {
+    name: guid(storageAccount::tableService::userIdentitiesTable.id, string(principalId), storageTableDataReaderId)
+    scope: storageAccount::tableService::userIdentitiesTable
+    properties: {
+      roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageTableDataReaderId)
+      principalId: string(principalId)
+      principalType: 'ServicePrincipal'
+    }
+  }
+]
+
+resource toolAccessReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
+  for principalId in validPrincipalIds: {
+    name: guid(storageAccount::tableService::competitionAccessTable.id, string(principalId), storageTableDataReaderId)
+    scope: storageAccount::tableService::competitionAccessTable
     properties: {
       roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', storageTableDataReaderId)
       principalId: string(principalId)

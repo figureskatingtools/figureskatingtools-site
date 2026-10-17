@@ -16,6 +16,54 @@
  * never a blocker — tools must keep working standalone with none selected.
  */
 
+/**
+ * The caller's role on a competition. `read` = view and download only,
+ * `write` = everything except deleting and sharing, `owner` = everything
+ * (admins always read as `owner`).
+ */
+export type CompetitionAccess = 'owner' | 'write' | 'read';
+
+/** A role that can be granted to someone else */
+export type ShareRole = 'read' | 'write';
+
+/** A signed-in user of the site, as the platform's user directory knows them */
+export interface UserRef {
+  /** Platform-internal user id (GUID) — never an e-mail */
+  userId: string;
+  /** Display name ('' when unknown) */
+  name: string;
+  /** E-mail ('' when unknown) */
+  email: string;
+}
+
+/**
+ * One hit of the share picker's user search (`GET /api/users/search`).
+ * A name search never reveals a stranger's e-mail: `email` is null and only
+ * the masked `emailHint` (e.g. `a•••@club.fi`) is shown. `email` is the full
+ * address when the query was that exact address, or when the caller already
+ * shares a competition with the person.
+ */
+export interface UserSearchHit {
+  /** Platform-internal user id (GUID) — never an e-mail */
+  userId: string;
+  /** Display name ('' when unknown) */
+  name: string;
+  /** Full e-mail, or null when the search may not reveal it */
+  email: string | null;
+  /** Masked e-mail ('' when unknown) — what to show when `email` is null */
+  emailHint: string;
+}
+
+/** One row of a competition's access list */
+export interface AccessGrant extends UserRef {
+  role: CompetitionAccess;
+}
+
+/** The signed-in user as the platform sees them (`GET /api/users/me`) */
+export interface PlatformMe extends UserRef {
+  isAdmin: boolean;
+}
+
 /** A competition as stored in the platform registry */
 export interface PlatformCompetition {
   /** Platform-wide GUID — the stable internal id */
@@ -38,6 +86,14 @@ export interface PlatformCompetition {
    * by `extendCompetition` (and pulled to the next midnight by a delete).
    */
   deletionDate?: string;
+  /**
+   * The caller's role. Absent from an older API (and from a selection stored
+   * before sharing existed) — read that as `owner`, the pre-sharing behaviour;
+   * the backends enforce the real role either way.
+   */
+  access?: CompetitionAccess;
+  /** The owner, or null for a legacy competition nobody has claimed yet */
+  owner?: UserRef | null;
 }
 
 /** Fields accepted when creating a competition */
@@ -62,6 +118,12 @@ export const ACTIVE_COMPETITION_KEY = 'fst:active-competition:v1';
 /** Base path of the platform competitions API (same origin, behind the router) */
 export const COMPETITIONS_API = '/api/competitions';
 
+/** Base path of the platform user directory API (share picker, `me`) */
+export const USERS_API = '/api/users';
+
+/** Shortest query `searchUsers` sends — the API answers 400 below it */
+export const USER_SEARCH_MIN_CHARS = 3;
+
 /* ════════════════════════════════════════════════════════════════
    Pure helpers — no DOM, no storage, no network
    ════════════════════════════════════════════════════════════════ */
@@ -79,6 +141,85 @@ export function normalizeCompetitionCode(raw: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
+const ACCESS_VALUES: readonly CompetitionAccess[] = ['owner', 'write', 'read'];
+
+/** True for one of the three roles */
+export function isCompetitionAccess(value: unknown): value is CompetitionAccess {
+  return typeof value === 'string' && (ACCESS_VALUES as readonly string[]).includes(value);
+}
+
+/** Map a raw `{userId, name, email}` object; null when it has no user id */
+export function toUserRef(raw: unknown): UserRef | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const userId = typeof r.userId === 'string' ? r.userId : '';
+  if (!userId) return null;
+  return {
+    userId,
+    name: typeof r.name === 'string' ? r.name : '',
+    email: typeof r.email === 'string' ? r.email : '',
+  };
+}
+
+/** Map a raw search hit; null when it has no user id. An empty e-mail reads as null */
+export function toUserSearchHit(raw: unknown): UserSearchHit | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const userId = typeof r.userId === 'string' ? r.userId : '';
+  if (!userId) return null;
+  return {
+    userId,
+    name: typeof r.name === 'string' ? r.name : '',
+    email: typeof r.email === 'string' && r.email.trim() ? r.email : null,
+    emailHint: typeof r.emailHint === 'string' ? r.emailHint : '',
+  };
+}
+
+/** A known user (recent pick, grant) as a search hit — the full e-mail stays */
+export function userRefToSearchHit(user: UserRef): UserSearchHit {
+  return { userId: user.userId, name: user.name, email: user.email || null, emailHint: '' };
+}
+
+/** The e-mail to show for a search hit: the full one when known, else the masked hint */
+export function searchHitEmail(hit: Pick<UserSearchHit, 'email' | 'emailHint'>): string {
+  return hit.email ?? hit.emailHint;
+}
+
+/** Map a raw grant row; null when the user id or the role is unusable */
+export function toAccessGrant(raw: unknown): AccessGrant | null {
+  const user = toUserRef(raw);
+  const role = (raw as { role?: unknown } | null)?.role;
+  if (!user || !isCompetitionAccess(role)) return null;
+  return { ...user, role };
+}
+
+function isUserRefShape(value: unknown): boolean {
+  if (!value || typeof value !== 'object') return false;
+  const u = value as Record<string, unknown>;
+  return typeof u.userId === 'string' && typeof u.name === 'string' && typeof u.email === 'string';
+}
+
+/** The caller's effective role — `owner` when the API did not say */
+export function competitionAccess(competition: PlatformCompetition | null | undefined): CompetitionAccess {
+  return competition?.access ?? 'owner';
+}
+
+/** View and download only: every write control is hidden for this competition */
+export function isReadOnlyCompetition(competition: PlatformCompetition | null | undefined): boolean {
+  return competitionAccess(competition) === 'read';
+}
+
+/** Owner (or admin): may delete the competition and manage who it is shared with */
+export function canManageCompetition(competition: PlatformCompetition | null | undefined): boolean {
+  return competitionAccess(competition) === 'owner';
+}
+
+/** Short label for the owner: name, falling back to the e-mail */
+export function ownerLabel(owner: UserRef | null | undefined): string {
+  if (!owner) return '';
+  return owner.name.trim() || owner.email.trim();
+}
+
 /** Type guard for a well-formed competition object */
 export function isPlatformCompetition(value: unknown): value is PlatformCompetition {
   if (!value || typeof value !== 'object') return false;
@@ -91,7 +232,9 @@ export function isPlatformCompetition(value: unknown): value is PlatformCompetit
     typeof c.venue === 'string' &&
     (c.createdBy === undefined || typeof c.createdBy === 'string') &&
     (c.createdUtc === undefined || typeof c.createdUtc === 'string') &&
-    (c.deletionDate === undefined || typeof c.deletionDate === 'string')
+    (c.deletionDate === undefined || typeof c.deletionDate === 'string') &&
+    (c.access === undefined || isCompetitionAccess(c.access)) &&
+    (c.owner === undefined || c.owner === null || isUserRefShape(c.owner))
   );
 }
 
@@ -120,6 +263,12 @@ export function toPlatformCompetition(raw: unknown): PlatformCompetition | null 
   if (typeof r.createdBy === 'string') competition.createdBy = r.createdBy;
   if (typeof r.createdUtc === 'string') competition.createdUtc = r.createdUtc;
   if (typeof r.deletionDate === 'string' && r.deletionDate) competition.deletionDate = r.deletionDate;
+  if (isCompetitionAccess(r.access)) competition.access = r.access;
+  if (r.owner === null) competition.owner = null;
+  else if (r.owner !== undefined) {
+    const owner = toUserRef(r.owner);
+    if (owner) competition.owner = owner;
+  }
   return competition;
 }
 
@@ -137,13 +286,17 @@ export function parseActiveCompetition(raw: string | null): PlatformCompetition 
 /**
  * Serialize for storage — only the known fields, never stray keys.
  * `deletionDate` is included so an extend in one tab reaches every other tab
- * through the `storage` event.
+ * through the `storage` event; `access` and `owner` likewise, so a role the
+ * owner changes reaches every open tool once the selection is refreshed.
  */
 export function serializeActiveCompetition(competition: PlatformCompetition): string {
-  const { id, code, name, date, venue, createdBy, deletionDate } = competition;
-  const stored: Record<string, string> = { id, code, name, date, venue };
+  const { id, code, name, date, venue, createdBy, deletionDate, access, owner } = competition;
+  const stored: Record<string, unknown> = { id, code, name, date, venue };
   if (createdBy !== undefined) stored.createdBy = createdBy;
   if (deletionDate !== undefined) stored.deletionDate = deletionDate;
+  if (access !== undefined) stored.access = access;
+  if (owner === null) stored.owner = null;
+  else if (owner) stored.owner = { userId: owner.userId, name: owner.name, email: owner.email };
   return JSON.stringify(stored);
 }
 
@@ -307,12 +460,60 @@ function attachStorageListener(): void {
 /** An error carrying the HTTP status of a failed competitions API call */
 export class CompetitionApiError extends Error {
   readonly status: number;
+  /** The API's machine code (`read_only`, `user_not_found`, …), '' when unknown */
+  readonly code: string;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, code = '') {
     super(message);
     this.name = 'CompetitionApiError';
     this.status = status;
+    this.code = code;
   }
+}
+
+/**
+ * Turn a failed response into a `CompetitionApiError`, preferring the
+ * registry's `{error: <code>, message: <human text>}` body.
+ */
+async function errorFromResponse(resp: Response, fallback: string): Promise<CompetitionApiError> {
+  let code = '';
+  let message = '';
+  try {
+    const payload = await resp.json();
+    code = typeof payload?.error === 'string' ? payload.error : '';
+    message = typeof payload?.message === 'string' ? payload.message : '';
+  } catch (_e) {
+    // No JSON body — fall back to the bare status
+  }
+  return new CompetitionApiError(resp.status, message || code || `${fallback} (${resp.status})`, code);
+}
+
+/** `fetch` that maps a network failure onto status 0 */
+async function callApi(url: string, init: RequestInit = {}): Promise<Response> {
+  try {
+    return await fetch(url, {
+      ...init,
+      headers: { Accept: 'application/json', ...(init.headers as Record<string, string> | undefined) },
+    });
+  } catch (_e) {
+    throw new CompetitionApiError(0, 'Competitions API unreachable');
+  }
+}
+
+/** Parse a JSON success body, or throw */
+async function jsonBody(resp: Response): Promise<unknown> {
+  try {
+    return await resp.json();
+  } catch (_e) {
+    throw new CompetitionApiError(resp.status, 'Competitions API returned a non-JSON body');
+  }
+}
+
+/** Pull `{items: […]}` through `map`, dropping unusable rows */
+function itemsOf<T>(payload: unknown, map: (raw: unknown) => T | null): T[] {
+  const rows = (payload as { items?: unknown })?.items;
+  if (!Array.isArray(rows)) return [];
+  return rows.map(map).filter((x): x is T => x !== null);
 }
 
 /** Pull the array of rows out of either `[…]` or `{competitions: […]}` */
@@ -549,23 +750,134 @@ export async function extendCompetition(id: string): Promise<PlatformCompetition
 }
 
 /* ════════════════════════════════════════════════════════════════
+   Sharing — access list and the user directory
+   ════════════════════════════════════════════════════════════════ */
+
+function accessUrl(competitionId: string, userId?: string): string {
+  const base = `${COMPETITIONS_API}/${encodeURIComponent(competitionId)}/access`;
+  return userId === undefined ? base : `${base}/${encodeURIComponent(userId)}`;
+}
+
+/**
+ * `GET /api/competitions/{id}/access` (owner/admin) — everyone with access,
+ * owner first. 403 `owner_required` for anyone else.
+ */
+export async function listAccess(competitionId: string): Promise<AccessGrant[]> {
+  const resp = await callApi(accessUrl(competitionId));
+  if (!resp.ok) throw await errorFromResponse(resp, 'Could not load who has access');
+  return itemsOf(await jsonBody(resp), toAccessGrant);
+}
+
+/**
+ * `PUT /api/competitions/{id}/access/{userId}` — share with someone, or change
+ * their role. The owner row and yourself cannot be targeted (400).
+ */
+export async function setAccess(
+  competitionId: string,
+  userId: string,
+  role: ShareRole
+): Promise<AccessGrant> {
+  const resp = await callApi(accessUrl(competitionId, userId), {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ role }),
+  });
+  if (!resp.ok) throw await errorFromResponse(resp, 'Could not share the competition');
+  const grant = toAccessGrant((await jsonBody(resp) as { item?: unknown })?.item);
+  if (!grant) throw new CompetitionApiError(resp.status, 'Competitions API returned an unexpected body');
+  return grant;
+}
+
+/** What `removeAccess` reports back */
+export interface RemoveAccessResult {
+  userId: string;
+  /** True when the caller removed their own access (left the competition) */
+  left: boolean;
+}
+
+/**
+ * `DELETE /api/competitions/{id}/access/{userId}` — the owner takes someone's
+ * access away; `userId` `'me'` is a grantee leaving (see `leaveCompetition`).
+ */
+export async function removeAccess(competitionId: string, userId: string): Promise<RemoveAccessResult> {
+  const resp = await callApi(accessUrl(competitionId, userId), { method: 'DELETE' });
+  if (!resp.ok) throw await errorFromResponse(resp, 'Could not remove the access');
+  let payload: Record<string, unknown> = {};
+  try {
+    payload = (await resp.json()) ?? {};
+  } catch (_e) {
+    // The removal happened; the body is a courtesy
+  }
+  return {
+    userId: typeof payload.userId === 'string' ? payload.userId : userId,
+    left: payload.left === true,
+  };
+}
+
+/** A grantee removes their own access to a competition shared with them */
+export function leaveCompetition(competitionId: string): Promise<RemoveAccessResult> {
+  return removeAccess(competitionId, 'me');
+}
+
+/**
+ * `GET /api/users/search?q=` — signed-in users (at most 8, never yourself).
+ * A complete e-mail address (one `@`, no spaces) is an exact, case-insensitive
+ * match on the e-mail, and the hit carries the full `email`. Anything else
+ * matches a substring of the display *name* only — never the e-mail — and
+ * hits carry `email: null` plus a masked `emailHint`, except people the
+ * caller already shares a competition with, who come with their full e-mail
+ * (show `searchHitEmail(hit)`). Queries shorter than `USER_SEARCH_MIN_CHARS`
+ * resolve to [] without a request; 429 `rate_limited` (per-minute and daily
+ * limits) surfaces as a `CompetitionApiError`.
+ */
+export async function searchUsers(query: string): Promise<UserSearchHit[]> {
+  const q = String(query ?? '').trim();
+  if (q.length < USER_SEARCH_MIN_CHARS) return [];
+  const resp = await callApi(`${USERS_API}/search?q=${encodeURIComponent(q)}`);
+  if (!resp.ok) throw await errorFromResponse(resp, 'User search failed');
+  return itemsOf(await jsonBody(resp), toUserSearchHit);
+}
+
+/** `GET /api/users/recent` — people you have shared with before (quick picks) */
+export async function recentShareUsers(): Promise<UserRef[]> {
+  const resp = await callApi(`${USERS_API}/recent`);
+  if (!resp.ok) throw await errorFromResponse(resp, 'Could not load recent people');
+  return itemsOf(await jsonBody(resp), toUserRef);
+}
+
+/** `GET /api/users/me` — the platform's view of the signed-in user */
+export async function getMe(): Promise<PlatformMe> {
+  const resp = await callApi(`${USERS_API}/me`);
+  if (!resp.ok) throw await errorFromResponse(resp, 'Could not load your account');
+  const payload = await jsonBody(resp);
+  const user = toUserRef(payload);
+  if (!user) throw new CompetitionApiError(resp.status, 'Competitions API returned an unexpected body');
+  return { ...user, isAdmin: (payload as { isAdmin?: unknown }).isAdmin === true };
+}
+
+/* ════════════════════════════════════════════════════════════════
    Tool backend errors about the platform competition
    ════════════════════════════════════════════════════════════════ */
 
 /**
  * Machine codes the tool backends answer when the platform competition behind
- * a request is the problem (they read the platform's clock row directly).
+ * a request is the problem (they read the platform's clock row and access
+ * tables directly).
  */
 export type PlatformErrorCode =
   | 'platform_id_required'
   | 'platform_not_found'
   | 'platform_deleted'
+  | 'platform_read_only'
+  | 'platform_owner_required'
   | 'platform_unavailable';
 
 const PLATFORM_ERROR_STATUS: Record<PlatformErrorCode, number> = {
   platform_id_required: 400,
   platform_not_found: 404,
   platform_deleted: 410,
+  platform_read_only: 403,
+  platform_owner_required: 403,
   platform_unavailable: 503,
 };
 
@@ -589,7 +901,11 @@ export function readPlatformError(status: number, body: string): PlatformErrorCo
   return PLATFORM_ERROR_STATUS[known] === status ? known : null;
 }
 
-/** True for the codes after which the selection should be dropped */
+/**
+ * True for the codes after which the selection should be dropped.
+ * `platform_read_only` and `platform_owner_required` are not: the competition
+ * is still there, the caller just may not do that to it.
+ */
 export function isGoneCompetitionError(code: PlatformErrorCode | null): boolean {
   return code === 'platform_deleted' || code === 'platform_not_found';
 }
@@ -602,7 +918,13 @@ export function platformErrorMessage(code: PlatformErrorCode, label = ''): strin
       return `${name} has been deleted, together with its data. ` +
         'Choose or create another competition in the top bar.';
     case 'platform_not_found':
-      return `${name} no longer exists. Choose or create another competition in the top bar.`;
+      return `${name} no longer exists, or it is no longer shared with you. ` +
+        'Choose or create another competition in the top bar.';
+    case 'platform_read_only':
+      return `You have view-only access to ${label.trim() ? name : 'this competition'}. ` +
+        'Ask the owner for write access to make changes.';
+    case 'platform_owner_required':
+      return "Only the competition's owner can do this.";
     case 'platform_unavailable':
       return "The competition registry can't be reached right now, try again shortly.";
     case 'platform_id_required':
@@ -612,7 +934,9 @@ export function platformErrorMessage(code: PlatformErrorCode, label = ''): strin
 
 /**
  * Re-read the active competition from the registry on app init: keeps a
- * renamed competition current and drops one that has been deleted.
+ * renamed competition current — its `access` and `owner` too, so a role the
+ * owner changed takes effect — and drops one that has been deleted or is no
+ * longer shared with the caller.
  * Silently does nothing when the API is unavailable.
  */
 export async function refreshActiveCompetition(): Promise<PlatformCompetition | null> {
