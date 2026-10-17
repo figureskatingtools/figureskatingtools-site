@@ -45,6 +45,12 @@ def delete(competition_id):
     return fa._delete_competition(make_request("DELETE", route_params={"id": competition_id}))
 
 
+# Routes take only GUID ids; the sweep tests below seed rows directly.
+OLD_ID = "0e0e0e0e-0000-4000-8000-000000000001"
+RECENT_ID = "0e0e0e0e-0000-4000-8000-000000000002"
+LATE_ID = "0e0e0e0e-0000-4000-8000-000000000003"
+
+
 def seed_competition(table, competition_id, code=None, **columns):
     """A COMPETITION row (+ its CODE row) written straight into the table."""
     code = code or f"code-{competition_id}"
@@ -121,18 +127,18 @@ def test_the_deletion_date_is_exposed_on_get_and_list(table):
 
 
 def test_an_old_row_without_a_date_gets_the_legacy_floor(table):
-    seed_competition(table, "old", CreatedUtc="2026-01-02T10:00:00Z")
+    seed_competition(table, OLD_ID, CreatedUtc="2026-01-02T10:00:00Z")
 
-    fetched = payload(fa._get_competition(make_request("GET", route_params={"id": "old"})))
+    fetched = payload(fa._get_competition(make_request("GET", route_params={"id": OLD_ID})))
 
     assert fetched["deletionDate"] == fa.LEGACY_DELETION_FLOOR
 
 
 def test_a_recent_row_without_a_date_keeps_its_60_days_when_later_than_the_floor(table):
     created = datetime(2026, 10, 1, 15, 30, tzinfo=timezone.utc)
-    seed_competition(table, "recent", CreatedUtc=utc(created))
+    seed_competition(table, RECENT_ID, CreatedUtc=utc(created))
 
-    fetched = payload(fa._get_competition(make_request("GET", route_params={"id": "recent"})))
+    fetched = payload(fa._get_competition(make_request("GET", route_params={"id": RECENT_ID})))
 
     assert fetched["deletionDate"] == "2026-11-30T00:00:00Z"
     assert fetched["deletionDate"] > fa.LEGACY_DELETION_FLOOR
@@ -178,9 +184,9 @@ def test_extend_has_no_cap(table):
 
 
 def test_an_overdue_competition_is_extended_from_today(table):
-    seed_competition(table, "late", DeletionDate=EXPIRED)
+    seed_competition(table, LATE_ID, DeletionDate=EXPIRED)
 
-    response = extend("late")
+    response = extend(LATE_ID)
 
     assert payload(response)["deletionDate"] == utc(today() + timedelta(days=7))
 

@@ -73,9 +73,10 @@ class FakeTableClient(_FakeTableClient):
         return [row for (pk, _rk), row in sorted(self.adminlog.rows.items()) if pk == fa.PK_SWEEP]
 
     def access_rows(self, competition_id):
-        """{userId: Role} of one competition's competitionaccess partition."""
+        """{userId: Role} of one competition's competitionaccess partition
+        (the grants only — not the ownership sentinel row)."""
         return {rk: row.get("Role") for (pk, rk), row in self.access.rows.items()
-                if pk == competition_id.lower()}
+                if pk == competition_id.lower() and rk != fa.OWNER_LOCK_ROW_KEY}
 
     def user_id(self, email):
         """The platform userId the e-mail's (test) identity resolved to, or None."""
@@ -106,12 +107,10 @@ class FakeTableClient(_FakeTableClient):
 
 @pytest.fixture(autouse=True)
 def _fresh_process_caches():
-    """The LastSeen throttle and the search rate limit are per-process state."""
+    """The LastSeen throttle is per-process state."""
     fa._LAST_SEEN_WRITES.clear()
-    fa._SEARCH_HITS.clear()
     yield
     fa._LAST_SEEN_WRITES.clear()
-    fa._SEARCH_HITS.clear()
 
 
 @pytest.fixture
