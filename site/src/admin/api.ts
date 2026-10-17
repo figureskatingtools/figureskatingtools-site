@@ -2,8 +2,9 @@
  * Client for the admin API.
  *
  * Two backends answer it:
- *  - the platform Function App under `/api/manage/*` (competitions, the dry-run
- *    sweep, platform diagnostics, the audit log) — proxied by the router only
+ *  - the platform Function App under `/api/manage/*` (competitions and their
+ *    owners, users, the dry-run sweep, platform diagnostics, the audit log) —
+ *    proxied by the router only
  *    for admins, and checked again by the platform itself;
  *  - the router itself at `/admin/api/diagnostics` (build, uptime, backend
  *    health, configuration as booleans).
@@ -27,6 +28,30 @@ export interface AdminClock {
   purgedUtc: string | null;
 }
 
+/** A user as the platform's directory knows them */
+export interface AdminUserRef {
+  userId: string;
+  name: string;
+  email: string;
+}
+
+/** One row of a competition's access list (owner first) */
+export interface AdminGrant extends AdminUserRef {
+  role: 'owner' | 'write' | 'read';
+}
+
+/** A row of `GET /api/manage/users` */
+export interface AdminUser extends AdminUserRef {
+  firstSeenUtc: string | null;
+  lastSeenUtc: string | null;
+  /** Competitions this user owns */
+  owned: number;
+  /** Competitions shared with this user (read or write) */
+  shared: number;
+  /** Linked sign-in identities (Entra tenant + object id pairs) */
+  identities: number;
+}
+
 /** A competition as the admin API reports it — tombstones included */
 export interface AdminCompetition {
   id: string;
@@ -37,8 +62,10 @@ export interface AdminCompetition {
   startDate: string;
   endDate: string | null;
   venue: string;
-  /** Owner e-mail */
+  /** E-mail of whoever created it — history only; the owner is `owner` */
   createdBy: string | null;
+  /** The access owner (list rows); null when nobody owns it, undefined when not reported */
+  owner?: AdminUserRef | null;
   createdUtc: string;
   updatedUtc: string;
   /** `YYYY-MM-DDT00:00:00Z` */
@@ -66,6 +93,14 @@ export interface AdminCompetitionDetail {
   competition: AdminCompetition;
   files: { count: number; bytes: number };
   hovtp: HovtpCounts;
+  /** Everyone with access, owner first */
+  access: AdminGrant[];
+}
+
+/** What `PUT …/{id}/owner` answers */
+export interface AdminOwnerChange {
+  competition: AdminCompetition;
+  access: AdminGrant[];
 }
 
 /** Fields an admin can change. Only the keys present are sent. */
@@ -75,7 +110,6 @@ export interface AdminCompetitionPatch {
   startDate?: string;
   endDate?: string;
   venue?: string;
-  createdBy?: string;
   /** `YYYY-MM-DD`, on or after tomorrow (UTC) */
   deletionDate?: string;
 }
@@ -87,6 +121,8 @@ export interface AuditEntry {
   action: string;
   competitionId: string | null;
   competitionCode: string | null;
+  /** E-mail of the user an access change was about (share, revoke, owner change) */
+  target: string | null;
   changes: Record<string, [unknown, unknown]>;
   outcome: string;
 }
@@ -223,7 +259,41 @@ export function toAdminCompetition(raw: unknown): AdminCompetition | null {
     deletedUtc: strOrNull(r.deletedUtc),
     purgedUtc: strOrNull(r.purgedUtc),
     clock: toClock(r.clock),
+    ...(r.owner === null ? { owner: null } : r.owner !== undefined ? { owner: toAdminUserRef(r.owner) } : {}),
     raw: r,
+  };
+}
+
+export function toAdminUserRef(raw: unknown): AdminUserRef | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const userId = str(r.userId);
+  if (!userId) return null;
+  return { userId, name: str(r.name), email: str(r.email) };
+}
+
+export function toAdminGrant(raw: unknown): AdminGrant | null {
+  const user = toAdminUserRef(raw);
+  const role = (raw as { role?: unknown } | null)?.role;
+  if (!user || (role !== 'owner' && role !== 'write' && role !== 'read')) return null;
+  return { ...user, role };
+}
+
+function toGrantList(raw: unknown): AdminGrant[] {
+  return Array.isArray(raw) ? raw.map(toAdminGrant).filter((g): g is AdminGrant => g !== null) : [];
+}
+
+export function toAdminUser(raw: unknown): AdminUser | null {
+  const user = toAdminUserRef(raw);
+  if (!user) return null;
+  const r = raw as Record<string, unknown>;
+  return {
+    ...user,
+    firstSeenUtc: strOrNull(r.firstSeenUtc),
+    lastSeenUtc: strOrNull(r.lastSeenUtc),
+    owned: num(r.owned),
+    shared: num(r.shared),
+    identities: num(r.identities),
   };
 }
 
@@ -255,6 +325,7 @@ function toAuditEntry(raw: unknown): AuditEntry | null {
     action: str(r.action),
     competitionId: strOrNull(r.competitionId),
     competitionCode: strOrNull(r.competitionCode),
+    target: strOrNull(r.target),
     changes,
     outcome: str(r.outcome),
   };
@@ -332,11 +403,27 @@ export async function listAdminCompetitions(status: AdminStatusFilter): Promise<
 /** `GET /api/manage/competitions/{id}` */
 export async function getAdminCompetition(id: string): Promise<AdminCompetitionDetail> {
   const payload = await call(competitionUrl(id), 'Could not load the competition');
-  const p = payload as { files?: { count?: unknown; bytes?: unknown }; hovtp?: unknown };
+  const p = payload as { files?: { count?: unknown; bytes?: unknown }; hovtp?: unknown; access?: unknown };
   return {
     competition: requireCompetition(payload),
     files: { count: num(p?.files?.count), bytes: num(p?.files?.bytes) },
     hovtp: toHovtpCounts(p?.hovtp),
+    access: toGrantList(p?.access),
+  };
+}
+
+/**
+ * `PUT …/{id}/owner` `{userId}` — hands the competition to another user in one
+ * table transaction; the previous owner keeps write access.
+ */
+export async function setAdminOwner(id: string, userId: string): Promise<AdminOwnerChange> {
+  const payload = await call(competitionUrl(id, '/owner'), 'Could not change the owner', {
+    method: 'PUT',
+    body: { userId },
+  });
+  return {
+    competition: requireCompetition(payload),
+    access: toGrantList((payload as { access?: unknown })?.access),
   };
 }
 
@@ -378,6 +465,18 @@ export async function deleteAdminCompetition(id: string): Promise<AdminCompetiti
   return requireCompetition(
     await call(competitionUrl(id), 'Could not delete the competition', { method: 'DELETE' })
   );
+}
+
+/* ════════════════════════════════════════════════════════════════
+   Users
+   ════════════════════════════════════════════════════════════════ */
+
+/** `GET /api/manage/users` — everyone who has signed in (the user directory) */
+export async function listAdminUsers(): Promise<AdminUser[]> {
+  const payload = await call(`${MANAGE_API}/users`, 'Could not list users');
+  const rows = (payload as { users?: unknown })?.users;
+  if (!Array.isArray(rows)) return [];
+  return rows.map(toAdminUser).filter((u): u is AdminUser => u !== null);
 }
 
 /* ════════════════════════════════════════════════════════════════

@@ -520,3 +520,51 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* ── Access card: read-only "Created by" and the "Change owner…" type-ahead ── */
+.adm-readonly {
+  font-weight: 400;
+  font-size: 0.92rem;
+  color: var(--ink);
+  padding: 0.25rem 0;
+}
+
+.adm-combo {
+  position: relative;
+}
+
+.adm-combo-list {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 0.25rem);
+  z-index: 5;
+  margin: 0;
+  padding: 0.25rem 0;
+  list-style: none;
+  max-height: 16rem;
+  overflow-y: auto;
+  background: var(--paper);
+  border: 1px solid var(--line-strong);
+  border-radius: 0.5rem;
+  box-shadow: 0 12px 32px -8px rgb(13 31 51 / 0.18);
+}
+
+.adm-combo-item {
+  display: flex;
+  flex-direction: column;
+  padding: 0.45rem 0.7rem;
+  font-weight: 400;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.adm-combo-item:hover,
+.adm-combo-item--active {
+  background: var(--rink-tint);
+}
+
+.adm-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
