@@ -17,6 +17,7 @@ site root/
 
 | Order | Match | Behaviour |
 | --- | --- | --- |
+| 0 | any path with a dot segment (`.`/`..`, also `%2e`-encoded), an encoded separator (`%2F`, `%5C`, also double-encoded), a backslash, NUL or an undecodable escape | `400 Bad Request` before any routing (`isUnsafePath`). Everything below then matches only the **canonical** path — decoded, double slashes collapsed (`canonicalPath`) — and the proxy and the static server get exactly that path re-encoded segment by segment (`encodePath`), never the raw one. |
 | 1 | `/health` | `200 {"ok":true}`. Assumes nothing about auth — list it in Easy Auth `globalValidation.excludedPaths`. |
 | 2 | `/userinfo` | Flat user object decoded from the Easy Auth `X-MS-CLIENT-PRINCIPAL` header (no tokens are ever exposed). Every signed-in shape carries `isAdmin` (see [Admins](#admins)). A principal without `oid`/`tid` claims (or only a bare `X-MS-CLIENT-PRINCIPAL-NAME`) is `{"authenticated":false}`; one from a tenant outside `ALLOWED_TENANT_IDS` is `403 {"error":"tenant_not_allowed"}` (see [Identity](#identity)). |
 | 3 | `/changelog-live?branch=main\|test` | Merged, server-cached GitHub commit feed for the home page's "What's New" panel (see below). |
@@ -26,10 +27,10 @@ site root/
 | 4d | `/`, `/index.html` | Signed in — an Easy Auth principal header, the Easy Auth session cookie `AppServiceAuthSession*`, or `DEV_FAKE_USER` — gets the home page; anyone else the static public landing page `public/landing/index.html` (falls back to the home page if the build has none). Both carry `Vary: Cookie`. The cookie check is needed because these are Easy Auth `excludedPaths`, where the platform injects no principal headers. Only decides which document is shown: the home page's `/userinfo` and the APIs stay gated, so a stale or forged cookie ends on its sign-in view. `/`, `/index.html`, `/landing/*`, `/assets/*` (open-source bundles, no data), `/favicon.png`, `/apple-touch-icon.png`, `/robots.txt` and `/llms.txt` are `excludedPaths`. |
 | 4e | `/admin/api/diagnostics` | Router-native, admins only (`403 {"error":"admin_required"}` otherwise; other `/admin/api/*` paths `404` JSON). See [Admins](#admins). |
 | 4f | `/admin`, `/admin/*` | The admin panel document (`public/admin/index.html`, deep links fall back to it, `Vary: Cookie`) for admins; a plain `404` for everyone else, so the page does not advertise itself. Matched on the decoded, normalised path (`/%61dmin/`, `//admin/` are gated too). Base CSP: `admin` is a document prefix, not a tool. |
-| 5 | `/<tool>/api/*` | Identity required ([Identity](#identity)): `401 {"error":"unauthorized"}` without one, `403 {"error":"tenant_not_allowed"}` for a foreign tenant, never proxied. Then proxied to that tool's Function App with the `/<tool>` prefix **stripped**: `/judgepapers/api/upload_file` → `$FUNCTION_APP_URL_JUDGEPAPERS/api/upload_file`. Backends keep their default `/api` route prefix — zero backend route changes. |
-| 5b | `/tools/gdpr/api/*` | Identity required, like 5. Proxied to the GDPR removal tool's Function App (`fs-gdpr-tool`) with `/tools/gdpr` **stripped** (`SMALL_TOOL_APIS` in `server.js`). The page itself, `/tools/gdpr/`, is a plain static document. |
-| 6a | `/api/manage/*` | Admin-only platform routes. Non-admins get `403 {"error":"admin_required"}` without any proxying; a non-`GET`/`HEAD` request must also be same-origin (`Sec-Fetch-Site: same-origin`, or an `Origin` whose host is the request's `Host`), else `403 {"error":"cross_site"}`. Admins are proxied like 6. Matched case-insensitively on the decoded, normalised path, like the Functions host routes. The platform checks the admin again with its own `ADMIN_EMAILS`. |
-| 6 | `/api/*` | Identity required, like 5. Proxied to the platform Function App (competitions registry). |
+| 5 | `/<tool>/api/*` | A non-`GET`/`HEAD` request must be same-origin ([CSRF](#csrf)), else `403 {"error":"cross_site"}`, never proxied. Identity required ([Identity](#identity)): `401 {"error":"unauthorized"}` without one, `403 {"error":"tenant_not_allowed"}` for a foreign tenant, never proxied. Then proxied to that tool's Function App with the `/<tool>` prefix **stripped**: `/judgepapers/api/upload_file` → `$FUNCTION_APP_URL_JUDGEPAPERS/api/upload_file`. Backends keep their default `/api` route prefix — zero backend route changes. |
+| 5b | `/tools/gdpr/api/*` | Same-origin check and identity required, like 5. Proxied to the GDPR removal tool's Function App (`fs-gdpr-tool`) with `/tools/gdpr` **stripped** (`SMALL_TOOL_APIS` in `server.js`). The page itself, `/tools/gdpr/`, is a plain static document. |
+| 6a | `/api/manage/*` | Admin-only platform routes. Non-admins get `403 {"error":"admin_required"}` without any proxying. Admins are proxied like 6 (same-origin check included). Matched case-insensitively on the decoded, normalised path, like the Functions host routes. The platform checks the admin again with its own `ADMIN_EMAILS`. |
+| 6 | `/api/*` | Same-origin check and identity required, like 5. Proxied to the platform Function App (competitions registry). |
 | 7 | `/<tool>` | `301` → `/<tool>/` (query string preserved). |
 | 8 | anything else | Static file from `public/`, else a **per-prefix** SPA fallback. This is also how the public privacy notice (`/privacy/`, `/tietosuoja/`) and the self-hosted fonts (`/fonts/*`) are served: plain static files, the same for everyone, reachable signed out because `/privacy`, `/privacy/*`, `/tietosuoja`, `/tietosuoja/*` and `/fonts/*` are Easy Auth `excludedPaths`. |
 
@@ -47,7 +48,8 @@ site root/
   `application/javascript`.
 - Requests resolving to a directory without a trailing slash `301` to the
   slashed form.
-- Paths escaping `public/` are refused with `403`.
+- Paths escaping `public/` are refused with `403` (unreachable in practice:
+  dot segments are a `400` before routing).
 
 ### Proxy behaviour
 
@@ -62,10 +64,12 @@ site root/
     through this proxy (the Function Apps are publicly reachable).
   - `x-forwarded-user-tid` / `x-forwarded-user-oid` — the Entra tenant and
     object id (lowercase GUIDs). The **identity**: backends authorise on these.
-  - `x-forwarded-user-email` — the e-mail, lowercased and trimmed, from the
+  - `x-forwarded-user-email` — the e-mail, trimmed and lowercased, from the
     principal's `userDetails` (falling back to the `preferred_username` /
     `email` claim). Display and audit only. Left out when it is not printable
-    ASCII (a header cannot carry it).
+    ASCII — tested **before** lowercasing, since `toLowerCase()` folds some
+    non-ASCII letters into ASCII (U+212A KELVIN SIGN → `k`). A non-ASCII
+    e-mail is no e-mail at all: it is never forwarded and never an admin.
   - `x-forwarded-user-name` — the `name` claim, `encodeURIComponent`-encoded
     (names are often non-ASCII); left out when there is none.
   - `x-forwarded-user-admin: 1` — only when `isAdminRequest` is true.
@@ -77,6 +81,19 @@ site root/
   `{"error":"proxy_target_not_configured","tool":"scoremodifier","message":"… set FUNCTION_APP_URL_SCOREMODIFIER."}`
 - `http://` targets are supported (local `func start`), `https://` targets use
   port 443 by default.
+
+### CSRF
+
+Every non-`GET`/`HEAD` request to a proxied API (`/api/*`, `/<tool>/api/*`,
+`/tools/gdpr/api/*` — `OPTIONS` included) must be same-origin
+(`isSameOriginRequest`): `Sec-Fetch-Site: same-origin`, or — only when the
+browser sends no `Sec-Fetch-Site` at all — an `Origin` whose host is the
+request's `Host`. Any other `Sec-Fetch-Site` value (`cross-site`,
+`same-site`, `none`) is refused even with a matching `Origin`, and so is a
+request with neither header. Refused: `403 {"error":"cross_site"}` with
+`Connection: close`, checked before the identity gate, nothing proxied.
+`GET`/`HEAD` are never checked (reads; the other site cannot read the
+answer).
 
 ### Identity
 
@@ -96,7 +113,7 @@ site root/
 ### Admins
 
 - `ADMIN_EMAILS` (comma-separated, trimmed, compared lowercased) lists the
-  admins. Empty means nobody.
+  admins; an entry that is not printable ASCII is dropped. Empty means nobody.
 - `isAdminRequest` needs the same identity the APIs need (oid + tid, an allowed
   tenant — or `DEV_FAKE_USER`, off under `NODE_ENV=production`) and then its
   lowercased e-mail in `ADMIN_EMAILS`. A bare `X-MS-CLIENT-PRINCIPAL-NAME`, or
