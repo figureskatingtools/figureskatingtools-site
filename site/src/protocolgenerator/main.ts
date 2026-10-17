@@ -33,11 +33,15 @@ import {
   type StructureLike,
   type TrayReason,
   type PoolFile,
+  DOWNLOAD_LINK_UNAVAILABLE,
+  isDownloadLinkStale,
+  openFreshDownload,
+  usableDownloadUrl,
 } from '@figureskatingtools/shared-ui';
-import type { CompetitionDetails, Structure, Category, Segment, SlotTarget, FileMeta,
+import type { CompetitionDetails, GeneratedFile, Structure, Category, Segment, SlotTarget, FileMeta,
   NameMode, TeamPageSettings, TeamTextField } from './types';
 import { attachPreview } from './preview';
-import { escapeHtml, fetchUser, renderSignInView, setupUserMenu, type UserInfo } from '../shell.js';
+import { escapeAttr, escapeHtml, fetchUser, renderSignInView, setupUserMenu, type UserInfo } from '../shell.js';
 
 /** Where this app lives on the site — login round-trips back into it. */
 const APP_PATH = '/protocolgenerator/';
@@ -68,6 +72,8 @@ let boundLabel: string | null = null;
 /** Guards against an out-of-order resolve when the selection changes mid-flight. */
 let bindToken = 0;
 let details: CompetitionDetails | null = null;
+/** When `details` was fetched (epoch ms) — its download links live 15 minutes */
+let detailsFetchedAt = 0;
 /** Why the selection was dropped (deleted / no longer exists) — shown once on the pick card */
 let deletedNotice: string | null = null;
 /** Files in the platform competition pool; null = unbound or pool unavailable. */
@@ -337,7 +343,8 @@ async function failureText(resp: Response): Promise<string> {
   const text = await resp.text();
   const code = readPlatformError(resp.status, text);
   if (!code) return text;
-  if (code === 'platform_read_only') void refreshActiveCompetition();
+  // The role changed since the page loaded (view-only now, or no longer the owner)
+  if (code === 'platform_read_only' || code === 'platform_owner_required') void refreshActiveCompetition();
   return platformErrorMessage(code, boundLabel ?? '');
 }
 
@@ -452,6 +459,7 @@ async function loadDetails() {
     const resp = await apiGet(`/get_competition_details?id=${encodeURIComponent(currentId)}`);
     if (!resp.ok) throw new Error(String(resp.status));
     details = await resp.json();
+    detailsFetchedAt = Date.now();
     await refreshPoolFiles();
     renderDetails();
   } catch {
@@ -916,15 +924,7 @@ function renderDetails() {
            s.scheduleParsed ? 'Replace from it' : 'Use it'}</button></p>`
     : '';
 
-  const gen = details.generatedFiles || [];
-  const genHtml = gen.length ? gen.map(g => `
-      <div class="gen-file">
-        <a class="gen-file-link" href="${g.url}" target="_blank" rel="noopener noreferrer">
-          <span>${escapeHtml(g.fileName)}</span>
-          <span class="gen-badge">${g.size ? Math.round(Number(g.size) / 1024) + ' KB' : ''}</span>
-        </a>
-        <button class="btn btn-xs btn-ghost btn-ghost--danger" data-del-protocol="${escapeHtml(g.fileName)}" title="Delete this protocol">×</button>
-      </div>`).join('') : '<p class="section-sub">No protocol generated yet.</p>';
+  const genHtml = generatedListHtml(details.generatedFiles || []);
 
   document.getElementById('detail-body')!.innerHTML = `
     <div class="section">
@@ -1065,7 +1065,7 @@ function renderDetails() {
       placed automatically (<span class="chip-auto">auto</span>) — check they sit in the right slots
       before generating. Dragging a file by hand confirms it and clears the tag.</p>` : ''}
     <div class="action-bar">
-      <div class="gen-list">${genHtml}</div>
+      <div class="gen-list" id="gen-list">${genHtml}</div>
       <button class="btn btn-primary btn-generate" id="btn-generate">Generate Protocol</button>
     </div>
   `;
@@ -1335,9 +1335,9 @@ function wireDetail() {
     syncPoolImportButton();
   });
 
-  // Delete a generated protocol file.
-  body.querySelectorAll<HTMLElement>('[data-del-protocol]').forEach(b =>
-    b.addEventListener('click', () => deleteProtocol(b.dataset.delProtocol!)));
+  // Generated protocols: delete, and download links that may need a fresh
+  // signature. Delegated, so a list re-rendered after a refresh keeps working.
+  document.getElementById('gen-list')?.addEventListener('click', onGenListClick);
 
   // Footer band toggle.
   document.getElementById('footer-enabled')?.addEventListener('change', e => {
@@ -1348,6 +1348,79 @@ function wireDetail() {
 
   // Generate.
   document.getElementById('btn-generate')?.addEventListener('click', generate);
+}
+
+// ── generated protocols ──
+/** The generated protocols list. A file without a signed link is shown, unlinked, with a hint. */
+function generatedListHtml(gen: GeneratedFile[]): string {
+  if (!gen.length) return '<p class="section-sub">No protocol generated yet.</p>';
+  return gen.map(g => {
+    const url = usableDownloadUrl(g.url);
+    const name = `<span>${escapeHtml(g.fileName)}</span>`;
+    const size = `<span class="gen-badge">${g.size ? Math.round(Number(g.size) / 1024) + ' KB' : ''}</span>`;
+    const link = url
+      ? `<a class="gen-file-link" href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer"
+            data-gen-file="${escapeAttr(g.fileName)}" data-expiration="${escapeAttr(g.expiration ?? '')}">
+          ${name}${size}
+        </a>`
+      : `<div class="gen-file-link gen-file-link--unavailable">
+          ${name}<span class="gen-file-unavailable">${escapeHtml(DOWNLOAD_LINK_UNAVAILABLE)}</span>
+        </div>`;
+    return `
+      <div class="gen-file">
+        ${link}
+        <button class="btn btn-xs btn-ghost btn-ghost--danger" data-del-protocol="${escapeAttr(g.fileName)}" title="Delete this protocol">×</button>
+      </div>`;
+  }).join('');
+}
+
+function renderGeneratedList(): void {
+  const list = document.getElementById('gen-list');
+  if (list && details) list.innerHTML = generatedListHtml(details.generatedFiles || []);
+}
+
+function onGenListClick(e: MouseEvent): void {
+  const target = e.target as Element;
+  const del = target.closest<HTMLElement>('[data-del-protocol]');
+  if (del) { deleteProtocol(del.dataset.delProtocol!); return; }
+
+  const link = target.closest<HTMLAnchorElement>('a[data-gen-file]');
+  if (!link || !isDownloadLinkStale(detailsFetchedAt, link.dataset.expiration)) return;
+  // The link is (nearly) expired: fetch fresh ones, then open this file's
+  e.preventDefault();
+  const fileName = link.dataset.genFile!;
+  void openFreshDownload({
+    newTab: true,
+    refresh: async () => (await refreshGeneratedFiles())?.find(g => g.fileName === fileName)?.url,
+    onUnavailable: () => markGeneratedUnavailable(fileName),
+  });
+}
+
+/**
+ * Re-read the competition's generated protocols (same call as `loadDetails`)
+ * and re-render only that list, leaving the rest of the view — and any unsaved
+ * input — alone. Null when the fetch failed or another competition was opened.
+ */
+async function refreshGeneratedFiles(): Promise<GeneratedFile[] | null> {
+  const id = currentId;
+  if (!id) return null;
+  const resp = await apiGet(`/get_competition_details?id=${encodeURIComponent(id)}`);
+  if (!resp.ok) return null;
+  const fresh: CompetitionDetails = await resp.json();
+  if (currentId !== id || !details) return null;
+  details.generatedFiles = fresh.generatedFiles || [];
+  detailsFetchedAt = Date.now();
+  renderGeneratedList();
+  return details.generatedFiles;
+}
+
+/** No fresh link for this file: show it unlinked, with the hint */
+function markGeneratedUnavailable(fileName: string): void {
+  const item = details?.generatedFiles?.find(g => g.fileName === fileName);
+  if (!item) return;   // gone from the fresh listing: the re-rendered list already shows that
+  item.url = null;
+  item.expiration = null;
+  renderGeneratedList();
 }
 
 function deleteProtocol(fileName: string) {

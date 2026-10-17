@@ -963,6 +963,10 @@ input[type="checkbox"] { accent-color: var(--ink); }
   font-size: 0.85rem;
 }
 .gen-file-link:hover { background: #ddebf6; }
+/* A protocol whose download link could not be signed: listed, not linked */
+.gen-file-link--unavailable { align-items: center; gap: 0.75rem; color: var(--ink-muted); cursor: default; }
+.gen-file-link--unavailable:hover { background: var(--rink-tint); }
+.gen-file-unavailable { font-weight: 400; font-size: 0.75rem; color: var(--ink-muted); white-space: nowrap; }
 .gen-badge { font-family: var(--font-mono); font-size: 0.68rem; color: var(--ink-muted); }
 .btn-generate { min-width: 220px; height: 3.1rem; display: flex; align-items: center; justify-content: center; }
 

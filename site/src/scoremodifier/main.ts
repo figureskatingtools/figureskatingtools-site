@@ -16,6 +16,8 @@ import {
     competitionLabel,
     formatDateFi,
     type PlatformCompetition,
+    DOWNLOAD_EXPIRY_MARGIN_MS,
+    usableDownloadUrl,
 } from '@figureskatingtools/shared-ui';
 import {
     escapeHtml,
@@ -226,8 +228,40 @@ function escapeAttr(s: string): string {
 
 function downloadLink(url: string, fileName: string, label: string, primary = true): string {
     const cls = primary ? 'btn btn-primary' : 'btn btn-secondary';
-    return `<a class="${cls}" href="${escapeAttr(url)}" download="${escapeAttr(fileName)}">${escapeHtml(label)}</a>`;
+    return `<a class="${cls}" href="${escapeAttr(url)}" download="${escapeAttr(fileName)}" data-expiring-link>${escapeHtml(label)}</a>`;
 }
+
+/**
+ * The download links of a result are short-lived (15 min from generation).
+ * One clicked after `RESULT_LINK_MAX_AGE_MS`, or within a minute of its
+ * `expiration`, is not followed: generating again is the only way to a new
+ * link, and that is the user's call, so the link turns into a note.
+ */
+const RESULT_LINK_MAX_AGE_MS = 14 * 60 * 1000;
+/** When the shown result arrived (epoch ms), and when its links expire (ISO, if reported) */
+let resultReceivedAt = 0;
+let resultExpiration: string | null = null;
+
+function noteResultReceived(data: GenerateResult): void {
+    resultReceivedAt = Date.now();
+    resultExpiration = data.expiration ?? null;
+}
+
+function resultLinksExpired(now = Date.now()): boolean {
+    if (!resultReceivedAt || now - resultReceivedAt > RESULT_LINK_MAX_AGE_MS) return true;
+    const expires = resultExpiration ? Date.parse(resultExpiration) : NaN;
+    return Number.isFinite(expires) && expires - now <= DOWNLOAD_EXPIRY_MARGIN_MS;
+}
+
+const LINK_EXPIRED_HTML = '<span class="text-muted link-expired">Link expired — generate again</span>';
+
+// One delegated listener: the result area is re-rendered on every generate
+document.addEventListener('click', (e) => {
+    const link = (e.target as Element | null)?.closest?.<HTMLAnchorElement>('a[data-expiring-link]');
+    if (!link || !resultLinksExpired()) return;
+    e.preventDefault();
+    link.outerHTML = LINK_EXPIRED_HTML;
+});
 
 /**
  * The selected platform competition, sent as `platformId` on every generate
@@ -298,15 +332,17 @@ async function runPerSkater(requested: PlatformCompetition) {
         return;
     }
     const data: GenerateResult = await resp.json();
-    if (!data.downloadUrl) {
+    const downloadUrl = usableDownloadUrl(data.downloadUrl);
+    if (!downloadUrl) {
         showError('Generated, but no download link was returned.');
         return;
     }
+    noteResultReceived(data);
     resultArea.innerHTML = `
         <div class="result-card">
             <p class="status-success">Done — ${data.pages} page${data.pages === 1 ? '' : 's'} created.</p>
             <p class="text-muted">${escapeHtml(data.name)}</p>
-            ${downloadLink(data.downloadUrl, data.fileName, `Download ${data.fileName}`)}
+            ${downloadLink(downloadUrl, data.fileName, `Download ${data.fileName}`)}
         </div>`;
 }
 
@@ -336,19 +372,25 @@ async function runResults(requested: PlatformCompetition) {
         return;
     }
     const data: GenerateResult = await resp.json();
-    if (!data.downloadUrl) {
+    const downloadUrl = usableDownloadUrl(data.downloadUrl);
+    if (!downloadUrl) {
         showError('Generated, but no download link was returned.');
         return;
     }
-    const htmlBtn = data.htmlUrl && data.htmlFileName
-        ? downloadLink(data.htmlUrl, data.htmlFileName, `Download ${data.htmlFileName}`, false)
+    noteResultReceived(data);
+    // The HTML page's link can fail to sign on its own: say so instead of a dead button
+    const htmlUrl = usableDownloadUrl(data.htmlUrl);
+    const htmlBtn = data.htmlFileName
+        ? (htmlUrl
+            ? downloadLink(htmlUrl, data.htmlFileName, `Download ${data.htmlFileName}`, false)
+            : `<span class="text-muted">${escapeHtml(data.htmlFileName)}: link unavailable — generate again</span>`)
         : '';
     resultArea.innerHTML = `
         <div class="result-card">
             <p class="status-success">Results page created.</p>
             <p class="text-muted">${escapeHtml(data.name)}</p>
             <div class="result-actions">
-                ${downloadLink(data.downloadUrl, data.fileName, `Download ${data.fileName}`)}
+                ${downloadLink(downloadUrl, data.fileName, `Download ${data.fileName}`)}
                 ${htmlBtn}
             </div>
         </div>`;

@@ -479,6 +479,23 @@ export async function listAdminUsers(): Promise<AdminUser[]> {
   return rows.map(toAdminUser).filter((u): u is AdminUser => u !== null);
 }
 
+/** Shortest query `searchAdminUsers` sends — the API answers 400 `query_too_short` below it */
+export const ADMIN_USER_SEARCH_MIN_CHARS = 3;
+
+/**
+ * `GET /api/manage/users?q=` — users whose name *or* e-mail contains `query`
+ * (at most 8, full e-mails, the admin themselves included). Shorter queries
+ * resolve to [] without a request.
+ */
+export async function searchAdminUsers(query: string): Promise<AdminUserRef[]> {
+  const q = String(query ?? '').trim();
+  if (q.length < ADMIN_USER_SEARCH_MIN_CHARS) return [];
+  const payload = await call(`${MANAGE_API}/users?q=${encodeURIComponent(q)}`, 'User search failed');
+  const rows = (payload as { users?: unknown })?.users;
+  if (!Array.isArray(rows)) return [];
+  return rows.map(toAdminUserRef).filter((u): u is AdminUserRef => u !== null);
+}
+
 /* ════════════════════════════════════════════════════════════════
    Sweep, diagnostics, audit
    ════════════════════════════════════════════════════════════════ */

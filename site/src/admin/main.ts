@@ -21,9 +21,7 @@ import {
   renderSiteNav,
   retentionInfo,
   revokeHovtpSource,
-  searchUsers,
   setActiveCompetition,
-  USER_SEARCH_MIN_CHARS,
   type AcceptDays,
   type HovtpSource,
   type PlatformCompetition,
@@ -31,6 +29,7 @@ import {
 } from '@figureskatingtools/shared-ui'
 import { escapeHtml, fetchUser, renderSignInView, setupUserMenu, type UserInfo } from '../shell.js'
 import {
+  ADMIN_USER_SEARCH_MIN_CHARS,
   AdminApiError,
   deleteAdminCompetition,
   getAdminCompetition,
@@ -42,6 +41,7 @@ import {
   purgeAdminCompetition,
   restoreAdminCompetition,
   runDryRunSweep,
+  searchAdminUsers,
   setAdminOwner,
   updateAdminCompetition,
   type AdminCompetition,
@@ -135,7 +135,7 @@ const ERROR_TEXT: Record<string, string> = {
   user_not_found: 'That user is no longer in the user directory.',
   created_by_read_only: '“Created by” is history and cannot be changed. Use Change owner instead.',
   query_too_short: 'Type at least 3 characters.',
-  rate_limited: 'Too many searches — wait a moment and try again.',
+  rate_limited: 'Too many searches — try again later.',
   conflict: 'The access list changed at the same time. Reload and try again.',
   invalid_status: 'Unknown status filter.',
   invalid_limit: 'Invalid page size.',
@@ -786,7 +786,7 @@ function accessHtml(access: AdminGrant[], busy: boolean): string {
                    aria-controls="adm-owner-results" aria-describedby="adm-owner-hint" ${disabled}>
             <ul id="adm-owner-results" class="adm-combo-list" role="listbox" aria-label="Matching users" hidden></ul>
           </div>
-          <small class="adm-hint" id="adm-owner-hint" aria-live="polite">Type at least ${USER_SEARCH_MIN_CHARS} characters of a name or e-mail. The current owner keeps edit access.</small>
+          <small class="adm-hint" id="adm-owner-hint" aria-live="polite">Type at least ${ADMIN_USER_SEARCH_MIN_CHARS} characters of a name or e-mail. The current owner keeps edit access.</small>
         </div>
         <div class="adm-form-actions">
           <button type="submit" class="btn btn-primary btn-sm" data-owner-submit disabled>Make owner</button>
@@ -868,13 +868,13 @@ function bindOwnerPicker(root: HTMLElement, detail: DetailState, c: AdminCompeti
     const mine = ++seq;
     hint.textContent = 'Searching…';
     try {
-      const found = await searchUsers(query);
+      const found = await searchAdminUsers(query);
       if (mine !== seq) return;
       results = found;
       render();
       hint.textContent = found.length
         ? `${found.length} ${found.length === 1 ? 'match' : 'matches'} — arrow keys and Enter pick one.`
-        : 'Nobody matches. Users appear once they have signed in. (Search never lists yourself — use Make me the owner.)';
+        : 'Nobody matches. Users appear once they have signed in.';
     } catch (err) {
       if (mine !== seq) return;
       results = [];
@@ -887,7 +887,7 @@ function bindOwnerPicker(root: HTMLElement, detail: DetailState, c: AdminCompeti
     if (picked && input.value !== userLabel(picked)) pick(null);
     if (timer !== null) window.clearTimeout(timer);
     const query = input.value.trim();
-    if (query.length < USER_SEARCH_MIN_CHARS) {
+    if (query.length < ADMIN_USER_SEARCH_MIN_CHARS) {
       seq++;
       results = [];
       close();

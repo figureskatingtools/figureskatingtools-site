@@ -41,8 +41,11 @@ import {
   recentShareUsers,
   refreshActiveCompetition,
   removeAccess,
+  searchHitEmail,
   searchUsers,
   setAccess,
+  toUserSearchHit,
+  userRefToSearchHit,
   USERS_API,
   type PlatformCompetition,
 } from '../src/competition.js';
@@ -556,6 +559,19 @@ describe('platform errors from the tool backends', () => {
     expect(readPlatformError(400, 'platform_id_required')).toBe('platform_id_required');
   });
 
+  it('reads the owner-only refusal (403) in both body shapes', () => {
+    expect(readPlatformError(403, '{"error":"platform_owner_required"}')).toBe('platform_owner_required');
+    expect(readPlatformError(403, '{"error": "platform_owner_required", "message": "x"}'))
+      .toBe('platform_owner_required');
+    expect(readPlatformError(403, 'platform_owner_required')).toBe('platform_owner_required');
+    expect(readPlatformError(403, 'platform_owner_required: only the owner may delete')).toBe('platform_owner_required');
+    // The status must match: another status is not this code
+    expect(readPlatformError(401, '{"error":"platform_owner_required"}')).toBeNull();
+    expect(readPlatformError(410, 'platform_owner_required')).toBeNull();
+    // …and it stays distinct from the view-only refusal on the same status
+    expect(readPlatformError(403, 'platform_read_only')).toBe('platform_read_only');
+  });
+
   it('ignores other codes, free text and a status that does not match', () => {
     expect(readPlatformError(404, 'Competition not found')).toBeNull();
     expect(readPlatformError(404, '{"error":"not_found"}')).toBeNull();
@@ -568,6 +584,8 @@ describe('platform errors from the tool backends', () => {
     expect(isGoneCompetitionError('platform_deleted')).toBe(true);
     expect(isGoneCompetitionError('platform_not_found')).toBe(true);
     expect(isGoneCompetitionError('platform_unavailable')).toBe(false);
+    expect(isGoneCompetitionError('platform_read_only')).toBe(false);
+    expect(isGoneCompetitionError('platform_owner_required')).toBe(false);
     expect(isGoneCompetitionError(null)).toBe(false);
   });
 
@@ -581,6 +599,9 @@ describe('platform errors from the tool backends', () => {
       "The competition registry can't be reached right now, try again shortly."
     );
     expect(platformErrorMessage('platform_id_required')).toBe('Select a competition in the top bar first.');
+    expect(platformErrorMessage('platform_owner_required', 'Winter Cup')).toBe(
+      "Only the competition's owner can do this."
+    );
   });
 });
 
@@ -764,15 +785,45 @@ describe('sharing clients', () => {
     expect([error.status, error.code]).toEqual([404, 'grant_not_found']);
   });
 
-  it('searchUsers skips short queries and encodes the query', async () => {
-    const fetchMock = vi.fn(async () => response(200, { items: [ANNA, { name: 'no id' }] }));
+  it('searchUsers skips short queries, encodes the query and maps hits', async () => {
+    const masked = { userId: 'u-aino', name: 'Aino', email: null, emailHint: 'a•••@club.fi' };
+    const fetchMock = vi.fn(async () => response(200, {
+      items: [{ ...ANNA, emailHint: 'a•••@example.com' }, masked, { name: 'no id' }],
+    }));
     vi.stubGlobal('fetch', fetchMock);
 
     expect(await searchUsers(' an ')).toEqual([]);
     expect(fetchMock).not.toHaveBeenCalled();
 
-    expect(await searchUsers('anna & co')).toEqual([ANNA]);
+    expect(await searchUsers('anna & co')).toEqual([
+      { ...ANNA, emailHint: 'a•••@example.com' },
+      masked,
+    ]);
     expect(fetchMock.mock.calls[0][0]).toBe(`${USERS_API}/search?q=anna%20%26%20co`);
+  });
+
+  it('toUserSearchHit maps a hit and reads a missing or empty e-mail as null', () => {
+    expect(toUserSearchHit({ userId: 'u-1', name: 'Aino', email: null, emailHint: 'a•••@club.fi' }))
+      .toEqual({ userId: 'u-1', name: 'Aino', email: null, emailHint: 'a•••@club.fi' });
+    expect(toUserSearchHit({ userId: 'u-1', name: 'Aino', email: '' }))
+      .toEqual({ userId: 'u-1', name: 'Aino', email: null, emailHint: '' });
+    expect(toUserSearchHit({ userId: 'u-1', email: 'aino@club.fi', emailHint: 7 }))
+      .toEqual({ userId: 'u-1', name: '', email: 'aino@club.fi', emailHint: '' });
+    expect(toUserSearchHit({ name: 'no id', email: 'x@y.fi' })).toBeNull();
+    expect(toUserSearchHit(null)).toBeNull();
+    expect(toUserSearchHit('u-1')).toBeNull();
+  });
+
+  it('searchHitEmail prefers the full e-mail and falls back to the masked hint', () => {
+    expect(searchHitEmail({ email: 'aino@club.fi', emailHint: 'a•••@club.fi' })).toBe('aino@club.fi');
+    expect(searchHitEmail({ email: null, emailHint: 'a•••@club.fi' })).toBe('a•••@club.fi');
+    expect(searchHitEmail({ email: null, emailHint: '' })).toBe('');
+  });
+
+  it('userRefToSearchHit keeps a known full e-mail', () => {
+    expect(userRefToSearchHit(ANNA)).toEqual({ ...ANNA, emailHint: '' });
+    expect(userRefToSearchHit({ userId: 'u-x', name: 'X', email: '' }))
+      .toEqual({ userId: 'u-x', name: 'X', email: null, emailHint: '' });
   });
 
   it('searchUsers surfaces rate limiting', async () => {

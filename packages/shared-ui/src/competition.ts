@@ -36,6 +36,24 @@ export interface UserRef {
   email: string;
 }
 
+/**
+ * One hit of the share picker's user search (`GET /api/users/search`).
+ * A name search never reveals a stranger's e-mail: `email` is null and only
+ * the masked `emailHint` (e.g. `a•••@club.fi`) is shown. `email` is the full
+ * address when the query was that exact address, or when the caller already
+ * shares a competition with the person.
+ */
+export interface UserSearchHit {
+  /** Platform-internal user id (GUID) — never an e-mail */
+  userId: string;
+  /** Display name ('' when unknown) */
+  name: string;
+  /** Full e-mail, or null when the search may not reveal it */
+  email: string | null;
+  /** Masked e-mail ('' when unknown) — what to show when `email` is null */
+  emailHint: string;
+}
+
 /** One row of a competition's access list */
 export interface AccessGrant extends UserRef {
   role: CompetitionAccess;
@@ -141,6 +159,30 @@ export function toUserRef(raw: unknown): UserRef | null {
     name: typeof r.name === 'string' ? r.name : '',
     email: typeof r.email === 'string' ? r.email : '',
   };
+}
+
+/** Map a raw search hit; null when it has no user id. An empty e-mail reads as null */
+export function toUserSearchHit(raw: unknown): UserSearchHit | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const userId = typeof r.userId === 'string' ? r.userId : '';
+  if (!userId) return null;
+  return {
+    userId,
+    name: typeof r.name === 'string' ? r.name : '',
+    email: typeof r.email === 'string' && r.email.trim() ? r.email : null,
+    emailHint: typeof r.emailHint === 'string' ? r.emailHint : '',
+  };
+}
+
+/** A known user (recent pick, grant) as a search hit — the full e-mail stays */
+export function userRefToSearchHit(user: UserRef): UserSearchHit {
+  return { userId: user.userId, name: user.name, email: user.email || null, emailHint: '' };
+}
+
+/** The e-mail to show for a search hit: the full one when known, else the masked hint */
+export function searchHitEmail(hit: Pick<UserSearchHit, 'email' | 'emailHint'>): string {
+  return hit.email ?? hit.emailHint;
 }
 
 /** Map a raw grant row; null when the user id or the role is unusable */
@@ -778,17 +820,22 @@ export function leaveCompetition(competitionId: string): Promise<RemoveAccessRes
 }
 
 /**
- * `GET /api/users/search?q=` — signed-in users whose name or e-mail contains
- * `query` (at most 8, never yourself). Queries shorter than
- * `USER_SEARCH_MIN_CHARS` resolve to [] without a request; 429
- * `rate_limited` surfaces as a `CompetitionApiError`.
+ * `GET /api/users/search?q=` — signed-in users (at most 8, never yourself).
+ * A complete e-mail address (one `@`, no spaces) is an exact, case-insensitive
+ * match on the e-mail, and the hit carries the full `email`. Anything else
+ * matches a substring of the display *name* only — never the e-mail — and
+ * hits carry `email: null` plus a masked `emailHint`, except people the
+ * caller already shares a competition with, who come with their full e-mail
+ * (show `searchHitEmail(hit)`). Queries shorter than `USER_SEARCH_MIN_CHARS`
+ * resolve to [] without a request; 429 `rate_limited` (per-minute and daily
+ * limits) surfaces as a `CompetitionApiError`.
  */
-export async function searchUsers(query: string): Promise<UserRef[]> {
+export async function searchUsers(query: string): Promise<UserSearchHit[]> {
   const q = String(query ?? '').trim();
   if (q.length < USER_SEARCH_MIN_CHARS) return [];
   const resp = await callApi(`${USERS_API}/search?q=${encodeURIComponent(q)}`);
   if (!resp.ok) throw await errorFromResponse(resp, 'User search failed');
-  return itemsOf(await jsonBody(resp), toUserRef);
+  return itemsOf(await jsonBody(resp), toUserSearchHit);
 }
 
 /** `GET /api/users/recent` — people you have shared with before (quick picks) */
@@ -822,6 +869,7 @@ export type PlatformErrorCode =
   | 'platform_not_found'
   | 'platform_deleted'
   | 'platform_read_only'
+  | 'platform_owner_required'
   | 'platform_unavailable';
 
 const PLATFORM_ERROR_STATUS: Record<PlatformErrorCode, number> = {
@@ -829,6 +877,7 @@ const PLATFORM_ERROR_STATUS: Record<PlatformErrorCode, number> = {
   platform_not_found: 404,
   platform_deleted: 410,
   platform_read_only: 403,
+  platform_owner_required: 403,
   platform_unavailable: 503,
 };
 
@@ -854,8 +903,8 @@ export function readPlatformError(status: number, body: string): PlatformErrorCo
 
 /**
  * True for the codes after which the selection should be dropped.
- * `platform_read_only` is not one: the competition is still there, the caller
- * just may not change it.
+ * `platform_read_only` and `platform_owner_required` are not: the competition
+ * is still there, the caller just may not do that to it.
  */
 export function isGoneCompetitionError(code: PlatformErrorCode | null): boolean {
   return code === 'platform_deleted' || code === 'platform_not_found';
@@ -874,6 +923,8 @@ export function platformErrorMessage(code: PlatformErrorCode, label = ''): strin
     case 'platform_read_only':
       return `You have view-only access to ${label.trim() ? name : 'this competition'}. ` +
         'Ask the owner for write access to make changes.';
+    case 'platform_owner_required':
+      return "Only the competition's owner can do this.";
     case 'platform_unavailable':
       return "The competition registry can't be reached right now, try again shortly.";
     case 'platform_id_required':

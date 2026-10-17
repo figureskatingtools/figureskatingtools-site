@@ -14,14 +14,17 @@ import {
   listAccess,
   recentShareUsers,
   removeAccess,
+  searchHitEmail,
   searchUsers,
   setAccess,
+  userRefToSearchHit,
   USER_SEARCH_MIN_CHARS,
   type AccessGrant,
   type CompetitionAccess,
   type PlatformCompetition,
   type ShareRole,
   type UserRef,
+  type UserSearchHit,
 } from './competition.js';
 
 /** Escape text for interpolation into HTML (also safe inside quoted attributes) */
@@ -70,7 +73,7 @@ function shareErrorMessage(err: unknown, fallback: string): string {
     case 'grant_not_found':
       return 'That person no longer has access.';
     case 'rate_limited':
-      return 'Too many searches — wait a moment and try again.';
+      return 'Too many searches — try again later.';
     case 'not_found':
       return 'This competition no longer exists, or you no longer have access to it.';
     case 'conflict':
@@ -79,9 +82,22 @@ function shareErrorMessage(err: unknown, fallback: string): string {
   return err.status === 0 ? 'The competition registry is unreachable. Please try again.' : err.message || fallback;
 }
 
-/** "Name <email>" as one line, never empty */
-function personLabel(user: UserRef): string {
-  return user.name.trim() || user.email.trim() || 'Unknown user';
+/** A grant / recent pick (full e-mail) or a search hit (maybe only a masked e-mail) */
+type Person = UserRef | UserSearchHit;
+
+/** The e-mail to show: a search hit's full e-mail when known, else its masked hint */
+function shownEmail(user: Person): string {
+  return 'emailHint' in user ? searchHitEmail(user) : user.email;
+}
+
+/** The person's name, else their (possibly masked) e-mail — never empty */
+function personLabel(user: Person): string {
+  return user.name.trim() || shownEmail(user).trim() || 'Unknown user';
+}
+
+/** A complete e-mail address: what the search matches exactly (one @, no spaces) */
+function looksLikeEmail(query: string): boolean {
+  return /^[^@\s]+@[^@\s]+$/.test(query);
 }
 
 /**
@@ -112,7 +128,7 @@ export function openShareCompetitionDialog(competition: PlatformCompetition): Pr
           <div class="fst-share-add">
             <div class="fst-share-combo">
               <input type="text" id="${DIALOG_ID}-search" autocomplete="off" spellcheck="false"
-                     placeholder="Name or e-mail" data-fst-share-search
+                     placeholder="Type a name or a full e-mail address" data-fst-share-search
                      role="combobox" aria-autocomplete="list" aria-expanded="false"
                      aria-controls="${LISTBOX_ID}" aria-describedby="${DIALOG_ID}-hint">
               <ul class="fst-share-results" id="${LISTBOX_ID}" role="listbox"
@@ -125,7 +141,8 @@ export function openShareCompetitionDialog(competition: PlatformCompetition): Pr
             <button type="button" class="fst-comp-btn-primary" data-fst-share-add disabled>Share</button>
           </div>
           <span class="fst-comp-field-note" id="${DIALOG_ID}-hint" data-fst-share-hint aria-live="polite">
-            Type at least ${USER_SEARCH_MIN_CHARS} characters. Only people who have signed in to the site can be found.
+            Type a name (at least ${USER_SEARCH_MIN_CHARS} characters) or a full e-mail address.
+            Only people who have signed in to the site can be found.
           </span>
           <div class="fst-share-recent" data-fst-share-recent hidden></div>
         </div>
@@ -156,9 +173,9 @@ export function openShareCompetitionDialog(competition: PlatformCompetition): Pr
 
     let grants: AccessGrant[] = [];
     let recent: UserRef[] = [];
-    let results: UserRef[] = [];
+    let results: UserSearchHit[] = [];
     let activeIndex = -1;
-    let picked: UserRef | null = null;
+    let picked: UserSearchHit | null = null;
     let changed = false;
     let searchTimer: number | null = null;
     let searchSeq = 0;
@@ -259,7 +276,7 @@ export function openShareCompetitionDialog(competition: PlatformCompetition): Pr
 
     /* ── Picking the person to add ── */
 
-    const setPicked = (user: UserRef | null): void => {
+    const setPicked = (user: UserSearchHit | null): void => {
       picked = user;
       addBtn.disabled = !user;
       if (user) {
@@ -268,7 +285,7 @@ export function openShareCompetitionDialog(competition: PlatformCompetition): Pr
         if (existing && existing.role !== 'owner') roleSelect.value = existing.role;
         hintEl.textContent = existing
           ? `${personLabel(user)} already has access (${ROLE_LABELS[existing.role]}). Share again to change it.`
-          : `${user.email || personLabel(user)} — choose the access and press Share.`;
+          : `${shownEmail(user) || personLabel(user)} — choose the access and press Share.`;
       } else {
         hintEl.textContent = defaultHint;
       }
@@ -314,7 +331,7 @@ export function openShareCompetitionDialog(competition: PlatformCompetition): Pr
         return `<li class="fst-share-option" role="option" id="${LISTBOX_ID}-${i}" aria-selected="false"
                     data-fst-share-option="${i}">
             <span class="fst-share-name">${esc(personLabel(u))}</span>
-            ${u.email && u.name.trim() ? `<span class="fst-share-email">${esc(u.email)}</span>` : ''}
+            ${shownEmail(u) && u.name.trim() ? `<span class="fst-share-email">${esc(shownEmail(u))}</span>` : ''}
             ${existing ? `<span class="fst-share-has">${esc(ROLE_LABELS[existing.role])}</span>` : ''}
           </li>`;
       }).join('');
@@ -334,7 +351,7 @@ export function openShareCompetitionDialog(competition: PlatformCompetition): Pr
     const runSearch = async (query: string): Promise<void> => {
       const seq = ++searchSeq;
       hintEl.textContent = 'Searching…';
-      let found: UserRef[];
+      let found: UserSearchHit[];
       try {
         found = await searchUsers(query);
       } catch (err: unknown) {
@@ -350,7 +367,10 @@ export function openShareCompetitionDialog(competition: PlatformCompetition): Pr
       renderResults();
       hintEl.textContent = results.length
         ? `${results.length} ${results.length === 1 ? 'match' : 'matches'} — use the arrow keys and Enter to pick.`
-        : 'Nobody matches. People appear here once they have signed in to the site.';
+        : looksLikeEmail(query)
+          ? 'Nobody with that e-mail address has signed in to the site yet.'
+          : 'Nobody’s name matches. To find someone by e-mail, type their full address. ' +
+            'People appear here once they have signed in to the site.';
     };
 
     searchInput.addEventListener('input', () => {
@@ -430,7 +450,7 @@ export function openShareCompetitionDialog(competition: PlatformCompetition): Pr
           const user = recent.find((u) => u.userId === btn.getAttribute('data-fst-share-recent-id'));
           if (!user) return;
           closeResults();
-          setPicked(user);
+          setPicked(userRefToSearchHit(user));
           addBtn.focus();
         });
       });

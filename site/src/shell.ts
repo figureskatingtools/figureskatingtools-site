@@ -11,6 +11,12 @@ export function escapeHtml(str: string): string {
   return div.innerHTML;
 }
 
+/** `escapeHtml` that is also safe inside a quoted HTML attribute value */
+export function escapeAttr(str: string): string {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 /** The signed-in user, as reported by the router's `/userinfo` endpoint */
 export interface UserInfo {
   authenticated: true;

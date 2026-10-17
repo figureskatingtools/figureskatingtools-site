@@ -22,8 +22,13 @@ import {
     uploadCompetitionFile,
     type PoolFile,
     SUFFIX_SLOTS,
+    DOWNLOAD_LINK_UNAVAILABLE,
+    isDownloadLinkStale,
+    openFreshDownload,
+    usableDownloadUrl,
 } from '@figureskatingtools/shared-ui';
 import {
+    escapeAttr,
     escapeHtml,
     fetchUser,
     isTenantBlocked,
@@ -468,6 +473,17 @@ function fileMetaHtml(file: any): string {
 /** How many refreshed filenames to spell out before falling back to a count */
 const REFRESH_NAMES_SHOWN = 3;
 
+/** One generated papers file in `get_competition_details` */
+interface GeneratedPaperFile {
+    fileName: string;
+    /** Short-lived (15 min) read link; null when the backend could not sign one */
+    url?: string | null;
+    description?: string | null;
+    /** When `url` stops working (ISO); null along with `url` */
+    expiration?: string | null;
+    size?: number | string | null;
+}
+
 /**
  * Announce the files the backend just re-pulled from the competition file
  * pool, in the same status line the upload and import flows use.
@@ -491,14 +507,6 @@ function reportPoolRefresh(refreshed: unknown): void {
 }
 
 /* ── retention ── */
-
-/** `dd.MM.yyyy`, or the `-` sentinel this UI uses for "no usable date". */
-function fmtDate(value: string | null | undefined): string {
-    if (!value || value === '-') return '-';
-    const pretty = formatDateFi(value);
-    // formatDateFi hands unparsable input straight back — that means "no date" here
-    return /^\d{2}\.\d{2}\.\d{4}$/.test(pretty) ? pretty : '-';
-}
 
 /**
  * Compact "Auto-deletes <date> · Extend" line in the competition header.
@@ -610,6 +618,8 @@ async function init() {
 
     // List Details Logic
     let currentCompetitionData: any = null;
+    /** When `currentCompetitionData` was fetched (epoch ms) — its download links live 15 minutes */
+    let generatedFetchedAt = 0;
     let isGlobalValid = false;
     // Id of the competition whose "No cover page or time schedule" box is
     // checked, so the choice survives options re-renders (language switch,
@@ -1082,108 +1092,8 @@ async function init() {
             renderCompetitionView();
 
             // Render Generated Files
-            const genContainer = document.getElementById('generated-files-list');
-            if (genContainer) {
-                 if (data.generatedFiles && data.generatedFiles.length > 0) {
-                     genContainer.innerHTML = data.generatedFiles.map((f: any) => {
-                         let dateDisplay = '';
-                         try {
-                             // Try to extract date from filename (YYYYMMDD)
-                             const match = f.fileName.match(/(\d{4})(\d{2})(\d{2})/);
-                             if (match) {
-                                 const [_, y, m, d] = match;
-                                 dateDisplay = `${d}.${m}.${y}`;
-                             }
-                         } catch (e) {}
-                         
-                         // Expiration
-                         const expStr = fmtDate(f.expiration);
-                         
-                         // Size
-                         let sizeStr = '';
-                         if (f.size) {
-                             const size = parseInt(f.size);
-                             if (size > 1024 * 1024) {
-                                  sizeStr = (size / (1024 * 1024)).toFixed(1) + ' MB';
-                             } else {
-                                  sizeStr = (size / 1024).toFixed(0) + ' KB';
-                             }
-                         }
-
-                         const safeUrl = f.url;
-                         const safeFileName = escapeHtml(f.fileName);
-                         const safeDescription = escapeHtml(f.description);
-                         const safeJudgePapersPath = escapeHtml('judgePapers/' + f.fileName);
-
-                         return `
-                            <div class="gen-file">
-                                <a href="${safeUrl}" target="_blank" rel="noopener noreferrer" class="gen-file-link">
-                                    <div class="gen-file-head">
-                                        <span class="gen-file-desc">
-                                            ${safeDescription}
-                                            ${dateDisplay ? `<span class="gen-file-date">${escapeHtml(dateDisplay)}</span>` : ''}
-                                        </span>
-                                        <div class="gen-file-badges">
-                                            ${sizeStr ? `<span class="gen-badge">${escapeHtml(sizeStr)}</span>` : ''}
-                                            <span class="gen-badge">Exp: ${escapeHtml(expStr)}</span>
-                                        </div>
-                                    </div>
-                                    <div class="gen-file-name">
-                                        ${safeFileName}
-                                    </div>
-                                </a>
-                                ${SENDABLE_FILE_RE.test(f.fileName) ? `
-                                <button class="icon-btn icon-btn--send send-papers-btn" data-filename="${safeFileName}" title="Send by E-mail">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
-                                </button>` : ''}
-                                <button class="icon-btn icon-btn--copy copy-link-btn" data-url="${safeUrl}" title="Copy Link to Clipboard">
-                                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                                </button>
-                                <button class="icon-btn icon-btn--danger delete-gen-file-btn" data-filename="${safeJudgePapersPath}" title="Delete File">
-                                    ×
-                                </button>
-                            </div>
-                         `;
-                     }).join('');
-
-                     // Attach copy-link event listeners
-                     document.querySelectorAll('.copy-link-btn').forEach(btn => {
-                         btn.addEventListener('click', (e) => {
-                             e.stopPropagation();
-                             const url = (e.currentTarget as HTMLElement).dataset.url!;
-                             const el = e.currentTarget as HTMLElement;
-                             navigator.clipboard.writeText(url).then(() => {
-                                 const originalHTML = el.innerHTML;
-                                 el.innerHTML = '✓';
-                                 el.classList.add('is-copied');
-                                 setTimeout(() => {
-                                     el.innerHTML = originalHTML;
-                                     el.classList.remove('is-copied');
-                                 }, 2000);
-                             }).catch(() => {});
-                         });
-                     });
-
-                     // Attach send-by-e-mail event listeners
-                     document.querySelectorAll('.send-papers-btn').forEach(btn => {
-                         btn.addEventListener('click', (e) => {
-                             e.stopPropagation();
-                             const fileName = (btn as HTMLElement).dataset.filename!;
-                             if (user) openSendDialog(API_BASE, id, fileName, user);
-                         });
-                     });
-
-                     // Attach delete-gen-file event listeners
-                     document.querySelectorAll('.delete-gen-file-btn').forEach(btn => {
-                         btn.addEventListener('click', () => {
-                             const filename = (btn as HTMLElement).dataset.filename!;
-                             (window as any).promptDeleteFile(filename);
-                         });
-                     });
-                 } else {
-                     genContainer.innerHTML = '';
-                 }
-            }
+            generatedFetchedAt = Date.now();
+            renderGeneratedFiles(data.generatedFiles || []);
 
             // Shared-pool files this tool has not imported yet (renders nothing
             // when the pool is unavailable or everything is already here).
@@ -1192,6 +1102,176 @@ async function init() {
         } catch (_e) {
             container.innerHTML = '<p class="text-error">Error loading files.</p>';
         }
+    }
+
+    /** Size in a readable unit, '' when unknown */
+    function paperSize(raw: unknown): string {
+        const size = parseInt(String(raw ?? ''), 10);
+        if (!size) return '';
+        return size > 1024 * 1024 ? (size / (1024 * 1024)).toFixed(1) + ' MB' : (size / 1024).toFixed(0) + ' KB';
+    }
+
+    /**
+     * The generated papers list. Links are short-lived (15 min) and may be
+     * null when the backend could not sign one: such a file is listed without a
+     * link (and without a copy button), with a hint to reload.
+     */
+    function renderGeneratedFiles(files: GeneratedPaperFile[]) {
+        const genContainer = document.getElementById('generated-files-list');
+        if (!genContainer) return;
+        if (!files.length) {
+            genContainer.innerHTML = '';
+            return;
+        }
+        genContainer.innerHTML = files.map(f => {
+            let dateDisplay = '';
+            // Date from the file name (YYYYMMDD)
+            const match = String(f.fileName ?? '').match(/(\d{4})(\d{2})(\d{2})/);
+            if (match) {
+                const [_, y, m, d] = match;
+                dateDisplay = `${d}.${m}.${y}`;
+            }
+            const sizeStr = paperSize(f.size);
+            const url = usableDownloadUrl(f.url);
+            const safeFileName = escapeAttr(f.fileName);
+            const safeJudgePapersPath = escapeAttr('judgePapers/' + f.fileName);
+
+            const inner = `
+                <div class="gen-file-head">
+                    <span class="gen-file-desc">
+                        ${escapeHtml(f.description ?? '')}
+                        ${dateDisplay ? `<span class="gen-file-date">${escapeHtml(dateDisplay)}</span>` : ''}
+                    </span>
+                    <div class="gen-file-badges">
+                        ${url ? '' : `<span class="gen-file-unavailable">${escapeHtml(DOWNLOAD_LINK_UNAVAILABLE)}</span>`}
+                        ${sizeStr ? `<span class="gen-badge">${escapeHtml(sizeStr)}</span>` : ''}
+                    </div>
+                </div>
+                <div class="gen-file-name">
+                    ${escapeHtml(f.fileName)}
+                </div>`;
+            const link = url
+                ? `<a href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer" class="gen-file-link"
+                      data-gen-file="${safeFileName}" data-expiration="${escapeAttr(f.expiration ?? '')}">${inner}</a>`
+                : `<div class="gen-file-link gen-file-link--unavailable">${inner}</div>`;
+
+            return `
+               <div class="gen-file">
+                   ${link}
+                   ${SENDABLE_FILE_RE.test(f.fileName) ? `
+                   <button class="icon-btn icon-btn--send send-papers-btn" data-filename="${safeFileName}" title="Send by E-mail">
+                       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+                   </button>` : ''}
+                   ${url ? `
+                   <button class="icon-btn icon-btn--copy copy-link-btn" data-filename="${safeFileName}" data-url="${escapeAttr(url)}"
+                           data-expiration="${escapeAttr(f.expiration ?? '')}" title="Copy link (valid 15 min) — to share for longer, use Send by e-mail">
+                       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                   </button>` : ''}
+                   <button class="icon-btn icon-btn--danger delete-gen-file-btn" data-filename="${safeJudgePapersPath}" title="Delete File">
+                       ×
+                   </button>
+               </div>
+            `;
+        }).join('');
+
+        // Download links: a (nearly) expired one is re-fetched before it opens
+        genContainer.querySelectorAll<HTMLAnchorElement>('a[data-gen-file]').forEach(link => {
+            link.addEventListener('click', (e) => {
+                if (!isDownloadLinkStale(generatedFetchedAt, link.dataset.expiration)) return;
+                e.preventDefault();
+                const fileName = link.dataset.genFile!;
+                void openFreshDownload({
+                    newTab: true,
+                    refresh: async () => (await refreshGeneratedFiles())?.find(g => g.fileName === fileName)?.url,
+                    onUnavailable: () => markGeneratedUnavailable(fileName),
+                });
+            });
+        });
+
+        // Copy-link buttons: copy a fresh link when the listed one is (nearly) expired
+        genContainer.querySelectorAll<HTMLElement>('.copy-link-btn').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                e.stopPropagation();
+                const el = e.currentTarget as HTMLElement;
+                const fileName = el.dataset.filename!;
+                let url: string | null = el.dataset.url ?? null;
+                if (isDownloadLinkStale(generatedFetchedAt, el.dataset.expiration)) {
+                    try {
+                        const fresh = await refreshGeneratedFiles();
+                        url = usableDownloadUrl(fresh?.find(g => g.fileName === fileName)?.url);
+                    } catch (_e) {
+                        url = null;
+                    }
+                    if (!url) { markGeneratedUnavailable(fileName); return; }
+                    // The list was re-rendered: confirm on the new button
+                    const again = Array.from(genContainer.querySelectorAll<HTMLElement>('.copy-link-btn'))
+                        .find(b => b.dataset.filename === fileName);
+                    if (!again) return;
+                    copyAndConfirm(again, url);
+                    return;
+                }
+                if (url) copyAndConfirm(el, url);
+            });
+        });
+
+        // Send-by-e-mail buttons
+        genContainer.querySelectorAll<HTMLElement>('.send-papers-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const fileName = btn.dataset.filename!;
+                if (user && currentCompetitionData) openSendDialog(API_BASE, currentCompetitionData.id, fileName, user);
+            });
+        });
+
+        // Delete buttons
+        genContainer.querySelectorAll<HTMLElement>('.delete-gen-file-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                (window as any).promptDeleteFile(btn.dataset.filename!);
+            });
+        });
+    }
+
+    function copyAndConfirm(el: HTMLElement, url: string) {
+        navigator.clipboard.writeText(url).then(() => {
+            const originalHTML = el.innerHTML;
+            el.innerHTML = '✓';
+            el.classList.add('is-copied');
+            setTimeout(() => {
+                el.innerHTML = originalHTML;
+                el.classList.remove('is-copied');
+            }, 2000);
+        }).catch(() => {});
+    }
+
+    /**
+     * Re-read the competition (same call as `loadCompetitionDetails`) for fresh
+     * download links and re-render only the generated papers list. Null when the
+     * fetch failed or another competition was opened meanwhile.
+     */
+    async function refreshGeneratedFiles(): Promise<GeneratedPaperFile[] | null> {
+        const id = currentCompetitionData?.id;
+        if (!id) return null;
+        const resp = await fetch(`${API_BASE}/get_competition_details?id=${encodeURIComponent(id)}`);
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        if (currentCompetitionData?.id !== id) return null;
+        // The backend may have re-pulled pool files on this call too
+        reportPoolRefresh(data.refreshedFromPool);
+        const files: GeneratedPaperFile[] = data.generatedFiles || [];
+        currentCompetitionData.generatedFiles = files;
+        generatedFetchedAt = Date.now();
+        renderGeneratedFiles(files);
+        return files;
+    }
+
+    /** No fresh link for this file: list it unlinked, with the hint */
+    function markGeneratedUnavailable(fileName: string) {
+        const files: GeneratedPaperFile[] = currentCompetitionData?.generatedFiles || [];
+        const item = files.find(f => f.fileName === fileName);
+        if (!item) return;   // gone from the fresh listing: the re-rendered list already shows that
+        item.url = null;
+        item.expiration = null;
+        renderGeneratedFiles(files);
     }
 
     function updateOptionsView(data: any) {

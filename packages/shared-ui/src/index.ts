@@ -5,6 +5,16 @@ export type { SiteNavOptions, NavSubItem, NavTool, NavSmallTool } from './types.
 export { formatDateFi, formatDateTimeFi, formatFileSize } from './format.js';
 
 export {
+  DOWNLOAD_DETAILS_MAX_AGE_MS,
+  DOWNLOAD_EXPIRY_MARGIN_MS,
+  DOWNLOAD_LINK_UNAVAILABLE,
+  isDownloadLinkStale,
+  openFreshDownload,
+  usableDownloadUrl,
+} from './download-links.js';
+export type { FreshDownloadOptions } from './download-links.js';
+
+export {
   ACTIVE_COMPETITION_KEY,
   COMPETITIONS_API,
   CompetitionApiError,
@@ -37,6 +47,7 @@ export {
   removeAccess,
   retentionInfo,
   RETENTION_WARN_DAYS,
+  searchHitEmail,
   searchUsers,
   serializeActiveCompetition,
   setAccess,
@@ -46,7 +57,9 @@ export {
   toAccessGrant,
   toPlatformCompetition,
   toUserRef,
+  toUserSearchHit,
   updateCompetition,
+  userRefToSearchHit,
 } from './competition.js';
 export type {
   AccessGrant,
@@ -60,6 +73,7 @@ export type {
   ShareRole,
   UpdateCompetitionInput,
   UserRef,
+  UserSearchHit,
 } from './competition.js';
 
 export {
