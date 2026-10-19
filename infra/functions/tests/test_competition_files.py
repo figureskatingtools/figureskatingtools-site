@@ -91,14 +91,21 @@ def test_file_routes_reject_a_request_with_the_wrong_proxy_secret(table, blobs):
 
 
 def test_file_routes_reject_a_proxied_request_without_an_identity(table, blobs):
-    _assert_all_routes_401(table, blobs, user_email=None)
+    _assert_all_routes_401(table, blobs, oid=None)
+    _assert_all_routes_401(table, blobs, tid=None)
 
 
-def test_the_easy_auth_principal_name_header_identifies_the_uploader(table, blobs):
+def test_the_easy_auth_principal_name_header_identifies_nobody(table, blobs):
     competition = create_competition()
-    response = upload(competition["id"], user_email=None,
+    response = upload(competition["id"], user_email=None, oid=None,
                       headers={"x-ms-client-principal-name": "coach@example.com"})
-    assert payload(response)["uploadedBy"] == "coach@example.com"
+    assert response.status_code == 401
+    assert blobs.blobs == {}
+
+
+def test_the_uploader_is_the_forwarded_email(table, blobs):
+    competition = create_competition()
+    assert payload(upload(competition["id"]))["uploadedBy"] == "skater@example.com"
 
 
 # ── upload -> list -> download roundtrip ──────────────────────────────────────

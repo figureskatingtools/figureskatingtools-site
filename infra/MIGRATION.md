@@ -48,6 +48,7 @@ after teardown (step 7).
 | `SKIP_CUSTOM_DOMAIN` | `true` during step 3, unset/empty afterwards | **new** |
 | `HOVTP_ENABLED` | `false` to kill the HOVTP listener, unset/empty for the environment default | **new**, optional (test defaults on, prod off) |
 | `RETENTION_PURGE_ENABLED` | `false` = kill switch: the platform `retention_sweep` only logs what it would purge; unset/anything else = it deletes expired competitions | **new**, optional (on by default in both environments) |
+| `ALLOWED_TENANT_IDS` | comma-separated Entra tenant ids whose users may use the site; unset = the deployment tenant only | **new**, optional. Router (403 `tenant_not_allowed`) and platform API both enforce it; add the External ID tenant here when that migration happens |
 
 The URLs and principal ids come from each tool repo's own deployment:
 
@@ -61,8 +62,10 @@ az functionapp show -g <tool-rg> -n <func-app> \
 aren't created yet. Fill them in and re-run once the tool repos are reduced.
 Each principal gets **Storage Blob Data Reader on the `competition-data`
 container** (the file pool) and **Storage Table Data Reader on the
-`retentionclock` table** (the platform retention clock the tools follow — never
-the registry's `competitions` table) — see §2d for removing older grants.
+`retentionclock`, `useridentities` and `competitionaccess` tables** (the
+platform retention clock the tools follow, and the access model they check
+every request against — never the registry's `competitions` table nor the
+`users` directory, which hold e-mails) — see §2d for removing older grants.
 
 `RESOURCE_GROUP_NAME` / `CUSTOM_DOMAIN` are **not** used by this repo; both live
 in `infra/parameters/<env>.bicepparam`.
@@ -295,7 +298,7 @@ az role assignment delete --assignee "<tool principal id>" \
   --role "Storage Table Data Reader"
 ```
 
-**Acceptance check** — each tool principal has exactly these two rows on the
+**Acceptance check** — each tool principal has exactly these four rows on the
 platform account and nothing scoped to the account itself:
 
 ```bash
@@ -307,6 +310,8 @@ az role assignment list --assignee "<tool principal id>" --all \
 | -------------------------- | ----- |
 | Storage Blob Data Reader   | `.../storageAccounts/<stfsplat-account>/blobServices/default/containers/competition-data` |
 | Storage Table Data Reader  | `.../storageAccounts/<stfsplat-account>/tableServices/default/tables/retentionclock` |
+| Storage Table Data Reader  | `.../storageAccounts/<stfsplat-account>/tableServices/default/tables/useridentities` |
+| Storage Table Data Reader  | `.../storageAccounts/<stfsplat-account>/tableServices/default/tables/competitionaccess` |
 
 ---
 

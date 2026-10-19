@@ -22,6 +22,12 @@
 //   retentionclock    table, the tools' read-only view of the retention clock
 //   adminlog          table, the admin panel's audit trail (PK=AUDIT, kept 365 d)
 //                     and retention sweep runs (PK=SWEEP, kept 30 d)
+//   users             table, the user directory (PK=USER RK=<userId>: e-mail,
+//                     display name, first/last seen) — platform only, holds PII
+//   useridentities    table, sign-in identity -> userId (PK=IDENTITY
+//                     RK=<tid>_<oid>), no PII; tools read it
+//   competitionaccess table, who may use a competition (PK=<competition guid>
+//                     RK=<userId>, Role owner/write/read), no PII; tools read it
 param location string
 param storageAccountName string
 
@@ -44,6 +50,23 @@ param clockTableName string = 'retentionclock'
 // neither the tools nor the HOVTP listener have a grant on it.
 @description('Admin audit log and retention sweep history of the platform Function App.')
 param adminLogTableName string = 'adminlog'
+
+// The user directory: e-mail and display name per platform user id. PII, so
+// only the platform Function App (account-scoped Table Data Contributor) can
+// read it — never the tools.
+@description('User directory (e-mail, display name, first/last seen) of the platform Function App.')
+param usersTableName string = 'users'
+
+// Sign-in identity (Entra tenant + object id) -> platform user id. No PII; the
+// tools get Table Data Reader on it (shared-data-access.bicep) to map the
+// router's x-forwarded-user-tid/-oid to a user id.
+@description('Identity links (tid_oid -> userId), readable by the tool Function Apps.')
+param userIdentitiesTableName string = 'useridentities'
+
+// Who may use a competition: one row per (competition, user), Role
+// owner/write/read. No PII; the tools get Table Data Reader on it.
+@description('Competition access grants (owner/write/read per user), readable by the tool Function Apps.')
+param competitionAccessTableName string = 'competitionaccess'
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2023-01-01' = {
   name: storageAccountName
@@ -101,6 +124,21 @@ resource adminLogTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2
   name: adminLogTableName
 }
 
+resource usersTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-01-01' = {
+  parent: tableService
+  name: usersTableName
+}
+
+resource userIdentitiesTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-01-01' = {
+  parent: tableService
+  name: userIdentitiesTableName
+}
+
+resource competitionAccessTable 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-01-01' = {
+  parent: tableService
+  name: competitionAccessTableName
+}
+
 output storageAccountName string = storageAccount.name
 output storageAccountId string = storageAccount.id
 output deploymentContainerUrl string = '${storageAccount.properties.primaryEndpoints.blob}app-package'
@@ -108,3 +146,6 @@ output blobEndpoint string = storageAccount.properties.primaryEndpoints.blob
 output dataContainerName string = dataContainerName
 output clockTableName string = clockTable.name
 output adminLogTableName string = adminLogTable.name
+output usersTableName string = usersTable.name
+output userIdentitiesTableName string = userIdentitiesTable.name
+output competitionAccessTableName string = competitionAccessTable.name

@@ -43,6 +43,10 @@ param proxySharedSecretGdprtool = readEnvironmentVariable('PROXY_SHARED_SECRET_G
 // variable ADMIN_EMAILS — kept out of the repo. Unset = nobody is admin.
 param adminEmails = readEnvironmentVariable('ADMIN_EMAILS', '')
 
+// Entra tenants whose users may use the site (comma-separated), from the GitHub
+// environment variable ALLOWED_TENANT_IDS. Unset = the deployment tenant only.
+param allowedTenantIds = readEnvironmentVariable('ALLOWED_TENANT_IDS', '')
+
 // System-assigned principal ids of the tool Function Apps, for read access to
 // the shared competition-data container. Empty entries are ignored, so this
 // works before the tool repos have been reduced (workstream 6).

@@ -76,6 +76,14 @@ param retentionPurgeEnabled bool = true
 @description('Comma-separated admin e-mail addresses (GitHub variable ADMIN_EMAILS). Written to both the router (which serves /admin/ and gates /api/manage/*) and the platform Function App (which enforces it again). Empty = nobody is admin.')
 param adminEmails string = ''
 
+@description('Comma-separated Entra tenant ids whose users may use the site (GitHub variable ALLOWED_TENANT_IDS). Empty = the deployment tenant only. Written to both the router (403 tenant_not_allowed for anyone else) and the platform Function App (which checks again).')
+param allowedTenantIds string = ''
+
+// The tenant the site's Easy Auth app registration lives in, unless overridden.
+var effectiveAllowedTenantIds = !empty(trim(allowedTenantIds))
+  ? toLower(replace(allowedTenantIds, ' ', ''))
+  : toLower(!empty(tenantId) ? tenantId : tenant().tenantId)
+
 @description('Kill switch for the HOVTP listener. false = the app is still deployed but answers every request 503 (see modules/hovtp-function.bicep).')
 param hovtpEnabled bool = true
 
@@ -144,6 +152,7 @@ module webApp 'modules/webapp.bicep' = {
     proxySharedSecretProtocolgenerator: proxySharedSecretProtocolgenerator
     proxySharedSecretGdprtool: proxySharedSecretGdprtool
     adminEmails: adminEmails
+    allowedTenantIds: effectiveAllowedTenantIds
     // Probed by the router's admin diagnostics.
     hovtpHealthUrl: '${hovtpFunction.outputs.functionAppUrl}/api/health'
   }
@@ -188,6 +197,10 @@ module platformFunction 'modules/platform-function.bicep' = {
     clockTableName: platformStorage.outputs.clockTableName
     adminEmails: adminEmails
     adminLogTableName: platformStorage.outputs.adminLogTableName
+    usersTableName: platformStorage.outputs.usersTableName
+    userIdentitiesTableName: platformStorage.outputs.userIdentitiesTableName
+    competitionAccessTableName: platformStorage.outputs.competitionAccessTableName
+    allowedTenantIds: effectiveAllowedTenantIds
     // Informational copy for the admin diagnostics; the listener's own
     // setting (below) is the one that switches it.
     hovtpEnabled: hovtpEnabled
@@ -258,9 +271,11 @@ module hovtpDataAccess 'modules/hovtp-data-access.bicep' = {
   }
 }
 
-// Cross-tool read access: the competition-data container (shared file pool)
-// and the retentionclock table (the platform retention clock the tools follow —
-// never the registry's competitions table), each scoped to the child resource. No-op until the TOOL_PRINCIPAL_ID_* GitHub
+// Cross-tool read access: the competition-data container (shared file pool),
+// the retentionclock table (the platform retention clock the tools follow —
+// never the registry's competitions table) and the access model tables
+// useridentities + competitionaccess (never users, which holds e-mails), each
+// scoped to the child resource. No-op until the TOOL_PRINCIPAL_ID_* GitHub
 // env vars are populated.
 module sharedDataAccess 'modules/shared-data-access.bicep' = {
   scope: rg
@@ -269,6 +284,8 @@ module sharedDataAccess 'modules/shared-data-access.bicep' = {
     storageAccountName: platformStorage.outputs.storageAccountName
     dataContainerName: platformStorage.outputs.dataContainerName
     clockTableName: platformStorage.outputs.clockTableName
+    userIdentitiesTableName: platformStorage.outputs.userIdentitiesTableName
+    competitionAccessTableName: platformStorage.outputs.competitionAccessTableName
     toolPrincipalIds: toolFunctionPrincipalIds
   }
 }

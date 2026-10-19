@@ -189,8 +189,10 @@ export interface CompetitionDetails {
 
 export interface GeneratedFile {
   fileName: string;
-  url: string;
+  /** Short-lived (15 min) read link; null when the backend could not sign one */
+  url?: string | null;
   description: string;
-  expiration: string;
+  /** When `url` stops working (ISO); null along with `url` */
+  expiration?: string | null;
   size: number | string;
 }

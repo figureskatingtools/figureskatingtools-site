@@ -10,6 +10,7 @@ import {
   formatDateTimeFi,
   formatFileSize,
   getActiveCompetition,
+  getMe,
   initCompetitionSelector,
   initSiteNav,
   injectSiteNavStyles,
@@ -28,21 +29,28 @@ import {
 } from '@figureskatingtools/shared-ui'
 import { escapeHtml, fetchUser, renderSignInView, setupUserMenu, type UserInfo } from '../shell.js'
 import {
+  ADMIN_USER_SEARCH_MIN_CHARS,
   AdminApiError,
   deleteAdminCompetition,
   getAdminCompetition,
   getPlatformDiagnostics,
   getRouterDiagnostics,
   listAdminCompetitions,
+  listAdminUsers,
   listAudit,
   purgeAdminCompetition,
   restoreAdminCompetition,
   runDryRunSweep,
+  searchAdminUsers,
+  setAdminOwner,
   updateAdminCompetition,
   type AdminCompetition,
   type AdminCompetitionDetail,
   type AdminCompetitionPatch,
+  type AdminGrant,
   type AdminStatusFilter,
+  type AdminUser,
+  type AdminUserRef,
   type AuditEntry,
   type BackendHealth,
   type PlatformDiagnostics,
@@ -66,9 +74,9 @@ function esc(value: unknown): string {
   return escapeHtml(value === null || value === undefined ? '' : String(value));
 }
 
-/** Attribute values: escapeHtml leaves quotes alone, so add them */
+/** Attribute values (escapeHtml escapes quotes too; the name marks the context) */
 function attr(value: unknown): string {
-  return esc(value).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  return esc(value);
 }
 
 function badge(text: string, kind: 'ok' | 'warn' | 'error' | 'muted' | 'info'): string {
@@ -124,6 +132,11 @@ const ERROR_TEXT: Record<string, string> = {
   invalid_deletion_date: 'The deletion date must be tomorrow or later.',
   confirm_mismatch: 'The typed code does not match the competition code.',
   purge_failed: 'The purge did not complete. Nothing was tombstoned; it is safe to try again.',
+  user_not_found: 'That user is no longer in the user directory.',
+  created_by_read_only: '“Created by” is history and cannot be changed. Use Change owner instead.',
+  query_too_short: 'Type at least 3 characters.',
+  rate_limited: 'Too many searches — try again later.',
+  conflict: 'The access list changed at the same time. Reload and try again.',
   invalid_status: 'Unknown status filter.',
   invalid_limit: 'Invalid page size.',
 };
@@ -151,26 +164,47 @@ function loadingBox(text = 'Loading…'): string {
   return `<p class="adm-loading">${esc(text)}</p>`;
 }
 
-/** The registry's shape of a competition, for the active-competition state */
-function toPlatform(c: AdminCompetition): PlatformCompetition {
+/** The owner row of an access list, as a plain user reference */
+function ownerOf(access: AdminGrant[]): AdminUserRef | null {
+  const owner = access.find((g) => g.role === 'owner');
+  return owner ? { userId: owner.userId, name: owner.name, email: owner.email } : null;
+}
+
+/** "Name <e-mail>", or whichever of the two is known */
+function userLabel(user: AdminUserRef | null | undefined): string {
+  if (!user) return '';
+  const name = user.name.trim();
+  const email = user.email.trim();
+  if (name && email && name !== email) return `${name} <${email}>`;
+  return name || email || user.userId;
+}
+
+/**
+ * The registry's shape of a competition, for the active-competition state.
+ * An admin always has full access (`owner`) on every competition.
+ */
+function toPlatform(c: AdminCompetition, owner?: AdminUserRef | null): PlatformCompetition {
   const competition: PlatformCompetition = {
     id: c.id,
     code: c.code,
     name: c.name,
     date: c.startDate,
     venue: c.venue,
+    access: 'owner',
   };
   if (c.createdBy) competition.createdBy = c.createdBy;
   if (c.createdUtc) competition.createdUtc = c.createdUtc;
   if (c.deletionDate) competition.deletionDate = c.deletionDate;
+  const knownOwner = owner !== undefined ? owner : c.owner;
+  if (knownOwner !== undefined) competition.owner = knownOwner;
   return competition;
 }
 
 /** Keep open tool tabs current after an admin change to the active competition */
-function syncActive(c: AdminCompetition): void {
+function syncActive(c: AdminCompetition, owner?: AdminUserRef | null): void {
   const active = getActiveCompetition();
   if (!active || active.id !== c.id) return;
-  setActiveCompetition(c.status === 'active' ? toPlatform(c) : null);
+  setActiveCompetition(c.status === 'active' ? { ...active, ...toPlatform(c, owner) } : null);
 }
 
 function statusBadge(c: AdminCompetition): string {
@@ -207,6 +241,7 @@ function deletionDay(c: AdminCompetition): string {
 type View =
   | { tab: 'competitions'; id: string | null }
   | { tab: 'diagnostics' }
+  | { tab: 'users' }
   | { tab: 'audit' };
 
 interface Notice {
@@ -249,12 +284,16 @@ const state = {
   auditError: '',
   auditLoaded: false,
   auditBusy: false,
+  users: null as AdminUser[] | null,
+  usersError: '',
+  usersSearch: '',
 };
 
 function parseLocation(): View {
   const rest = window.location.pathname.replace(/^\/admin\/?/, '');
   const [first, second] = rest.split('/');
   if (first === 'diagnostics') return { tab: 'diagnostics' };
+  if (first === 'users') return { tab: 'users' };
   if (first === 'audit') return { tab: 'audit' };
   if (first === 'competitions' && second) {
     try {
@@ -268,6 +307,7 @@ function parseLocation(): View {
 
 function pathFor(view: View): string {
   if (view.tab === 'diagnostics') return `${ADMIN_PATH}diagnostics`;
+  if (view.tab === 'users') return `${ADMIN_PATH}users`;
   if (view.tab === 'audit') return `${ADMIN_PATH}audit`;
   return view.id ? `${ADMIN_PATH}competitions/${encodeURIComponent(view.id)}` : ADMIN_PATH;
 }
@@ -333,6 +373,7 @@ function renderShell(userInfo: UserInfo) {
     </header>
     <nav class="adm-tabs" aria-label="Admin sections">
       <a href="${ADMIN_PATH}" class="adm-tab" data-tab="competitions">Competitions</a>
+      <a href="${ADMIN_PATH}users" class="adm-tab" data-tab="users">Users</a>
       <a href="${ADMIN_PATH}diagnostics" class="adm-tab" data-tab="diagnostics">Diagnostics</a>
       <a href="${ADMIN_PATH}audit" class="adm-tab" data-tab="audit">Audit log</a>
     </nav>
@@ -364,6 +405,7 @@ function renderView(): void {
     else tab.removeAttribute('aria-current');
   }
   if (state.view.tab === 'diagnostics') renderDiagnostics(root);
+  else if (state.view.tab === 'users') renderUsers(root);
   else if (state.view.tab === 'audit') renderAudit(root);
   else if (state.view.id) renderDetail(root, state.view.id);
   else renderList(root);
@@ -442,7 +484,7 @@ async function loadList(): Promise<void> {
 
 function matchesSearch(c: AdminCompetition, needle: string): boolean {
   if (!needle) return true;
-  return [c.name, c.code, c.venue, c.createdBy ?? '', c.id]
+  return [c.name, c.code, c.venue, c.createdBy ?? '', c.owner?.name ?? '', c.owner?.email ?? '', c.id]
     .some((field) => field.toLowerCase().includes(needle));
 }
 
@@ -497,7 +539,9 @@ function listRow(c: AdminCompetition): string {
         <span class="adm-mono adm-sub">${esc(c.code)}</span>
       </td>
       <td class="adm-nowrap">${esc(formatDateFi(c.startDate))}</td>
-      <td class="adm-col-owner adm-break">${esc(c.createdBy ?? '')}</td>
+      <td class="adm-col-owner adm-break">${c.owner
+        ? `${esc(c.owner.name || c.owner.email)}${c.owner.name && c.owner.email ? `<span class="adm-sub">${esc(c.owner.email)}</span>` : ''}`
+        : c.owner === null ? '<span class="adm-dim">no owner</span>' : esc(c.createdBy ?? '')}</td>
       <td>${statusBadge(c)} ${clockBadge(c)}</td>
       <td class="adm-nowrap">${esc(deletionDay(c))} ${retentionBadge(c)}</td>
       <td class="adm-col-created adm-nowrap">${esc(formatDateFi(c.createdUtc))}</td>
@@ -562,7 +606,7 @@ async function loadDetail(id: string, notice: Notice | null = null): Promise<voi
   if (data) {
     updateListEntry(data.competition);
     // After an admin change (notice set), open tool tabs follow via `storage`
-    if (notice) syncActive(data.competition);
+    if (notice) syncActive(data.competition, ownerOf(data.access));
   }
   const root = viewRoot();
   if (root) paintDetail(root, detail);
@@ -594,7 +638,8 @@ function paintDetail(root: HTMLElement, detail: DetailState): void {
       ${factsHtml(detail.data)}
       ${actionsHtml(c, detail.busy)}
     </section>
-    ${c.status === 'active' ? editFormHtml(detail.busy) : ''}
+    ${c.status !== 'purged' ? accessHtml(detail.data.access, detail.busy) : ''}
+    ${c.status === 'active' ? editFormHtml(c, detail.busy) : ''}
     ${c.status === 'deleted' ? restoreHtml(detail.busy) : ''}
     ${c.status !== 'purged' ? purgeHtml(c) : ''}
     ${c.status === 'active' ? `
@@ -618,6 +663,7 @@ function paintDetail(root: HTMLElement, detail: DetailState): void {
     competition: c.raw,
     files: detail.data.files,
     hovtp: detail.data.hovtp,
+    access: detail.data.access,
   });
   bindDetail(root, detail, c);
   paintFiles(detail);
@@ -645,7 +691,12 @@ function factsHtml(data: AdminCompetitionDetail): string {
       ${fact('Start', esc(formatDateFi(c.startDate)))}
       ${fact('End', esc(formatDateFi(c.endDate ?? '')))}
       ${fact('Venue', esc(c.venue))}
-      ${fact('Owner', `<span class="adm-break">${esc(c.createdBy ?? '')}</span>`)}
+      ${fact('Owner', c.status === 'purged'
+        ? ''
+        : ownerOf(data.access)
+          ? `<span class="adm-break">${esc(userLabel(ownerOf(data.access)))}</span>`
+          : '<span class="adm-dim">no owner — only admins see it</span>')}
+      ${fact('Created by', `<span class="adm-break">${esc(c.createdBy ?? '')}</span>`)}
       ${fact('Deletion date', esc(deletionDay(c)))}
       ${fact('Extended', c.extendedCount ? `${esc(c.extendedCount)} × · last ${esc(formatDateTimeFi(c.lastExtendedUtc))}` : '0 ×')}
       ${fact('Created', esc(formatDateTimeFi(c.createdUtc)))}
@@ -672,7 +723,7 @@ function actionsHtml(c: AdminCompetition, busy: boolean): string {
   `;
 }
 
-function editFormHtml(busy: boolean): string {
+function editFormHtml(c: AdminCompetition, busy: boolean): string {
   const tomorrow = utcDay(1);
   return `
     <section class="card adm-card">
@@ -686,7 +737,9 @@ function editFormHtml(busy: boolean): string {
           <label class="adm-field"><span>End date</span><input class="adm-input" type="date" name="endDate"></label>
         </div>
         <label class="adm-field"><span>Venue</span><input class="adm-input" name="venue" maxlength="200"></label>
-        <label class="adm-field"><span>Owner (e-mail)</span><input class="adm-input" type="email" name="createdBy" maxlength="320" autocomplete="off"></label>
+        <div class="adm-field"><span>Created by</span>
+          <span class="adm-readonly adm-break">${c.createdBy ? esc(c.createdBy) : '<span class="adm-dim">—</span>'}</span>
+          <small class="adm-hint">History only. Who owns the competition is set under Access → Change owner.</small></div>
         <label class="adm-field"><span>Deletion date (UTC, tomorrow or later)</span><input class="adm-input" type="date" name="deletionDate" min="${tomorrow}"></label>
         <div class="adm-form-actions">
           <button type="submit" class="btn btn-primary btn-sm" ${busy ? 'disabled' : ''}>Save changes</button>
@@ -695,6 +748,211 @@ function editFormHtml(busy: boolean): string {
       </form>
     </section>
   `;
+}
+
+const ROLE_LABEL: Record<AdminGrant['role'], string> = {
+  owner: 'owner',
+  write: 'can edit',
+  read: 'view only',
+};
+
+/** Who has access, and the admin-only "Change owner…" picker */
+function accessHtml(access: AdminGrant[], busy: boolean): string {
+  const disabled = busy ? 'disabled' : '';
+  const rows = access.map((g) => `
+    <tr>
+      <td>${esc(g.name || '—')}</td>
+      <td class="adm-break">${esc(g.email)}</td>
+      <td>${badge(ROLE_LABEL[g.role], g.role === 'owner' ? 'info' : g.role === 'write' ? 'ok' : 'muted')}</td>
+    </tr>`).join('');
+  return `
+    <section class="card adm-card">
+      <h3>Access</h3>
+      ${ownerOf(access) ? '' : '<p class="adm-note">This competition has no owner, so only admins can see it. Give it one below.</p>'}
+      ${access.length ? `
+        <div class="adm-table-wrap">
+          <table class="adm-table">
+            <thead><tr><th>Name</th><th>E-mail</th><th>Access</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>` : ''}
+      <p class="adm-note">To share it or change someone's access, open it in the tools and use <strong>Share…</strong> on the home page.</p>
+      <form id="adm-owner" class="adm-form" novalidate>
+        <div class="adm-field">
+          <label for="adm-owner-search">Change owner…</label>
+          <div class="adm-combo">
+            <input id="adm-owner-search" class="adm-input" type="text" autocomplete="off" spellcheck="false"
+                   placeholder="Name or e-mail" role="combobox" aria-autocomplete="list" aria-expanded="false"
+                   aria-controls="adm-owner-results" aria-describedby="adm-owner-hint" ${disabled}>
+            <ul id="adm-owner-results" class="adm-combo-list" role="listbox" aria-label="Matching users" hidden></ul>
+          </div>
+          <small class="adm-hint" id="adm-owner-hint" aria-live="polite">Type at least ${ADMIN_USER_SEARCH_MIN_CHARS} characters of a name or e-mail. The current owner keeps edit access.</small>
+        </div>
+        <div class="adm-form-actions">
+          <button type="submit" class="btn btn-primary btn-sm" data-owner-submit disabled>Make owner</button>
+          <button type="button" class="btn btn-secondary btn-sm" data-action="owner-me" ${disabled}>Make me the owner</button>
+        </div>
+      </form>
+    </section>
+  `;
+}
+
+/** Wire the "Change owner…" type-ahead: 250 ms debounce, arrow keys + Enter, confirm */
+function bindOwnerPicker(root: HTMLElement, detail: DetailState, c: AdminCompetition, access: AdminGrant[]): void {
+  const form = root.querySelector<HTMLFormElement>('#adm-owner');
+  if (!form) return;
+  const input = form.querySelector<HTMLInputElement>('#adm-owner-search')!;
+  const list = form.querySelector<HTMLUListElement>('#adm-owner-results')!;
+  const hint = form.querySelector<HTMLElement>('#adm-owner-hint')!;
+  const submit = form.querySelector<HTMLButtonElement>('[data-owner-submit]')!;
+  const defaultHint = hint.textContent ?? '';
+  const current = ownerOf(access);
+  let results: AdminUserRef[] = [];
+  let active = -1;
+  let picked: AdminUserRef | null = null;
+  let timer: number | null = null;
+  let seq = 0;
+
+  const close = (): void => {
+    list.hidden = true;
+    list.innerHTML = '';
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-activedescendant');
+    active = -1;
+  };
+  const highlight = (index: number): void => {
+    active = index;
+    list.querySelectorAll<HTMLElement>('[role="option"]').forEach((el, i) => {
+      el.classList.toggle('adm-combo-item--active', i === index);
+      el.setAttribute('aria-selected', i === index ? 'true' : 'false');
+      if (i === index) input.setAttribute('aria-activedescendant', el.id);
+    });
+  };
+  const pick = (user: AdminUserRef | null): void => {
+    picked = user;
+    submit.disabled = !user || detail.busy;
+    if (user) {
+      input.value = userLabel(user);
+      hint.textContent = current && current.userId === user.userId
+        ? `${userLabel(user)} already owns it.`
+        : `Press Make owner to hand “${c.name || c.code}” to ${userLabel(user)}.`;
+      if (current && current.userId === user.userId) submit.disabled = true;
+    } else {
+      hint.textContent = defaultHint;
+    }
+  };
+  const choose = (index: number): void => {
+    const user = results[index];
+    if (!user) return;
+    close();
+    pick(user);
+    submit.focus();
+  };
+  const render = (): void => {
+    if (!results.length) { close(); return; }
+    list.innerHTML = results.map((u, i) => `
+      <li id="adm-owner-opt-${i}" class="adm-combo-item" role="option" aria-selected="false" data-index="${i}">
+        <span>${esc(u.name || u.email)}</span>${u.name && u.email ? `<span class="adm-sub">${esc(u.email)}</span>` : ''}
+      </li>`).join('');
+    list.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
+    active = -1;
+    list.querySelectorAll<HTMLElement>('[data-index]').forEach((el) => {
+      el.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        choose(Number(el.dataset.index));
+      });
+    });
+  };
+  const search = async (query: string): Promise<void> => {
+    const mine = ++seq;
+    hint.textContent = 'Searching…';
+    try {
+      const found = await searchAdminUsers(query);
+      if (mine !== seq) return;
+      results = found;
+      render();
+      hint.textContent = found.length
+        ? `${found.length} ${found.length === 1 ? 'match' : 'matches'} — arrow keys and Enter pick one.`
+        : 'Nobody matches. Users appear once they have signed in.';
+    } catch (err) {
+      if (mine !== seq) return;
+      results = [];
+      close();
+      hint.textContent = errorText(err);
+    }
+  };
+
+  input.addEventListener('input', () => {
+    if (picked && input.value !== userLabel(picked)) pick(null);
+    if (timer !== null) window.clearTimeout(timer);
+    const query = input.value.trim();
+    if (query.length < ADMIN_USER_SEARCH_MIN_CHARS) {
+      seq++;
+      results = [];
+      close();
+      if (!picked) hint.textContent = defaultHint;
+      return;
+    }
+    timer = window.setTimeout(() => { timer = null; void search(query); }, 250);
+  });
+  input.addEventListener('keydown', (e) => {
+    const open = !list.hidden && results.length > 0;
+    if (e.key === 'ArrowDown' && open) {
+      e.preventDefault();
+      highlight(active < results.length - 1 ? active + 1 : 0);
+    } else if (e.key === 'ArrowUp' && open) {
+      e.preventDefault();
+      highlight(active > 0 ? active - 1 : results.length - 1);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (open) choose(active >= 0 ? active : 0);
+      else if (picked && !submit.disabled) form.requestSubmit();
+    } else if (e.key === 'Escape' && open) {
+      e.preventDefault();
+      close();
+    }
+  });
+  input.addEventListener('blur', () => window.setTimeout(close, 120));
+
+  const changeOwner = (user: AdminUserRef): void => {
+    const name = c.name || c.code;
+    const confirmed = window.confirm(
+      `Make ${userLabel(user)} the owner of “${name}”?\n\n`
+      + (current
+        ? `${userLabel(current)} stays on it with edit access. `
+        : 'It has no owner now. ')
+      + 'The new owner can share it, and delete it.'
+    );
+    if (!confirmed) return;
+    void runAction(detail, async () => {
+      await setAdminOwner(c.id, user.userId);
+      return { kind: 'ok', text: `${userLabel(user)} now owns “${name}”.` };
+    });
+  };
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    if (picked && !detail.busy) changeOwner(picked);
+  });
+
+  root.querySelector<HTMLButtonElement>('[data-action="owner-me"]')?.addEventListener('click', (e) => {
+    const btn = e.currentTarget as HTMLButtonElement;
+    btn.disabled = true;
+    void getMe()
+      .then((me) => {
+        btn.disabled = detail.busy;
+        if (current && current.userId === me.userId) {
+          hint.textContent = 'You already own it.';
+          return;
+        }
+        changeOwner({ userId: me.userId, name: me.name, email: me.email });
+      })
+      .catch((err: unknown) => {
+        btn.disabled = detail.busy;
+        hint.textContent = errorText(err);
+      });
+  });
 }
 
 function restoreHtml(busy: boolean): string {
@@ -725,6 +983,8 @@ function purgeHtml(c: AdminCompetition): string {
 }
 
 function bindDetail(root: HTMLElement, detail: DetailState, c: AdminCompetition): void {
+  if (detail.data) bindOwnerPicker(root, detail, c, detail.data.access);
+
   root.querySelector('[data-action="extend"]')?.addEventListener('click', () => {
     void runAction(detail, async () => {
       await extendCompetition(c.id);
@@ -733,7 +993,7 @@ function bindDetail(root: HTMLElement, detail: DetailState, c: AdminCompetition)
   });
 
   root.querySelector('[data-action="open"]')?.addEventListener('click', () => {
-    setActiveCompetition(toPlatform(c));
+    setActiveCompetition(toPlatform(c, detail.data ? ownerOf(detail.data.access) : undefined));
     detail.notice = {
       kind: 'ok',
       text: `“${c.name || c.code}” is now the active competition in every tool: `,
@@ -762,7 +1022,6 @@ function bindDetail(root: HTMLElement, detail: DetailState, c: AdminCompetition)
     field('startDate').value = c.startDate;
     field('endDate').value = c.endDate ?? '';
     field('venue').value = c.venue;
-    field('createdBy').value = c.createdBy ?? '';
     field('deletionDate').value = c.deletionDate.slice(0, 10);
 
     edit.addEventListener('submit', (e) => {
@@ -775,7 +1034,6 @@ function bindDetail(root: HTMLElement, detail: DetailState, c: AdminCompetition)
       const startDate = field('startDate').value;
       const endDate = field('endDate').value;
       const venue = field('venue').value.trim();
-      const createdBy = field('createdBy').value.trim();
       const deletionDate = field('deletionDate').value;
 
       if (!name) {
@@ -791,7 +1049,6 @@ function bindDetail(root: HTMLElement, detail: DetailState, c: AdminCompetition)
       if (startDate !== c.startDate) patch.startDate = startDate;
       if (endDate !== (c.endDate ?? '')) patch.endDate = endDate;
       if (venue !== c.venue) patch.venue = venue;
-      if (createdBy !== (c.createdBy ?? '')) patch.createdBy = createdBy;
       if (deletionDate !== c.deletionDate.slice(0, 10)) {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(deletionDate) || deletionDate < utcDay(1)) {
           errorEl.textContent = 'The deletion date must be tomorrow (UTC) or later.';
@@ -1233,6 +1490,94 @@ function platformDiagHtml(): string {
 }
 
 /* ════════════════════════════════════════════════════════════════
+   Users
+   ════════════════════════════════════════════════════════════════ */
+
+function renderUsers(root: HTMLElement): void {
+  root.innerHTML = `
+    <section class="card adm-card">
+      <div class="adm-toolbar">
+        <label class="adm-field adm-field--grow">
+          <span class="adm-sr">Search</span>
+          <input id="adm-users-search" class="adm-input" type="search" placeholder="Search name or e-mail…" autocomplete="off">
+        </label>
+        <button type="button" id="adm-users-refresh" class="btn btn-secondary btn-sm">Refresh</button>
+      </div>
+      <p class="adm-note">Everyone who has signed in. Someone unseen for a year who owns no live competition is removed by the nightly sweep, together with their shares.</p>
+      <div id="adm-users-body"></div>
+    </section>
+  `;
+  const search = root.querySelector<HTMLInputElement>('#adm-users-search')!;
+  search.value = state.usersSearch;
+  search.addEventListener('input', () => {
+    state.usersSearch = search.value;
+    paintUsers();
+  });
+  root.querySelector('#adm-users-refresh')!.addEventListener('click', () => void loadUsers());
+  if (state.users) paintUsers();
+  else void loadUsers();
+}
+
+async function loadUsers(): Promise<void> {
+  state.usersError = '';
+  state.users = null;
+  paintUsers();
+  try {
+    state.users = await listAdminUsers();
+  } catch (err) {
+    state.usersError = errorText(err);
+  }
+  if (state.view.tab === 'users') paintUsers();
+}
+
+function paintUsers(): void {
+  const body = document.getElementById('adm-users-body');
+  if (!body) return;
+  if (state.usersError) {
+    body.innerHTML = errorBox(state.usersError);
+    return;
+  }
+  if (!state.users) {
+    body.innerHTML = loadingBox('Loading users…');
+    return;
+  }
+  const needle = state.usersSearch.trim().toLowerCase();
+  const rows = state.users
+    .filter((u) => !needle || `${u.name} ${u.email} ${u.userId}`.toLowerCase().includes(needle))
+    .sort((a, b) => (b.lastSeenUtc ?? '').localeCompare(a.lastSeenUtc ?? ''));
+  const count = rows.length === state.users.length
+    ? `${rows.length} user${rows.length === 1 ? '' : 's'}`
+    : `${rows.length} of ${state.users.length} users`;
+  if (!rows.length) {
+    body.innerHTML = `<p class="adm-count">${esc(count)}</p><p class="adm-empty">No users match.</p>`;
+    return;
+  }
+  body.innerHTML = `
+    <p class="adm-count">${esc(count)}</p>
+    <div class="adm-table-wrap">
+      <table class="adm-table adm-table--wide">
+        <thead>
+          <tr><th>Name</th><th>E-mail</th><th>First seen</th><th>Last seen</th>
+              <th class="adm-num">Owns</th><th class="adm-num">Shared with</th><th class="adm-num">Identities</th></tr>
+        </thead>
+        <tbody>
+          ${rows.map((u) => `
+            <tr>
+              <td>${esc(u.name || '—')}<span class="adm-mono adm-sub" title="Platform user id">${esc(u.userId)}</span></td>
+              <td class="adm-break">${esc(u.email)}</td>
+              <td class="adm-nowrap">${esc(formatDateTimeFi(u.firstSeenUtc))}</td>
+              <td class="adm-nowrap">${esc(formatDateTimeFi(u.lastSeenUtc))}</td>
+              <td class="adm-num">${esc(u.owned)}</td>
+              <td class="adm-num">${esc(u.shared)}</td>
+              <td class="adm-num">${esc(u.identities)}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+/* ════════════════════════════════════════════════════════════════
    Audit log
    ════════════════════════════════════════════════════════════════ */
 
@@ -1242,7 +1587,7 @@ function renderAudit(root: HTMLElement): void {
   root.innerHTML = `
     <section class="card adm-card">
       <div class="adm-toolbar adm-toolbar--bare">
-        <p class="adm-note adm-grow">Every admin action, newest first. Kept for a year.</p>
+        <p class="adm-note adm-grow">Every admin action and every sharing change, newest first. Kept for a year.</p>
         <button type="button" id="adm-audit-refresh" class="btn btn-secondary btn-sm">Refresh</button>
       </div>
       <div id="adm-audit-body"></div>
@@ -1295,13 +1640,13 @@ function paintAudit(): void {
     return;
   }
   if (state.audit.length === 0) {
-    body.innerHTML = '<p class="adm-empty">No admin actions recorded yet.</p>';
+    body.innerHTML = '<p class="adm-empty">Nothing recorded yet.</p>';
     return;
   }
   body.innerHTML = `
     <div class="adm-table-wrap">
       <table class="adm-table adm-table--wide">
-        <thead><tr><th>When</th><th>Admin</th><th>Action</th><th>Competition</th><th>Changes</th><th>Outcome</th></tr></thead>
+        <thead><tr><th>When</th><th>By</th><th>Action</th><th>Competition</th><th>Target</th><th>Changes</th><th>Outcome</th></tr></thead>
         <tbody>
           ${state.audit.map((e) => `
             <tr>
@@ -1311,6 +1656,7 @@ function paintAudit(): void {
               <td>${e.competitionId
                 ? `<a href="${attr(pathFor({ tab: 'competitions', id: e.competitionId }))}" class="adm-mono">${esc(e.competitionCode ?? e.competitionId)}</a>`
                 : esc(e.competitionCode ?? '—')}</td>
+              <td class="adm-break">${e.target ? esc(e.target) : '<span class="adm-dim">—</span>'}</td>
               <td>${changesHtml(e.changes)}</td>
               <td>${e.outcome === 'ok' ? badge('ok', 'ok') : badge(e.outcome || '—', 'warn')}</td>
             </tr>`).join('')}

@@ -4,16 +4,57 @@ This Function App sits behind the site's router Web App (`server/server.js`),
 which owns the Entra login and forwards every `/api/*` request here with
 
     X-Proxy-Secret:          the shared secret (PROXY_SHARED_SECRET)
-    X-Forwarded-User-Email:  the signed-in user's email
+    X-Forwarded-User-Tid:    the signed-in user's Entra tenant id (GUID)
+    X-Forwarded-User-Oid:    their Entra object id (GUID) — the identity
+    X-Forwarded-User-Email:  their e-mail, lowercased (display and audit only)
+    X-Forwarded-User-Name:   their display name, percent-encoded
+    X-Forwarded-User-Admin:  "1" for the router's admins (informational here)
 
-The browser never reaches this app directly.
+The browser never reaches this app directly, but its hostname is public, so
+the gate (`_require_user`) FAILS CLOSED: PROXY_SHARED_SECRET must be set and
+match (constant-time), the identity comes only from the headers above, and the
+tenant must be in ALLOWED_TENANT_IDS. Anything else is 401 (403
+tenant_not_allowed for a foreign tenant). The e-mail header counts only when
+it is printable ASCII (checked before lowercasing — see _normalize_email).
+A route's {id} is normalised once to a lowercase GUID (anything else is
+404 not_found) and only that spelling is ever used for a lookup.
+
+Users and access — the platform owns an internal user id (GUID), decoupled
+from the identity provider, and every grant references only that id:
+
+    users              PK "USER",     RK <userId>        Email, DisplayName,
+                                                          FirstSeenUtc, LastSeenUtc
+                                                          (PII: this app only)
+                       PK "SEARCHRATE", RK <userId>      MinuteStart/Count,
+                                                          DayStart/Count
+    useridentities     PK "IDENTITY", RK <tid>_<oid>     UserId, Tid, Oid,
+                                                          Provider "entra", CreatedUtc
+    competitionaccess  PK <competition guid>, RK <userId> Role owner|write|read,
+                                                          GrantedBy (userId), GrantedUtc
+
+The tools read `useridentities` + `competitionaccess` (platform_access.py in
+each tool repo), never `users`. A first request from an unknown identity
+creates the user (insert-then-reread on a race) and, once, claims the
+competitions created before LEGACY_CLAIM_CUTOFF whose CreatedBy is that e-mail
+and which never had an owner (claimed rows are marked LegacyClaimedUtc).
+Exactly one owner row per competition, enforced by the ownership sentinel
+(competitionaccess RowKey "_owner"): create, legacy claim and admin owner swap
+all write it in the same table transaction as their owner rows. An admin
+counts as owner everywhere; a user-route write that only the admin role
+allowed is audited as `admin.override.<action>`. No access at all is a 404 not_found (existence never leaks), read
+access on a write route 403 read_only, anything short of owner on an owner
+route 403 owner_required:
+
+    read   GET competition, list/download files, list HOVTP sources
+    write  PUT/PATCH, extend, upload/delete file, HOVTP accept/reject/revoke
+    owner  DELETE competition, manage access
 
 HTTP contract (Azure Functions' default `api` route prefix makes these the
 literal URLs the router proxies to — and the URLs
 `packages/shared-ui/src/competition.ts` calls):
 
-    GET    /api/competitions            -> 200 [Competition, ...]
-    POST   /api/competitions            -> 201 Competition
+    GET    /api/competitions            -> 200 [Competition, ...]  (own + shared only)
+    POST   /api/competitions            -> 201 Competition  (caller becomes owner)
                                            409 {"error": "code_in_use", ...}
     GET    /api/competitions/{id}       -> 200 Competition | 404
     PUT    /api/competitions/{id}       -> 200 Competition | 404
@@ -21,6 +62,24 @@ literal URLs the router proxies to — and the URLs
     DELETE /api/competitions/{id}       -> 200 Competition (status "deleted") | 404
     POST   /api/competitions/{id}/extend -> 200 Competition (deletionDate + 7 days) | 404
     GET    /api/health                  -> 200 {"status": "ok"}
+
+    GET    /api/competitions/{id}/access          -> 200 {"items": [Grant, ...]}  (owner)
+    PUT    /api/competitions/{id}/access/{userId} -> 200 {"item": Grant}  (owner)
+                                                     {"role": "read"|"write"}
+    DELETE /api/competitions/{id}/access/{userId} -> 200 {"status": "removed", ...}
+                                                     (owner, or the grantee itself =
+                                                     leave; {userId} may be "me")
+    GET    /api/users/search?q=         -> 200 {"items": [SearchHit, ...]}  (<= 8 hits,
+                                           not yourself; 429 rate_limited at 30/min or
+                                           300/day per user). q a full e-mail: exact
+                                           match; else >= 3 chars of the NAME only
+    GET    /api/users/recent            -> 200 {"items": [UserRef, ...]}
+    GET    /api/users/me                -> 200 {"userId", "name", "email", "isAdmin"}
+
+Grant = {"userId", "name", "email", "role"}; UserRef = {"userId", "name", "email"};
+SearchHit = {"userId", "name", "email": str | null, "emailHint"}: `email` is
+set for an exact e-mail match and for people the caller already shares a
+competition with, else null with only the masked hint ("a•••@club.fi").
 
     timer  retention_sweep (03:00 UTC)  -> purges every competition past its
                                            deletionDate (see "Retention" below)
@@ -52,7 +111,9 @@ Competition JSON (both directions; server-owned fields are ignored on input):
       "createdUtc":"2026-01-02T10:00:00Z",
       "updatedUtc":"2026-01-02T10:00:00Z",
       "deletionDate":"2026-03-04T00:00:00Z",  server-owned, see "Retention"
-      "status":    "active" | "deleted"
+      "status":    "active" | "deleted",
+      "access":    "owner" | "write" | "read",   the caller's (admin = owner)
+      "owner":     {"userId", "name", "email"} | null
     }
 
 FileInfo JSON (the shared competition file pool):
@@ -96,7 +157,13 @@ row to the `adminlog` table (see "Admin log" below):
     GET    /api/manage/competitions?status=active|deleted|purged|all
                                            -> 200 {"competitions": [AdminCompetition, ...]}
     GET    /api/manage/competitions/{id}   -> 200 {"competition", "files", "hovtp"}
-    PATCH  /api/manage/competitions/{id}   -> 200 {"competition"}  (+ createdBy, deletionDate)
+    PATCH  /api/manage/competitions/{id}   -> 200 {"competition"}  (+ deletionDate;
+                                              createdBy is read-only history: 400)
+    PUT    /api/manage/competitions/{id}/owner -> 200 {"competition", "access"}
+                                                  {"userId"} — one table transaction:
+                                                  new owner in, old owner -> write
+    GET    /api/manage/users[?q=]          -> 200 {"users": [AdminUser, ...]}  (q: name or
+                                              e-mail substring, >= 3 chars, <= 8 hits)
     DELETE /api/manage/competitions/{id}   -> 200 {"competition"} | 409 deleted
     POST   /api/manage/competitions/{id}/restore -> 200 {"competition"}  {deletionDate?}
     POST   /api/manage/competitions/{id}/purge   -> 200 {"competition"} (tombstone)
@@ -154,18 +221,28 @@ DELETE pulls the date to the next midnight. The nightly `retention_sweep`:
   4. deletes HOVTPSESSION rows idle for HOVTP_SESSION_IDLE_DAYS;
   5. reconciles every COMPETITION row into the clock table;
   6. prunes the admin log: AUDIT rows after AUDIT_RETENTION_DAYS, SWEEP rows
-     after SWEEP_LOG_RETENTION_DAYS.
+     after SWEEP_LOG_RETENTION_DAYS;
+  7. removes users unseen for INACTIVE_USER_DAYS who own no live competition:
+     their grants, identity links, search counter and users row — the
+     users row re-read first (skipped if seen since) and deleted
+     etag-conditionally.
+
+A purge (step 2, and the admin "Purge now") also deletes the competition's
+competitionaccess rows; a soft delete keeps them, so a restore keeps its shares.
 
 RETENTION_PURGE_ENABLED (app setting, Bicep-owned, on by default) must be
-"true" for steps 2–4 and 6 to delete anything; "false" is the kill switch —
+"true" for steps 2–4, 6 and 7 to delete anything; "false" is the kill switch —
 they then only log what they would do. The admin "Purge now" is an explicit
 action and does not obey it.
 
 Admin log — table `adminlog` (ADMIN_LOG_TABLE), written only by this app:
 
     PartitionKey="AUDIT", RowKey=<inverted ticks>_<uuid>   Utc, Actor (the
-        admin's e-mail), Action, CompetitionId, CompetitionCode, Changes (JSON
-        {field: [before, after]}, changed fields only), Outcome
+        acting user's e-mail), Action, CompetitionId, CompetitionCode, Target
+        (the e-mail an access change is about), Changes (JSON {field: [before,
+        after]}, changed fields only), Outcome — admin mutations and every
+        user's access changes (access.grant/change/revoke/leave/claim,
+        competition.owner)
     PartitionKey="SWEEP", RowKey=<inverted ticks>_<uuid>   Utc, PurgeEnabled,
         DryRunManual, Summary (JSON) — one row per sweep run
 
@@ -173,18 +250,19 @@ Inverted ticks make ascending RowKey order newest first. Written after the
 action succeeded, best effort: a failed write is logged, never rolled back.
 """
 
-import base64
 import hmac
 import ipaddress
 import json
 import logging
 import os
 import re
+import time
 import unicodedata
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import azure.functions as func
 from azure.core import MatchConditions
@@ -193,7 +271,7 @@ from azure.core.exceptions import (
     ResourceModifiedError,
     ResourceNotFoundError,
 )
-from azure.data.tables import TableClient, UpdateMode
+from azure.data.tables import TableClient, TableTransactionError, UpdateMode
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient, ContentSettings
 
@@ -256,6 +334,50 @@ _MAX_TICKS = 3155378975999999999
 _TICKS_EPOCH = datetime(1, 1, 1, tzinfo=timezone.utc)
 _ADMIN_LOG_KEY_RE = re.compile(r"^[0-9a-f_]{1,80}$")
 _DELETION_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(T00:00:00Z)?$")
+
+# ── users and access ──
+USERS_TABLE_DEFAULT = "users"
+USER_IDENTITIES_TABLE_DEFAULT = "useridentities"
+COMPETITION_ACCESS_TABLE_DEFAULT = "competitionaccess"
+PK_USER = "USER"
+PK_IDENTITY = "IDENTITY"
+IDENTITY_PROVIDER_ENTRA = "entra"
+ROLE_OWNER = "owner"
+ROLE_WRITE = "write"
+ROLE_READ = "read"
+ROLE_RANK = {ROLE_READ: 1, ROLE_WRITE: 2, ROLE_OWNER: 3}
+GRANTABLE_ROLES = (ROLE_READ, ROLE_WRITE)
+# LastSeenUtc/Email/DisplayName are refreshed at most this often per process.
+LAST_SEEN_REFRESH_SECONDS = 3600
+USER_SEARCH_MIN_CHARS = 3
+USER_SEARCH_MAX_RESULTS = 8
+USER_SEARCH_MAX_QUERY = 100
+# Per user, shared by every instance (users table, PK SEARCHRATE): enough for
+# a type-ahead, too slow to scrape the directory.
+USER_SEARCH_RATE_LIMIT = 30
+USER_SEARCH_RATE_WINDOW_SECONDS = 60
+USER_SEARCH_DAILY_LIMIT = 300
+USER_SEARCH_DAY_WINDOW_SECONDS = 86400
+PK_SEARCH_RATE = "SEARCHRATE"
+RECENT_SHARE_USERS = 10
+# A users row unseen this long, owning no live competition, is removed nightly.
+INACTIVE_USER_DAYS = 365
+# The legacy e-mail claim (_claim_legacy_competitions) only ever considers
+# competitions created before this instant: the rollout of the access model.
+# MUST be <= the moment the access model reaches prod — anything created
+# after it already has an owner row from its create, and a later row must
+# never be claimable by whoever signs in with its CreatedBy e-mail.
+LEGACY_CLAIM_CUTOFF = "2026-10-19T09:30:00Z"
+# The ownership sentinel: one row per competition in its competitionaccess
+# partition (RowKey is not a GUID, so it is nobody's grant and the tools'
+# point reads never see it). Every ownership change — create, legacy claim,
+# admin owner swap — must insert it or win an etag-conditional write on it
+# in the SAME table transaction as its owner rows, so two of them can never
+# both land: there is never more than one owner row.
+OWNER_LOCK_ROW_KEY = "_owner"
+ME = "me"
+# Always used with fullmatch: `$` with match() would accept a trailing "\n".
+_GUID_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 MAX_NAME_LENGTH = 200
 MAX_CODE_LENGTH = 64
@@ -368,88 +490,518 @@ def hovtp_source_row_key(competition_id: str, ip: str) -> str:
     return f"{competition_id}_{ip}"
 
 
-# ── auth (verbatim contract from the tool Function Apps) ──────────────────────
+# ── auth: the fail-closed gate ────────────────────────────────────────────────
+# This app's hostname is public. The only proof that a request came through
+# the router is the shared secret, and the only identity is what the router
+# put into the X-Forwarded-User-* headers after decoding Easy Auth's principal.
+# No fallback: X-MS-CLIENT-PRINCIPAL*, Authorization: Bearer and the like are
+# ignored, whoever sends them.
+
+def _header(req: func.HttpRequest, name: str) -> str:
+    return req.headers.get(name) or req.headers.get(name.lower()) or ""
+
 
 def _proxy_secret_ok(req: func.HttpRequest) -> bool:
-    """
-    Verify the request came from the Web App proxy by checking the shared
-    secret header. The function endpoint is public, so this prevents anyone
-    from spoofing the X-Forwarded-User-Email header directly.
-
-    Enforced only when PROXY_SHARED_SECRET is set (so local dev and any
-    brief pre-rollout window fail open rather than locking everyone out).
-    """
-    expected = os.environ.get("PROXY_SHARED_SECRET")
+    """The router's X-Proxy-Secret, compared in constant time. FAILS CLOSED:
+    an unset PROXY_SHARED_SECRET rejects every request."""
+    expected = os.environ.get("PROXY_SHARED_SECRET") or ""
     if not expected:
-        return True
-    provided = req.headers.get("X-Proxy-Secret") or req.headers.get("x-proxy-secret")
-    return provided == expected
+        return False
+    provided = _header(req, "X-Proxy-Secret")
+    return hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
 
 
-def _decode_jwt_payload(token: str) -> dict | None:
-    """Decode the payload of a JWT token without verification (base64 only)."""
-    try:
-        parts = token.split('.')
-        if len(parts) != 3:
-            return None
-        payload_b64 = parts[1]
-        payload_b64 += '=' * (4 - len(payload_b64) % 4)
-        payload_bytes = base64.urlsafe_b64decode(payload_b64)
-        return json.loads(payload_bytes)
-    except Exception as e:
-        logging.error(f"Error decoding JWT payload: {e}")
+def _allowed_tenant_ids() -> frozenset:
+    """ALLOWED_TENANT_IDS (comma-separated) -> lowercased set. Empty = none."""
+    raw = os.environ.get("ALLOWED_TENANT_IDS") or ""
+    return frozenset(part.strip().lower() for part in raw.split(",") if part.strip())
+
+
+_PRINTABLE_ASCII_RE = re.compile(r"[\x21-\x7e]+")
+
+
+def _normalize_email(value) -> str:
+    """An e-mail as this app compares and stores it: printable ASCII, at most
+    MAX_EMAIL_LENGTH, lowercased — or '' (no e-mail at all). The ASCII test
+    comes BEFORE lowercasing: str.lower() folds some non-ASCII letters into
+    ASCII ones (U+212A KELVIN SIGN -> 'k'), which would let a look-alike
+    address match an admin's or a legacy CreatedBy."""
+    text = str(value or "").strip()
+    if not _PRINTABLE_ASCII_RE.fullmatch(text) or len(text) > MAX_EMAIL_LENGTH:
+        return ""
+    return text.lower()
+
+
+def _forwarded_identity(req: func.HttpRequest):
+    """-> (tid, oid, email, name) from the router's headers, or None when the
+    tid or the oid is missing or not a GUID. E-mail and name are display data:
+    never used to decide anything (except the one-time legacy claim)."""
+    tid = _header(req, "X-Forwarded-User-Tid").strip().lower()
+    oid = _header(req, "X-Forwarded-User-Oid").strip().lower()
+    if not _GUID_RE.fullmatch(tid) or not _GUID_RE.fullmatch(oid):
         return None
+    email = _normalize_email(_header(req, "X-Forwarded-User-Email"))
+    name = unquote(_header(req, "X-Forwarded-User-Name"), errors="replace").strip()
+    return tid, oid, email, name[:MAX_NAME_LENGTH]
 
 
-def get_user_email_from_header(req: func.HttpRequest) -> str | None:
+@dataclass(frozen=True)
+class User:
+    """The caller of a user route, after `_require_user`."""
+    user_id: str
+    email: str
+    name: str
+    is_admin: bool
+    tid: str = ""
+    oid: str = ""
+
+
+def _require_user(req: func.HttpRequest):
+    """-> User, or the 401/403/500 response to return.
+
+    Order matters for the tests' "a rejected request touches no storage": the
+    secret and the headers are checked before any table is read.
     """
-    Extracts the user email from the headers injected by App Service Easy Auth
-    or forwarded by the router Web App, or from an Authorization Bearer JWT.
-    Returns None (=> 401) when the proxy shared secret doesn't match.
-    """
-    # 0. Reject requests that didn't come through the Web App proxy
     if not _proxy_secret_ok(req):
-        logging.warning("Proxy shared secret missing or mismatched; rejecting request")
+        logging.warning("Proxy shared secret unset, missing or mismatched; rejecting request")
+        return _error("unauthorized", "Sign-in required.", 401)
+
+    identity = _forwarded_identity(req)
+    if identity is None:
+        logging.warning("No forwarded identity (tid/oid) on request")
+        return _error("unauthorized", "Sign-in required.", 401)
+    tid, oid, email, name = identity
+
+    # Defence in depth behind the router's own tenant check.
+    if tid not in _allowed_tenant_ids():
+        logging.warning(f"Tenant '{tid}' is not in ALLOWED_TENANT_IDS; rejecting request")
+        return _error("tenant_not_allowed", "Accounts of your organisation cannot use this site.", 403)
+
+    try:
+        user_id = _resolve_user(tid, oid, email, name)
+    except Exception as e:
+        logging.error(f"Could not resolve the user of identity '{tid}_{oid}': {e}")
+        user_id = None
+    if not user_id:
+        return _error("storage_unavailable", "Could not look up the signed-in user.", 500)
+
+    return User(user_id=user_id, email=email, name=name,
+                is_admin=bool(email) and email in _admin_emails(), tid=tid, oid=oid)
+
+
+# ── users ─────────────────────────────────────────────────────────────────────
+# One internal user id per person, decoupled from the identity provider: the
+# Entra External ID move later adds a second useridentities row (new tid+oid)
+# pointing at the same userId. How that link is made is the migration's
+# problem — the data model just does not block it.
+
+def _users_table_name() -> str:
+    return os.environ.get("USERS_TABLE") or USERS_TABLE_DEFAULT
+
+
+def _user_identities_table_name() -> str:
+    return os.environ.get("USER_IDENTITIES_TABLE") or USER_IDENTITIES_TABLE_DEFAULT
+
+
+def _access_table_name() -> str:
+    return os.environ.get("COMPETITION_ACCESS_TABLE") or COMPETITION_ACCESS_TABLE_DEFAULT
+
+
+# userId -> time.monotonic() of the last LastSeenUtc write by this process.
+_LAST_SEEN_WRITES: dict = {}
+
+
+def _create_row(client, entity) -> None:
+    """create_entity, creating the table first when it is missing (local dev —
+    Bicep creates them in Azure). ResourceExistsError propagates."""
+    try:
+        client.create_entity(entity)
+    except ResourceNotFoundError:
+        _ensure_table(client)
+        client.create_entity(entity)
+
+
+def _identity_row_key(tid: str, oid: str) -> str:
+    return f"{tid}_{oid}"
+
+
+def _resolve_user(tid: str, oid: str, email: str, name: str) -> str | None:
+    """Identity -> userId; creates the user on the first request.
+
+    Point read first. A new identity writes the users row, then INSERTS the
+    identity row: two concurrent first requests both try, one insert wins and
+    the loser drops its own users row and re-reads, so both converge on one
+    userId. The winner alone runs the one-time legacy owner claim.
+    """
+    identities = get_table_client(_user_identities_table_name())
+    users = get_table_client(_users_table_name())
+    if identities is None or users is None:
         return None
 
-    # 1. Direct header (standard Easy Auth)
-    val = req.headers.get("X-MS-CLIENT-PRINCIPAL-NAME") or req.headers.get("x-ms-client-principal-name")
-    if val:
-        return val
+    key = _identity_row_key(tid, oid)
+    try:
+        link = identities.get_entity(partition_key=PK_IDENTITY, row_key=key)
+    except ResourceNotFoundError:
+        link = None
+    if link is not None and link.get("UserId"):
+        _touch_user(users, link["UserId"], email, name)
+        return link["UserId"]
 
-    # 2. Forwarded header from the router (server/server.js)
-    forwarded = req.headers.get("X-Forwarded-User-Email") or req.headers.get("x-forwarded-user-email")
-    if forwarded:
-        return forwarded
+    user_id = str(uuid4())
+    now = _now_utc()
+    _create_row(users, {
+        "PartitionKey": PK_USER,
+        "RowKey": user_id,
+        "Email": email,
+        "DisplayName": name,
+        "FirstSeenUtc": now,
+        "LastSeenUtc": now,
+    })
+    try:
+        _create_row(identities, {
+            "PartitionKey": PK_IDENTITY,
+            "RowKey": key,
+            "UserId": user_id,
+            "Tid": tid,
+            "Oid": oid,
+            "Provider": IDENTITY_PROVIDER_ENTRA,
+            "CreatedUtc": now,
+        })
+    except ResourceExistsError:
+        # A concurrent first request of the same identity won the insert.
+        _delete_user_row(users, user_id)
+        link = identities.get_entity(partition_key=PK_IDENTITY, row_key=key)
+        winner = link.get("UserId") or None
+        if winner:
+            _touch_user(users, winner, email, name)
+        return winner
+    except Exception:
+        _delete_user_row(users, user_id)
+        raise
 
-    # 3. Base64 principal header
-    header = req.headers.get("x-ms-client-principal") or req.headers.get("X-MS-CLIENT-PRINCIPAL")
-    if header:
+    _LAST_SEEN_WRITES[user_id] = time.monotonic()
+    _claim_legacy_competitions(user_id, email)
+    return user_id
+
+
+def _delete_user_row(users, user_id: str) -> None:
+    try:
+        users.delete_entity(partition_key=PK_USER, row_key=user_id)
+    except ResourceNotFoundError:
+        pass
+    except Exception as e:
+        logging.warning(f"Could not delete the unused users row '{user_id}': {e}")
+
+
+def _touch_user(users, user_id: str, email: str, name: str) -> None:
+    """LastSeenUtc (and the current e-mail / display name) at most once an
+    hour per process. Best effort: a missed write only makes the user look a
+    little less recently seen. Upsert, so a missing users row is recreated."""
+    now = time.monotonic()
+    last = _LAST_SEEN_WRITES.get(user_id)
+    if last is not None and now - last < LAST_SEEN_REFRESH_SECONDS:
+        return
+    updates = {"PartitionKey": PK_USER, "RowKey": user_id, "LastSeenUtc": _now_utc()}
+    # The router leaves a header out rather than send something unusable;
+    # never blank a stored value because of that.
+    if email:
+        updates["Email"] = email
+    if name:
+        updates["DisplayName"] = name
+    try:
+        users.upsert_entity(updates, mode=UpdateMode.MERGE)
+        _LAST_SEEN_WRITES[user_id] = now
+    except Exception as e:
+        logging.warning(f"Could not refresh users row '{user_id}': {e}")
+
+
+def _owner_lock_row(competition_id: str, owner_id: str, now: str) -> dict:
+    """The competition's ownership sentinel (see OWNER_LOCK_ROW_KEY)."""
+    return {"PartitionKey": _access_pk(competition_id), "RowKey": OWNER_LOCK_ROW_KEY,
+            "OwnerUserId": owner_id, "UpdatedUtc": now}
+
+
+def _owner_row(competition_id: str, owner_id: str, granted_by: str, now: str) -> dict:
+    return {"PartitionKey": _access_pk(competition_id), "RowKey": owner_id, "Role": ROLE_OWNER,
+            "GrantedBy": granted_by, "GrantedUtc": now}
+
+
+def _establish_owner(access, competition_id: str, owner_id: str, granted_by: str) -> None:
+    """First owner of a competition that has never had one (create, legacy
+    claim): ONE transaction that INSERTS the ownership sentinel and the owner
+    row. The insert of the sentinel is what serialises ownership — it fails
+    (the whole transaction with it) once any create, claim or admin owner
+    swap has established an owner. Raises the storage error on a lost race
+    (ResourceExistsError / TableTransactionError) or a failure."""
+    now = _now_utc()
+    operations = [("create", _owner_lock_row(competition_id, owner_id, now)),
+                  ("create", _owner_row(competition_id, owner_id, granted_by, now))]
+    try:
+        access.submit_transaction(operations)
+    except ResourceNotFoundError:
+        # The table itself is missing (local dev; Bicep creates it in Azure).
+        _ensure_table(access)
+        access.submit_transaction(operations)
+
+
+def _claim_legacy_competitions(user_id: str, email: str) -> int:
+    """One-time, at user creation: every competition created (CreatedBy) by
+    this e-mail before LEGACY_CLAIM_CUTOFF that has never had an owner gets
+    this user as its owner. The only place an e-mail grants anything.
+    Rows nobody claims stay admin-only until an admin assigns an owner.
+
+    Never twice: the claim writes the ownership sentinel (_establish_owner),
+    so it loses to any owner a create, another claim or an admin swap has
+    set, and it marks the COMPETITION row LegacyClaimedUtc, so a claimed row
+    is never claimed again — not even after its owner's users row is removed
+    and someone signs in anew with that e-mail.
+    -> number of competitions claimed. Best effort: logged, never raised."""
+    if not email:
+        return 0
+    table_client = get_table_client()
+    access = get_table_client(_access_table_name())
+    if table_client is None or access is None:
+        return 0
+    try:
+        entities = list(table_client.query_entities(f"PartitionKey eq '{PK_COMPETITION}'"))
+    except ResourceNotFoundError:
+        return 0
+    except Exception as e:
+        logging.error(f"Legacy claim for '{user_id}': could not list competitions: {e}")
+        return 0
+
+    cutoff = _parse_utc(LEGACY_CLAIM_CUTOFF)
+    claimed = 0
+    for entity in entities:
+        competition_id = _normalize_competition_id(entity.get("RowKey"))
+        created = _parse_utc(entity.get("CreatedUtc"))
+        if (not competition_id or entity.get("PurgedUtc") or entity.get("LegacyClaimedUtc")
+                or created is None or created >= cutoff
+                or _normalize_email(entity.get("CreatedBy")) != email):
+            continue
         try:
-            decoded = base64.b64decode(header).decode("utf-8")
-            principal = json.loads(decoded)
-            return principal.get("userDetails")
+            # Owner rows written before the sentinel existed count too.
+            if _owner_rows(access, competition_id):
+                continue
+            _establish_owner(access, competition_id, user_id, user_id)
+        except (ResourceExistsError, ResourceModifiedError, TableTransactionError):
+            continue
         except Exception as e:
-            logging.error(f"Error parsing auth header: {e}")
+            logging.error(f"Legacy claim of '{competition_id}' for '{user_id}' failed: {e}")
+            continue
+        try:
+            table_client.update_entity({"PartitionKey": PK_COMPETITION, "RowKey": competition_id,
+                                        "LegacyClaimedUtc": _now_utc()}, mode=UpdateMode.MERGE)
+        except Exception as e:
+            # The sentinel alone already prevents a second claim.
+            logging.warning(f"Could not mark '{competition_id}' as claimed: {e}")
+        claimed += 1
+        _audit(email, "access.claim", entity, {"role": [None, ROLE_OWNER]}, target=email)
+    if claimed:
+        logging.info(f"Legacy claim: user '{user_id}' now owns {claimed} competition(s)")
+    return claimed
 
-    # 4. Authorization Bearer token
-    auth_header = req.headers.get("Authorization") or req.headers.get("authorization")
-    if auth_header and auth_header.lower().startswith("bearer "):
-        claims = _decode_jwt_payload(auth_header[7:])
-        if claims:
-            email = (claims.get("preferred_username") or claims.get("email")
-                     or claims.get("upn") or claims.get("unique_name"))
-            if not email:
-                emails = claims.get("emails")
-                if isinstance(emails, list) and emails:
-                    email = emails[0]
-            if not email:
-                email = claims.get("name") or claims.get("oid")
-            if email:
-                return email
 
-    logging.warning("No identity found on request")
-    return None
+def _user_ref(user_id: str, row) -> dict:
+    row = row or {}
+    return {"userId": user_id, "name": row.get("DisplayName") or "",
+            "email": row.get("Email") or ""}
+
+
+def _read_users(user_ids, users=None) -> dict:
+    """{userId: users row} for the ids that exist (point reads)."""
+    users = users or get_table_client(_users_table_name())
+    found = {}
+    if users is None:
+        return found
+    for user_id in dict.fromkeys(user_ids):
+        try:
+            found[user_id] = users.get_entity(partition_key=PK_USER, row_key=user_id)
+        except ResourceNotFoundError:
+            continue
+        except Exception as e:
+            logging.warning(f"Could not read users row '{user_id}': {e}")
+    return found
+
+
+# ── access ────────────────────────────────────────────────────────────────────
+# The single check point. Grants live in competitionaccess, keyed by the
+# lowercase competition GUID (partition) and the userId (row); the tools read
+# the same rows through platform_access.py.
+
+def _normalize_competition_id(value) -> str:
+    """The one spelling of a competition id: a lowercase GUID (what create
+    writes), or '' for anything else — wrong shape, non-ASCII, surrounding
+    whitespace or a trailing newline. Every route normalises {id} once with
+    this and uses only the result for every entity, blob, HOVTP and access
+    lookup, so two spellings can never reach two different rows."""
+    if not isinstance(value, str) or not value.isascii():
+        return ""
+    lowered = value.lower()
+    return lowered if _GUID_RE.fullmatch(lowered) else ""
+
+
+def _route_competition_id(req: func.HttpRequest) -> str:
+    """{id} of the route, normalised; '' => the caller answers 404 not_found."""
+    return _normalize_competition_id(req.route_params.get("id"))
+
+
+def _competition_not_found() -> func.HttpResponse:
+    return _error("not_found", "Competition not found.", 404)
+
+
+def _access_pk(competition_id: str) -> str:
+    return str(competition_id or "").strip().lower()
+
+
+def _access_rows(access, competition_id: str) -> list:
+    try:
+        return list(access.query_entities(f"PartitionKey eq '{_access_pk(competition_id)}'"))
+    except ResourceNotFoundError:
+        return []
+
+
+def _owner_rows(access, competition_id: str) -> list:
+    return [row for row in _access_rows(access, competition_id) if row.get("Role") == ROLE_OWNER]
+
+
+def _user_grant_rows(access, user_id: str) -> list:
+    """Every grant of one user — a RowKey filter, i.e. a small cross-partition
+    scan. `user_id` is one of our GUIDs, so it is safe in the filter."""
+    if not _GUID_RE.fullmatch(user_id or ""):
+        return []
+    try:
+        return list(access.query_entities(f"RowKey eq '{user_id}'"))
+    except ResourceNotFoundError:
+        return []
+
+
+class _Role(str):
+    """The role a route was granted ('owner' | 'write' | 'read'), plus `own`:
+    the caller's own stored grant (None when they have none). They differ
+    only for an admin, who is owner everywhere — `_admin_override` tells
+    whether a write went through on that alone."""
+    own: str | None = None
+
+
+def _stored_role(user: User, competition_id: str, access=None) -> str | None:
+    """The caller's own competitionaccess role, or None. Storage errors propagate."""
+    access = access or get_table_client(_access_table_name())
+    if access is None:
+        raise RuntimeError("access table configuration invalid")
+    try:
+        row = access.get_entity(partition_key=_access_pk(competition_id), row_key=user.user_id)
+    except ResourceNotFoundError:
+        return None
+    role = row.get("Role")
+    return role if role in ROLE_RANK else None
+
+
+def _access_role(user: User, competition_id: str, access=None) -> _Role | None:
+    """'owner' | 'write' | 'read' | None. An admin is owner everywhere (and
+    their own grant, if any, is kept in `.own`). Storage errors propagate
+    (the caller answers 500)."""
+    own = _stored_role(user, competition_id, access)
+    effective = ROLE_OWNER if user.is_admin else own
+    if effective is None:
+        return None
+    role = _Role(effective)
+    role.own = own
+    return role
+
+
+def _admin_override(user: User, role, need: str) -> bool:
+    """True when `user` may do a `need`-level thing only because they are an
+    admin: their own grant (role.own) falls short of it."""
+    if not user.is_admin:
+        return False
+    return ROLE_RANK.get(getattr(role, "own", None) or "", 0) < ROLE_RANK[need]
+
+
+def _audit_override(user: User, role, need: str, action: str, entity=None,
+                    competition_id: str = "", changes=None, target: str = "") -> None:
+    """After a successful user-route write: an `admin.override.<action>` AUDIT
+    row when the admin role alone allowed it (no own grant good enough).
+    Best effort, like every audit row."""
+    if not _admin_override(user, role, need):
+        return
+    entity = entity if entity is not None else {"RowKey": competition_id}
+    _audit(user.email, f"admin.override.{action}", entity, changes, target=target)
+
+
+def _require_access(user: User, competition_id: str, need: str):
+    """-> (role, None) or (None, error response). None at all -> 404
+    not_found (the same answer as for a competition that does not exist),
+    read on a write route -> 403 read_only, short of owner on an owner route
+    -> 403 owner_required. Decided before any write. `competition_id` must
+    already be normalised (_route_competition_id)."""
+    if not competition_id or _normalize_competition_id(competition_id) != competition_id:
+        return None, _competition_not_found()
+    try:
+        role = _access_role(user, competition_id)
+    except Exception as e:
+        logging.error(f"Could not read the access of '{user.user_id}' to '{competition_id}': {e}")
+        return None, _error("internal_error", "Could not check access to the competition.", 500)
+    if role is None:
+        return None, _competition_not_found()
+    if ROLE_RANK[role] < ROLE_RANK[need]:
+        if need == ROLE_OWNER:
+            return None, _error("owner_required",
+                                "Only the owner can do this.", 403)
+        return None, _error("read_only", "You have view-only access to this competition.", 403)
+    return role, None
+
+
+def _owner_ref(competition_id: str, access=None, users=None, cache=None):
+    """{"userId", "name", "email"} of the competition's owner, or None."""
+    access = access or get_table_client(_access_table_name())
+    if access is None:
+        return None
+    try:
+        owners = _owner_rows(access, competition_id)
+    except Exception as e:
+        logging.warning(f"Could not read the owner of '{competition_id}': {e}")
+        return None
+    if not owners:
+        return None
+    owner_id = sorted(owners, key=lambda row: row.get("GrantedUtc") or "")[-1]["RowKey"]
+    if cache is not None and owner_id in cache:
+        return cache[owner_id]
+    ref = _user_ref(owner_id, _read_users([owner_id], users).get(owner_id))
+    if cache is not None:
+        cache[owner_id] = ref
+    return ref
+
+
+def _self_ref(user: User) -> dict:
+    return {"userId": user.user_id, "name": user.name, "email": user.email}
+
+
+def _competition_json(entity, user: User, role: str, owner_cache=None) -> dict:
+    """entity_to_competition + the caller's `access` and the `owner`."""
+    competition = entity_to_competition(entity)
+    competition["access"] = role
+    competition["owner"] = _owner_ref(entity.get("RowKey", ""), cache=owner_cache)
+    return competition
+
+
+def _grant_json(user_id: str, role: str, users_row) -> dict:
+    ref = _user_ref(user_id, users_row)
+    ref["role"] = role
+    return ref
+
+
+def _access_list(competition_id: str, access=None) -> list:
+    """[Grant] — the owner first, then by name / e-mail. Raises on storage error."""
+    access = access or get_table_client(_access_table_name())
+    if access is None:
+        raise RuntimeError("access table configuration invalid")
+    rows = [row for row in _access_rows(access, competition_id) if row.get("Role") in ROLE_RANK]
+    found = _read_users([row["RowKey"] for row in rows])
+    items = [_grant_json(row["RowKey"], row["Role"], found.get(row["RowKey"])) for row in rows]
+    items.sort(key=lambda item: (-ROLE_RANK[item["role"]],
+                                 (item["name"] or item["email"]).lower(), item["userId"]))
+    return items
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -1027,23 +1579,27 @@ def _merge_hovtp_source(table_client, competition_id: str, ip: str, updates: dic
 
 
 def _hovtp_request(req: func.HttpRequest):
-    """Gate + route params shared by the per-source routes.
+    """Gate + write access + route params shared by the per-source routes.
 
-    -> ((competition_id, ip, email), None) or (None, error response).
+    -> ((competition_id, ip, user, role), None) or (None, error response).
     """
-    email = get_user_email_from_header(req)
-    if not email:
-        return None, _error("unauthorized", "Sign-in required.", 401)
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return None, user
 
-    competition_id = req.route_params.get("id")
+    competition_id = _route_competition_id(req)
     if not competition_id:
-        return None, _error("invalid_id", "A competition id is required.", 400)
+        return None, _competition_not_found()
+
+    role, error = _require_access(user, competition_id, ROLE_WRITE)
+    if error is not None:
+        return None, error
 
     ip = _route_ip(req)
     if not ip:
         return None, _error("invalid_ip", "A valid source IP address is required.", 400)
 
-    return (competition_id, ip, email), None
+    return (competition_id, ip, user, role), None
 
 
 # ── request handlers ──────────────────────────────────────────────────────────
@@ -1051,21 +1607,30 @@ def _hovtp_request(req: func.HttpRequest):
 # plain functions so the test suite can drive them without the Functions host.
 
 def _list_competitions(req: func.HttpRequest) -> func.HttpResponse:
-    email = get_user_email_from_header(req)
-    if not email:
-        return _error("unauthorized", "Sign-in required.", 401)
+    """The caller's own and shared competitions — admins included: their
+    view of everything is /api/manage, so the home page stays personal."""
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return user
 
     include_deleted = (req.params.get("includeDeleted") or "").lower() in ("1", "true", "yes")
 
     table_client = get_table_client()
-    if not table_client:
+    access = get_table_client(_access_table_name())
+    if not table_client or access is None:
         return _error("storage_unavailable", "Storage configuration invalid.", 500)
 
     try:
-        _ensure_table(table_client)
         competitions = []
-        for entity in table_client.query_entities(f"PartitionKey eq '{PK_COMPETITION}'"):
-            competition = entity_to_competition(entity)
+        owners = {}
+        for grant in _user_grant_rows(access, user.user_id):
+            role = ROLE_OWNER if user.is_admin else grant.get("Role")
+            if role not in ROLE_RANK:
+                continue
+            entity = _get_competition_entity(table_client, grant.get("PartitionKey", ""))
+            if entity is None or entity.get("PurgedUtc"):
+                continue
+            competition = _competition_json(entity, user, role, owners)
             if not include_deleted and competition["status"] == STATUS_DELETED:
                 continue
             competitions.append(competition)
@@ -1078,9 +1643,10 @@ def _list_competitions(req: func.HttpRequest) -> func.HttpResponse:
 
 
 def _create_competition(req: func.HttpRequest) -> func.HttpResponse:
-    email = get_user_email_from_header(req)
-    if not email:
-        return _error("unauthorized", "Sign-in required.", 401)
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return user
+    email = user.email
 
     body = _read_body(req)
     if body is None:
@@ -1150,18 +1716,38 @@ def _create_competition(req: func.HttpRequest) -> func.HttpResponse:
         _delete_code_row(table_client, code)
         return _error("internal_error", "Could not create the competition.", 500)
 
+    # 3. The creator becomes its owner; without that row nobody but an admin
+    #    could ever see it, so a failure here undoes the whole create.
+    try:
+        access = get_table_client(_access_table_name())
+        if access is None:
+            raise RuntimeError("access table configuration invalid")
+        _establish_owner(access, competition_id, user.user_id, user.user_id)
+    except Exception as e:
+        logging.error(f"Error writing the owner of '{code}', rolling back the create: {e}")
+        try:
+            table_client.delete_entity(partition_key=PK_COMPETITION, row_key=competition_id)
+        except Exception as cleanup_error:
+            logging.error(f"Could not remove competition row '{competition_id}': {cleanup_error}")
+        _delete_code_row(table_client, code)
+        return _error("internal_error", "Could not create the competition.", 500)
+
     _sync_clock(entity)
-    return _json(entity_to_competition(entity), 201)
+    return _json(_competition_json(entity, user, ROLE_OWNER), 201)
 
 
 def _get_competition(req: func.HttpRequest) -> func.HttpResponse:
-    email = get_user_email_from_header(req)
-    if not email:
-        return _error("unauthorized", "Sign-in required.", 401)
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return user
 
-    competition_id = req.route_params.get("id")
+    competition_id = _route_competition_id(req)
     if not competition_id:
-        return _error("invalid_id", "A competition id is required.", 400)
+        return _competition_not_found()
+
+    role, error = _require_access(user, competition_id, ROLE_READ)
+    if error is not None:
+        return error
 
     table_client = get_table_client()
     if not table_client:
@@ -1176,7 +1762,7 @@ def _get_competition(req: func.HttpRequest) -> func.HttpResponse:
     if entity is None:
         return _error("not_found", "Competition not found.", 404)
 
-    return _json(entity_to_competition(entity))
+    return _json(_competition_json(entity, user, role))
 
 
 def _apply_competition_edit(table_client, entity, body: dict, extra_updates=None, etag=None):
@@ -1273,13 +1859,17 @@ def _apply_competition_edit(table_client, entity, body: dict, extra_updates=None
 
 
 def _update_competition(req: func.HttpRequest) -> func.HttpResponse:
-    email = get_user_email_from_header(req)
-    if not email:
-        return _error("unauthorized", "Sign-in required.", 401)
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return user
 
-    competition_id = req.route_params.get("id")
+    competition_id = _route_competition_id(req)
     if not competition_id:
-        return _error("invalid_id", "A competition id is required.", 400)
+        return _competition_not_found()
+
+    role, error = _require_access(user, competition_id, ROLE_WRITE)
+    if error is not None:
+        return error
 
     body = _read_body(req)
     if body is None:
@@ -1301,7 +1891,9 @@ def _update_competition(req: func.HttpRequest) -> func.HttpResponse:
     merged, error = _apply_competition_edit(table_client, entity, body)
     if error is not None:
         return error
-    return _json(entity_to_competition(merged))
+    _audit_override(user, role, ROLE_WRITE, "competition.update", merged,
+                    changes=_changes(entity, merged))
+    return _json(_competition_json(merged, user, role))
 
 
 def _soft_delete(table_client, entity):
@@ -1345,14 +1937,20 @@ def _delete_competition(req: func.HttpRequest) -> func.HttpResponse:
     row is freed for reuse at once, and DeletionDate is pulled forward to the
     next midnight so the nightly sweep purges the data (and the tools follow)
     that same night. Who deleted it is NOT recorded — only that a user did.
+    Owner only. The grants stay (a restore keeps its shares); the purge
+    removes them.
     """
-    email = get_user_email_from_header(req)
-    if not email:
-        return _error("unauthorized", "Sign-in required.", 401)
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return user
 
-    competition_id = req.route_params.get("id")
+    competition_id = _route_competition_id(req)
     if not competition_id:
-        return _error("invalid_id", "A competition id is required.", 400)
+        return _competition_not_found()
+
+    role, error = _require_access(user, competition_id, ROLE_OWNER)
+    if error is not None:
+        return error
 
     table_client = get_table_client()
     if not table_client:
@@ -1369,12 +1967,14 @@ def _delete_competition(req: func.HttpRequest) -> func.HttpResponse:
 
     if entity.get("Status") == STATUS_DELETED:
         # Idempotent: deleting twice is not an error.
-        return _json(entity_to_competition(entity))
+        return _json(_competition_json(entity, user, role))
 
     merged, error = _soft_delete(table_client, entity)
     if error is not None:
         return error
-    return _json(entity_to_competition(merged))
+    _audit_override(user, role, ROLE_OWNER, "competition.delete", merged,
+                    changes=_changes(entity, merged))
+    return _json(_competition_json(merged, user, role))
 
 
 def _extend_competition(req: func.HttpRequest) -> func.HttpResponse:
@@ -1388,13 +1988,17 @@ def _extend_competition(req: func.HttpRequest) -> func.HttpResponse:
     computed from, so two simultaneous presses add two weeks, not one. Who
     extended is deliberately not stored — only how often and when.
     """
-    email = get_user_email_from_header(req)
-    if not email:
-        return _error("unauthorized", "Sign-in required.", 401)
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return user
 
-    competition_id = req.route_params.get("id")
+    competition_id = _route_competition_id(req)
     if not competition_id:
-        return _error("invalid_id", "A competition id is required.", 400)
+        return _competition_not_found()
+
+    role, error = _require_access(user, competition_id, ROLE_WRITE)
+    if error is not None:
+        return error
 
     table_client = get_table_client()
     if not table_client:
@@ -1438,7 +2042,9 @@ def _extend_competition(req: func.HttpRequest) -> func.HttpResponse:
         merged = dict(entity)
         merged.update(updates)
         _sync_clock(merged)
-        return _json(entity_to_competition(merged))
+        _audit_override(user, role, ROLE_WRITE, "competition.extend", merged,
+                        changes=_changes(entity, merged))
+        return _json(_competition_json(merged, user, role))
 
     return _error("conflict", "The competition kept changing; please try again.", 409)
 
@@ -1451,13 +2057,17 @@ def _extend_competition(req: func.HttpRequest) -> func.HttpResponse:
 # it is readable but not writable or deletable through them.
 
 def _list_competition_files(req: func.HttpRequest) -> func.HttpResponse:
-    email = get_user_email_from_header(req)
-    if not email:
-        return _error("unauthorized", "Sign-in required.", 401)
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return user
 
-    competition_id = req.route_params.get("id")
+    competition_id = _route_competition_id(req)
     if not competition_id:
-        return _error("invalid_id", "A competition id is required.", 400)
+        return _competition_not_found()
+
+    _role, error = _require_access(user, competition_id, ROLE_READ)
+    if error is not None:
+        return error
 
     _entity, error = _load_competition(competition_id)
     if error is not None:
@@ -1486,13 +2096,17 @@ def _list_competition_files(req: func.HttpRequest) -> func.HttpResponse:
 
 
 def _upload_competition_file(req: func.HttpRequest) -> func.HttpResponse:
-    email = get_user_email_from_header(req)
-    if not email:
-        return _error("unauthorized", "Sign-in required.", 401)
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return user
 
-    competition_id = req.route_params.get("id")
+    competition_id = _route_competition_id(req)
     if not competition_id:
-        return _error("invalid_id", "A competition id is required.", 400)
+        return _competition_not_found()
+
+    role, error = _require_access(user, competition_id, ROLE_WRITE)
+    if error is not None:
+        return error
 
     name, name_error = sanitize_pool_filename(req.params.get("filename"))
     if name_error == "unsupported_type":
@@ -1537,7 +2151,7 @@ def _upload_competition_file(req: func.HttpRequest) -> func.HttpResponse:
             data=body,
             overwrite=True,
             metadata={
-                "uploadedBy": _ascii_metadata(email),
+                "uploadedBy": _ascii_metadata(user.email),
                 "sourceTool": source_tool,
                 "origName": quote(str(req.params.get("filename") or ""), safe=""),
             },
@@ -1547,25 +2161,32 @@ def _upload_competition_file(req: func.HttpRequest) -> func.HttpResponse:
         logging.error(f"Error uploading '{name}' for competition '{competition_id}': {e}")
         return _error("internal_error", "Could not store the file.", 500)
 
+    _audit_override(user, role, ROLE_WRITE, "file.upload", entity,
+                    changes={"file": [None, name]})
+
     return _json({
         "name": name,
         "source": SOURCE_UPLOAD,
         "size": len(body),
         "contentType": content_type,
         "uploadedUtc": _now_utc(),
-        "uploadedBy": email,
+        "uploadedBy": user.email,
         "sourceTool": source_tool,
     }, 201)
 
 
 def _download_competition_file(req: func.HttpRequest) -> func.HttpResponse:
-    email = get_user_email_from_header(req)
-    if not email:
-        return _error("unauthorized", "Sign-in required.", 401)
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return user
 
-    competition_id = req.route_params.get("id")
+    competition_id = _route_competition_id(req)
     if not competition_id:
-        return _error("invalid_id", "A competition id is required.", 400)
+        return _competition_not_found()
+
+    _role, error = _require_access(user, competition_id, ROLE_READ)
+    if error is not None:
+        return error
 
     name = _route_file_name(req)
     if not name:
@@ -1608,13 +2229,17 @@ def _download_competition_file(req: func.HttpRequest) -> func.HttpResponse:
 
 
 def _delete_competition_file(req: func.HttpRequest) -> func.HttpResponse:
-    email = get_user_email_from_header(req)
-    if not email:
-        return _error("unauthorized", "Sign-in required.", 401)
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return user
 
-    competition_id = req.route_params.get("id")
+    competition_id = _route_competition_id(req)
     if not competition_id:
-        return _error("invalid_id", "A competition id is required.", 400)
+        return _competition_not_found()
+
+    role, error = _require_access(user, competition_id, ROLE_WRITE)
+    if error is not None:
+        return error
 
     name = _route_file_name(req)
     if not name:
@@ -1647,19 +2272,25 @@ def _delete_competition_file(req: func.HttpRequest) -> func.HttpResponse:
         logging.error(f"Error deleting '{name}' from competition '{competition_id}': {e}")
         return _error("internal_error", "Could not delete the file.", 500)
 
+    _audit_override(user, role, ROLE_WRITE, "file.delete", entity,
+                    changes={"file": [name, None]})
     return _json({"status": "deleted", "name": name, "source": SOURCE_UPLOAD})
 
 
 # ── HOVTP source handlers ─────────────────────────────────────────────────────
 
 def _list_hovtp_sources(req: func.HttpRequest) -> func.HttpResponse:
-    email = get_user_email_from_header(req)
-    if not email:
-        return _error("unauthorized", "Sign-in required.", 401)
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return user
 
-    competition_id = req.route_params.get("id")
+    competition_id = _route_competition_id(req)
     if not competition_id:
-        return _error("invalid_id", "A competition id is required.", 400)
+        return _competition_not_found()
+
+    _role, error = _require_access(user, competition_id, ROLE_READ)
+    if error is not None:
+        return error
 
     _entity, error = _load_competition(competition_id)
     if error is not None:
@@ -1692,7 +2323,8 @@ def _accept_hovtp_source(req: func.HttpRequest) -> func.HttpResponse:
     target, error = _hovtp_request(req)
     if error is not None:
         return error
-    competition_id, ip, email = target
+    competition_id, ip, user, role = target
+    email = user.email
 
     body = _read_body(req)
     if body is None:
@@ -1756,6 +2388,9 @@ def _accept_hovtp_source(req: func.HttpRequest) -> func.HttpResponse:
     merged = dict(source)
     merged.update(updates)
     merged.update(counters)
+    _audit_override(user, role, ROLE_WRITE, "hovtp.accept", entity,
+                    changes={"source": [source.get("Status") or None, HOVTP_STATUS_ACCEPTED]},
+                    target=ip)
     return _json({
         "source": _source_to_json(merged, _now_utc()),
         "attached": attached,
@@ -1773,7 +2408,8 @@ def _deny_hovtp_source(req: func.HttpRequest) -> func.HttpResponse:
     target, error = _hovtp_request(req)
     if error is not None:
         return error
-    competition_id, ip, email = target
+    competition_id, ip, user, role = target
+    email = user.email
 
     entity, error = _load_competition(competition_id)
     if error is not None:
@@ -1812,10 +2448,411 @@ def _deny_hovtp_source(req: func.HttpRequest) -> func.HttpResponse:
         return _error("internal_error", "Could not reject the data source.", 500)
 
     deleted = _delete_pending(container, competition_id, ip)
+    _audit_override(user, role, ROLE_WRITE,
+                    "hovtp.revoke" if req.method.upper() == "DELETE" else "hovtp.reject", entity,
+                    changes={"source": [source.get("Status") or None, HOVTP_STATUS_REJECTED]},
+                    target=ip)
 
     merged = dict(source)
     merged.update(updates)
     return _json({"source": _source_to_json(merged, _now_utc()), "deleted": deleted})
+
+
+# ── access handlers ───────────────────────────────────────────────────────────
+# Sharing: the owner (or an admin) grants read or write to users who have
+# signed in at least once; a grantee may remove themselves ("leave"). The
+# owner row itself is never touched here — only an admin moves it
+# (PUT /api/manage/competitions/{id}/owner). Every change is audited.
+
+def _route_user_id(req: func.HttpRequest, user: User) -> str:
+    """{userId}: a GUID, or "me" for the caller. '' => 400."""
+    raw = (req.route_params.get("userId") or "").strip().lower()
+    if raw == ME:
+        return user.user_id
+    return raw if _GUID_RE.fullmatch(raw) else ""
+
+
+def _access_target(req: func.HttpRequest, need: str):
+    """Gate + {id} + access. -> ((user, competition_id, role, access client),
+    None) or (None, error response)."""
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return None, user
+    competition_id = _route_competition_id(req)
+    if not competition_id:
+        return None, _competition_not_found()
+    role, error = _require_access(user, competition_id, need)
+    if error is not None:
+        return None, error
+    access = get_table_client(_access_table_name())
+    if access is None:
+        return None, _error("storage_unavailable", "Storage configuration invalid.", 500)
+    return (user, competition_id, role, access), None
+
+
+def _list_access(req: func.HttpRequest) -> func.HttpResponse:
+    target, error = _access_target(req, ROLE_OWNER)
+    if error is not None:
+        return error
+    _user, competition_id, _role, access = target
+
+    _entity, error = _load_competition(competition_id)
+    if error is not None:
+        return error
+    try:
+        return _json({"items": _access_list(competition_id, access)})
+    except Exception as e:
+        logging.error(f"Error listing the access of '{competition_id}': {e}")
+        return _error("internal_error", "Could not list who has access.", 500)
+
+
+def _set_access(req: func.HttpRequest) -> func.HttpResponse:
+    """PUT …/access/{userId} {"role": "read"|"write"} — grant or change."""
+    target, error = _access_target(req, ROLE_OWNER)
+    if error is not None:
+        return error
+    user, competition_id, granted, access = target
+
+    target_id = _route_user_id(req, user)
+    if not target_id:
+        return _error("invalid_user", "Unknown user.", 400)
+    if target_id == user.user_id:
+        return _error("cannot_target_self", "You cannot change your own access.", 400)
+
+    body = _read_body(req)
+    if body is None:
+        return _error("invalid_body", "Expected a JSON object body.", 400)
+    role = body.get("role")
+    if role not in GRANTABLE_ROLES:
+        return _error("invalid_role", "The role must be 'read' or 'write'.", 400)
+
+    entity, error = _load_competition(competition_id)
+    if error is not None:
+        return error
+    if entity.get("Status") == STATUS_DELETED:
+        return _error("competition_deleted", "This competition has been deleted.", 409)
+
+    target_row = _read_users([target_id]).get(target_id)
+    if target_row is None:
+        return _error("user_not_found", "Unknown user.", 404)
+
+    key = {"PartitionKey": _access_pk(competition_id), "RowKey": target_id}
+    for attempt in range(EXTEND_RETRIES):
+        try:
+            existing = access.get_entity(partition_key=key["PartitionKey"], row_key=target_id)
+        except ResourceNotFoundError:
+            existing = None
+        except Exception as e:
+            logging.error(f"Error reading the access of '{target_id}' to '{competition_id}': {e}")
+            return _error("internal_error", "Could not change the access.", 500)
+
+        before = existing.get("Role") if existing is not None else None
+        if before == ROLE_OWNER:
+            return _error("cannot_change_owner",
+                          "The owner's access cannot be changed; an administrator can "
+                          "transfer the ownership.", 400)
+        if before == role:
+            return _json({"item": _grant_json(target_id, role, target_row)})
+
+        row = {**key, "Role": role, "GrantedBy": user.user_id, "GrantedUtc": _now_utc()}
+        try:
+            if existing is None:
+                _create_row(access, row)
+            else:
+                # Conditional: an owner swap landing in between must not be
+                # overwritten by a plain grant.
+                access.update_entity(row, mode=UpdateMode.REPLACE, etag=_entity_etag(existing),
+                                     match_condition=MatchConditions.IfNotModified)
+        except (ResourceExistsError, ResourceModifiedError, ResourceNotFoundError):
+            logging.info(f"Access of '{target_id}' to '{competition_id}' changed meanwhile "
+                         f"(attempt {attempt + 1}/{EXTEND_RETRIES}); retrying")
+            continue
+        except Exception as e:
+            logging.error(f"Error writing the access of '{target_id}' to '{competition_id}': {e}")
+            return _error("internal_error", "Could not change the access.", 500)
+
+        action = "access.grant" if before is None else "access.change"
+        _audit(user.email, action, entity, {"role": [before, role]},
+               target=target_row.get("Email") or "")
+        _audit_override(user, granted, ROLE_OWNER, action, entity, {"role": [before, role]},
+                        target=target_row.get("Email") or "")
+        return _json({"item": _grant_json(target_id, role, target_row)})
+
+    return _error("conflict", "The access kept changing; please try again.", 409)
+
+
+def _remove_access(req: func.HttpRequest) -> func.HttpResponse:
+    """DELETE …/access/{userId}: the owner or an admin revokes a grant; a
+    grantee removing their own ("me" or their id) leaves. The owner row stays
+    — ownership only moves through an admin."""
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return user
+    competition_id = _route_competition_id(req)
+    if not competition_id:
+        return _competition_not_found()
+
+    # Any access at all, so a grantee can leave; no access -> 404 as usual.
+    role, error = _require_access(user, competition_id, ROLE_READ)
+    if error is not None:
+        return error
+    target_id = _route_user_id(req, user)
+    if not target_id:
+        return _error("invalid_user", "Unknown user.", 400)
+    leaving = target_id == user.user_id
+    if not leaving and role != ROLE_OWNER:
+        return _error("owner_required", "Only the owner can do this.", 403)
+
+    access = get_table_client(_access_table_name())
+    if access is None:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+    entity, error = _load_competition(competition_id)
+    if error is not None:
+        return error
+
+    try:
+        existing = access.get_entity(partition_key=_access_pk(competition_id), row_key=target_id)
+    except ResourceNotFoundError:
+        return _error("grant_not_found", "That user has no access to this competition.", 404)
+    except Exception as e:
+        logging.error(f"Error reading the access of '{target_id}' to '{competition_id}': {e}")
+        return _error("internal_error", "Could not remove the access.", 500)
+    before = existing.get("Role")
+    if before == ROLE_OWNER:
+        return _error("cannot_change_owner",
+                      "The owner cannot be removed; an administrator can transfer the "
+                      "ownership.", 400)
+
+    try:
+        access.delete_entity(partition_key=_access_pk(competition_id), row_key=target_id,
+                             etag=_entity_etag(existing),
+                             match_condition=MatchConditions.IfNotModified)
+    except ResourceNotFoundError:
+        pass
+    except ResourceModifiedError:
+        return _error("conflict", "The access changed meanwhile; please try again.", 409)
+    except Exception as e:
+        logging.error(f"Error removing the access of '{target_id}' to '{competition_id}': {e}")
+        return _error("internal_error", "Could not remove the access.", 500)
+
+    target_email = user.email if leaving else \
+        (_read_users([target_id]).get(target_id) or {}).get("Email") or ""
+    _audit(user.email, "access.leave" if leaving else "access.revoke", entity,
+           {"role": [before, None]}, target=target_email)
+    if not leaving:
+        _audit_override(user, role, ROLE_OWNER, "access.revoke", entity,
+                        {"role": [before, None]}, target=target_email)
+    return _json({"status": "removed", "userId": target_id, "left": leaving})
+
+
+# ── users handlers ────────────────────────────────────────────────────────────
+
+# The rate limit lives in the users table so every instance shares it:
+# PK SEARCHRATE / RK <userId>, a fixed per-minute and a fixed per-day window
+# (start as epoch seconds + count), incremented etag-conditionally.
+
+def _search_now() -> float:
+    """Epoch seconds; a seam for the tests."""
+    return time.time()
+
+
+def _delete_search_rate_row(users, user_id: str) -> None:
+    try:
+        users.delete_entity(partition_key=PK_SEARCH_RATE, row_key=user_id)
+    except ResourceNotFoundError:
+        pass
+    except Exception as e:
+        logging.warning(f"Could not delete the search rate row of '{user_id}': {e}")
+
+
+def _search_rate_limited(users, user_id: str) -> bool:
+    """Count one search of `user_id`; True when it is over either limit (the
+    search is then refused and not counted). Raises on a storage error or
+    when the counter kept changing — the caller fails closed."""
+    for _attempt in range(EXTEND_RETRIES):
+        now = _search_now()
+        try:
+            row = users.get_entity(partition_key=PK_SEARCH_RATE, row_key=user_id)
+        except ResourceNotFoundError:
+            row = None
+        minute_start = float((row or {}).get("MinuteStart") or 0)
+        minute_count = int((row or {}).get("MinuteCount") or 0)
+        day_start = float((row or {}).get("DayStart") or 0)
+        day_count = int((row or {}).get("DayCount") or 0)
+        if now - minute_start >= USER_SEARCH_RATE_WINDOW_SECONDS or now < minute_start:
+            minute_start, minute_count = now, 0
+        if now - day_start >= USER_SEARCH_DAY_WINDOW_SECONDS or now < day_start:
+            day_start, day_count = now, 0
+        if minute_count >= USER_SEARCH_RATE_LIMIT or day_count >= USER_SEARCH_DAILY_LIMIT:
+            return True
+        updated = {"PartitionKey": PK_SEARCH_RATE, "RowKey": user_id,
+                   "MinuteStart": minute_start, "MinuteCount": minute_count + 1,
+                   "DayStart": day_start, "DayCount": day_count + 1}
+        try:
+            if row is None:
+                _create_row(users, updated)
+            else:
+                users.update_entity(updated, mode=UpdateMode.REPLACE, etag=_entity_etag(row),
+                                    match_condition=MatchConditions.IfNotModified)
+        except (ResourceExistsError, ResourceModifiedError, ResourceNotFoundError):
+            continue   # a concurrent search of the same user counted first
+        return False
+    raise RuntimeError("search rate counter kept changing")
+
+
+def _is_full_email(query: str) -> bool:
+    """A complete address: printable ASCII, no spaces, exactly one '@' with
+    something on both sides."""
+    if not _PRINTABLE_ASCII_RE.fullmatch(query) or query.count("@") != 1:
+        return False
+    local, domain = query.split("@")
+    return bool(local) and bool(domain)
+
+
+def _email_hint(email: str) -> str:
+    """'a•••@club.fi' — the first character of the local part and the domain."""
+    local, sep, domain = (email or "").partition("@")
+    if not sep or not local:
+        return ""
+    return f"{local[0]}\u2022\u2022\u2022@{domain}"
+
+
+def _collaborator_ids(user_id: str, access) -> set:
+    """Everyone who shares at least one competition with `user_id`, in either
+    direction and with any role. Raises on a storage error."""
+    found = set()
+    for grant in _user_grant_rows(access, user_id):
+        if grant.get("Role") not in ROLE_RANK:
+            continue
+        for row in _access_rows(access, grant.get("PartitionKey", "")):
+            if row.get("Role") in ROLE_RANK:
+                found.add(row.get("RowKey"))
+    found.discard(user_id)
+    return found
+
+
+def _search_users(req: func.HttpRequest) -> func.HttpResponse:
+    """GET /api/users/search?q= — the share dialog's type-ahead over people
+    who have signed in, never yourself, at most USER_SEARCH_MAX_RESULTS:
+
+      * q is a complete e-mail address -> the user with exactly that e-mail
+        (ASCII case-insensitive), with their full e-mail;
+      * otherwise (at least USER_SEARCH_MIN_CHARS) -> substring of the display
+        NAME only, never of the e-mail. Hits carry `email: null` and only a
+        masked `emailHint`, except people the caller already shares a
+        competition with, who get their full e-mail.
+
+    Item: {"userId", "name", "email": str | None, "emailHint": str}.
+    Rate limited per user across instances: USER_SEARCH_RATE_LIMIT a minute,
+    USER_SEARCH_DAILY_LIMIT a day -> 429 rate_limited."""
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return user
+
+    query = " ".join(str(req.params.get("q") or "").split())[:USER_SEARCH_MAX_QUERY]
+    by_email = _is_full_email(query)
+    if not by_email and len(query) < USER_SEARCH_MIN_CHARS:
+        return _error("query_too_short",
+                      f"Type at least {USER_SEARCH_MIN_CHARS} characters of a name, "
+                      "or a full e-mail address.", 400)
+
+    users = get_table_client(_users_table_name())
+    access = get_table_client(_access_table_name())
+    if users is None or access is None:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+    try:
+        if _search_rate_limited(users, user.user_id):
+            return _error("rate_limited", "Too many searches; try again later.", 429)
+    except Exception as e:
+        logging.error(f"Could not count the search of '{user.user_id}': {e}")
+        return _error("internal_error", "Could not search users.", 500)
+
+    try:
+        # Only USER rows: the same table holds the SEARCHRATE counters.
+        rows = list(users.query_entities(f"PartitionKey eq '{PK_USER}'"))
+    except ResourceNotFoundError:
+        rows = []
+    except Exception as e:
+        logging.error(f"Error searching users: {e}")
+        return _error("internal_error", "Could not search users.", 500)
+
+    email_query = query.lower() if by_email else ""
+    name_query = query.lower()
+    hits = []
+    for row in rows:
+        user_id = row.get("RowKey") or ""
+        if row.get("PartitionKey", PK_USER) != PK_USER or user_id == user.user_id:
+            continue
+        email = _normalize_email(row.get("Email"))
+        name = (row.get("DisplayName") or "").lower()
+        if by_email:
+            if email and email == email_query:
+                hits.append((0, name or email, user_id, row))
+        elif name_query in name:
+            hits.append((0 if name.startswith(name_query) else 1, name, user_id, row))
+    hits.sort(key=lambda hit: hit[:3])
+    hits = hits[:USER_SEARCH_MAX_RESULTS]
+
+    if by_email or not hits:
+        collaborators = set()
+    else:
+        try:
+            collaborators = _collaborator_ids(user.user_id, access)
+        except Exception as e:
+            logging.error(f"Error reading the collaborators of '{user.user_id}': {e}")
+            return _error("internal_error", "Could not search users.", 500)
+
+    items = []
+    for _rank, _key, user_id, row in hits:
+        email = row.get("Email") or ""
+        items.append({
+            "userId": user_id,
+            "name": row.get("DisplayName") or "",
+            "email": (email or None) if (by_email or user_id in collaborators) else None,
+            "emailHint": _email_hint(email),
+        })
+    return _json({"items": items})
+
+
+def _recent_share_users(req: func.HttpRequest) -> func.HttpResponse:
+    """GET /api/users/recent — the people the caller has shared their own
+    competitions with, most recent grant first: the dialog's quick picks."""
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return user
+    access = get_table_client(_access_table_name())
+    if access is None:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    latest = {}
+    try:
+        for grant in _user_grant_rows(access, user.user_id):
+            if grant.get("Role") != ROLE_OWNER:
+                continue
+            for row in _access_rows(access, grant.get("PartitionKey", "")):
+                grantee = row.get("RowKey") or ""
+                if grantee == user.user_id or row.get("Role") not in GRANTABLE_ROLES:
+                    continue
+                granted = row.get("GrantedUtc") or ""
+                if granted >= latest.get(grantee, ""):
+                    latest[grantee] = granted
+    except Exception as e:
+        logging.error(f"Error listing recent share users of '{user.user_id}': {e}")
+        return _error("internal_error", "Could not list recent users.", 500)
+
+    ordered = sorted(latest, key=lambda grantee: (latest[grantee], grantee), reverse=True)
+    found = _read_users(ordered[:RECENT_SHARE_USERS])
+    return _json({"items": [_user_ref(grantee, found[grantee])
+                            for grantee in ordered[:RECENT_SHARE_USERS] if grantee in found]})
+
+
+def _current_user(req: func.HttpRequest) -> func.HttpResponse:
+    """GET /api/users/me — the caller's platform user id (the share dialog
+    needs it to tell "you" apart, and "Leave" may use it or "me")."""
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return user
+    return _json({**_self_ref(user), "isAdmin": user.is_admin})
 
 
 # ── retention sweep ───────────────────────────────────────────────────────────
@@ -1877,6 +2914,32 @@ def _delete_hovtp_sources(table_client, competition_id: str) -> tuple[int, bool]
     return deleted, ok
 
 
+def _delete_competition_access(competition_id: str) -> tuple[int, bool]:
+    """Delete the competition's competitionaccess rows (owner and grants)."""
+    access = get_table_client(_access_table_name())
+    if access is None:
+        logging.error("Retention: access table unavailable")
+        return 0, False
+    deleted = 0
+    ok = True
+    try:
+        rows = _access_rows(access, competition_id)
+    except Exception as e:
+        logging.error(f"Retention: could not list the access rows of '{competition_id}': {e}")
+        return 0, False
+    for row in rows:
+        try:
+            access.delete_entity(partition_key=row["PartitionKey"], row_key=row["RowKey"])
+            deleted += 1
+        except ResourceNotFoundError:
+            pass
+        except Exception as e:
+            logging.error(f"Retention: could not delete access row '{row.get('RowKey')}' "
+                          f"of '{competition_id}': {e}")
+            ok = False
+    return deleted, ok
+
+
 def _tombstone(entity, now_text: str) -> dict:
     """What survives a purge: the competition's identity and timeline, no
     personal data (no CreatedBy/DeletedBy/any e-mail)."""
@@ -1932,11 +2995,13 @@ def _purge_competition(table_client, container, entity, now: datetime) -> bool:
 
     code_ok = _release_code_row(table_client, entity.get("Code", ""), competition_id)
     _sources, sources_ok = _delete_hovtp_sources(table_client, competition_id)
+    # Grants go with the data: a purged competition has nobody to share with.
+    _grants, access_ok = _delete_competition_access(competition_id)
     if container is None:
         blobs, blobs_ok = 0, False
     else:
         blobs, blobs_ok = _delete_competition_blobs(container, competition_id)
-    if not (code_ok and sources_ok and blobs_ok):
+    if not (code_ok and sources_ok and access_ok and blobs_ok):
         logging.error(f"Retention: purge of '{competition_id}' incomplete; retried next night")
         return False
 
@@ -1978,6 +3043,106 @@ def _purge_competition(table_client, container, entity, now: datetime) -> bool:
     return True
 
 
+def _competition_is_live(table_client, competition_id: str) -> bool:
+    """Exists and not purged (a soft-deleted one still counts: it is purged
+    within a day, and the user goes the night after). Unreadable = live."""
+    try:
+        entity = _get_competition_entity(table_client, competition_id)
+    except Exception:
+        return True
+    return entity is not None and not entity.get("PurgedUtc")
+
+
+def _sweep_inactive_users(now: datetime, purge_enabled: bool, summary: dict) -> None:
+    """Sweep step 7: a users row unseen for INACTIVE_USER_DAYS whose user owns
+    no live competition loses its grants, its identity links and then the
+    row itself (last, so a failed step retries tomorrow). Obeys the kill
+    switch: dry-run only counts."""
+    table_client = get_table_client()
+    users = get_table_client(_users_table_name())
+    identities = get_table_client(_user_identities_table_name())
+    access = get_table_client(_access_table_name())
+    if None in (table_client, users, identities, access):
+        logging.error("Retention: user tables unavailable; inactive-user sweep skipped")
+        return
+    try:
+        rows = list(users.query_entities(f"PartitionKey eq '{PK_USER}'"))
+    except ResourceNotFoundError:
+        return
+    except Exception as e:
+        logging.error(f"Retention: could not list users: {e}")
+        return
+
+    cutoff = now - timedelta(days=INACTIVE_USER_DAYS)
+    for row in rows:
+        user_id = row.get("RowKey") or ""
+        if not _GUID_RE.fullmatch(user_id):
+            continue
+        last = _parse_utc(row.get("LastSeenUtc")) or _parse_utc(row.get("FirstSeenUtc"))
+        if last is None or last >= cutoff:
+            continue
+        try:
+            grants = _user_grant_rows(access, user_id)
+            links = list(identities.query_entities(
+                f"PartitionKey eq '{PK_IDENTITY}' and UserId eq '{user_id}'"))
+        except Exception as e:
+            logging.error(f"Retention: could not read the grants of user '{user_id}': {e}")
+            continue
+        if any(grant.get("Role") == ROLE_OWNER
+               and _competition_is_live(table_client, grant.get("PartitionKey", ""))
+               for grant in grants):
+            continue
+        if not purge_enabled:
+            logging.warning(f"Retention (dry-run): would remove inactive user '{user_id}'")
+            summary["users_would_delete"] += 1
+            continue
+
+        # Re-read right before deleting anything: a user who signed in since
+        # the scan is active again and keeps everything. The row's etag then
+        # guards the final delete against a sign-in during the steps below.
+        try:
+            fresh = users.get_entity(partition_key=PK_USER, row_key=user_id)
+        except ResourceNotFoundError:
+            continue
+        except Exception as e:
+            logging.error(f"Retention: could not re-read users row '{user_id}': {e}")
+            continue
+        last = _parse_utc(fresh.get("LastSeenUtc")) or _parse_utc(fresh.get("FirstSeenUtc"))
+        if last is None or last >= cutoff:
+            continue
+
+        ok = True
+        for partition_key, row_key, client in (
+                [(g["PartitionKey"], g["RowKey"], access) for g in grants]
+                + [(link["PartitionKey"], link["RowKey"], identities) for link in links]):
+            try:
+                client.delete_entity(partition_key=partition_key, row_key=row_key)
+            except ResourceNotFoundError:
+                pass
+            except Exception as e:
+                logging.error(f"Retention: could not delete '{partition_key}/{row_key}' "
+                              f"of user '{user_id}': {e}")
+                ok = False
+        if not ok:
+            continue
+        try:
+            users.delete_entity(partition_key=PK_USER, row_key=user_id,
+                                etag=_entity_etag(fresh),
+                                match_condition=MatchConditions.IfNotModified)
+        except ResourceNotFoundError:
+            pass
+        except ResourceModifiedError:
+            logging.warning(f"Retention: user '{user_id}' was seen during the sweep; "
+                            "users row kept")
+            continue
+        except Exception as e:
+            logging.error(f"Retention: could not delete users row '{user_id}': {e}")
+            continue
+        _delete_search_rate_row(users, user_id)
+        _LAST_SEEN_WRITES.pop(user_id, None)
+        summary["users_deleted"] += 1
+
+
 def _session_last_activity(entity) -> datetime | None:
     for column in ("UpdatedUtc", "CreatedUtc"):
         moment = _parse_utc(entity.get(column))
@@ -1998,6 +3163,8 @@ def _run_retention_sweep(now: datetime, purge_enabled: bool, *,
     # 6. The admin log keeps its own retention (AUDIT_RETENTION_DAYS /
     #    SWEEP_LOG_RETENTION_DAYS), under the same kill switch.
     _prune_admin_log(now, purge_enabled, summary)
+    # 7. The user directory: inactive users who own nothing live.
+    _sweep_inactive_users(now, purge_enabled, summary)
     logging.info(f"Retention sweep ({'purge' if purge_enabled else 'dry-run'}): {summary}")
     _record_sweep(now, purge_enabled, summary, dry_run_manual)
     return summary
@@ -2008,7 +3175,8 @@ def _sweep_registry(now: datetime, purge_enabled: bool) -> dict:
     summary = {"backfilled": 0, "purged": 0, "would_purge": 0, "failed": 0,
                "resweeps": 0, "sessions_deleted": 0, "sessions_would_delete": 0,
                "clock_synced": 0, "audit_pruned": 0, "audit_would_prune": 0,
-               "sweeps_pruned": 0, "sweeps_would_prune": 0}
+               "sweeps_pruned": 0, "sweeps_would_prune": 0,
+               "users_deleted": 0, "users_would_delete": 0}
 
     table_client = get_table_client()
     if not table_client:
@@ -2060,6 +3228,7 @@ def _sweep_registry(now: datetime, purge_enabled: bool) -> dict:
             if purged_utc >= resweep_after and purge_enabled and container is not None:
                 _delete_competition_blobs(container, competition_id)
                 _delete_hovtp_sources(table_client, competition_id)
+                _delete_competition_access(competition_id)
                 summary["resweeps"] += 1
             continue
 
@@ -2114,27 +3283,29 @@ def _sweep_registry(now: datetime, purge_enabled: bool) -> dict:
 # ── admin: gate ───────────────────────────────────────────────────────────────
 # The router already answers 403 on /api/manage/* for non-admins, but this
 # app's hostname is public, so the decision is made again here from its own
-# copy of the allow-list. Unlike get_user_email_from_header this gate FAILS
-# CLOSED: no configured secret means nobody is an admin, and the identity comes
-# only from the router's X-Forwarded-User-Email — never from the unverified
-# X-MS-*/JWT fallbacks.
+# copy of the allow-list. Same fail-closed gate as _require_user (secret,
+# forwarded tid/oid, allowed tenant), then the forwarded e-mail must be in
+# ADMIN_EMAILS. It reads no table: the admin routes need no users row.
 
 def _admin_emails() -> frozenset:
-    """ADMIN_EMAILS (comma-separated) -> lowercased set. Empty = no admins."""
+    """ADMIN_EMAILS (comma-separated) -> lowercased set. Empty = no admins.
+    Entries that are not printable ASCII are dropped (see _normalize_email)."""
     raw = os.environ.get("ADMIN_EMAILS") or ""
-    return frozenset(part.strip().lower() for part in raw.split(",") if part.strip())
+    return frozenset(email for email in map(_normalize_email, raw.split(",")) if email)
 
 
 def _require_admin(req: func.HttpRequest):
     """-> the admin's lowercased e-mail, or the 401/403 response to return."""
-    expected = os.environ.get("PROXY_SHARED_SECRET") or ""
-    provided = req.headers.get("X-Proxy-Secret") or req.headers.get("x-proxy-secret") or ""
-    if not expected or not hmac.compare_digest(provided.encode("utf-8"), expected.encode("utf-8")):
+    if not _proxy_secret_ok(req):
         logging.warning("Admin route: proxy shared secret unset, missing or mismatched")
         return _error("unauthorized", "Sign-in required.", 401)
 
-    email = (req.headers.get("X-Forwarded-User-Email")
-             or req.headers.get("x-forwarded-user-email") or "").strip().lower()
+    identity = _forwarded_identity(req)
+    if identity is None:
+        return _error("unauthorized", "Sign-in required.", 401)
+    tid, _oid, email, _name = identity
+    if tid not in _allowed_tenant_ids():
+        return _error("tenant_not_allowed", "Accounts of your organisation cannot use this site.", 403)
     if not email or email not in _admin_emails():
         return _error("admin_required", "Administrator access required.", 403)
     return email
@@ -2180,8 +3351,10 @@ def _write_admin_log(row: dict) -> bool:
         return False
 
 
-def _audit(actor: str, action: str, entity=None, changes=None, outcome: str = "ok") -> bool:
-    """One AUDIT row. `changes` is {field: [before, after]}, changed fields only."""
+def _audit(actor: str, action: str, entity=None, changes=None, outcome: str = "ok",
+           target: str = "") -> bool:
+    """One AUDIT row. `changes` is {field: [before, after]}, changed fields
+    only; `target` is the e-mail of the user an access change is about."""
     now = datetime.now(timezone.utc)
     entity = entity or {}
     return _write_admin_log({
@@ -2192,6 +3365,7 @@ def _audit(actor: str, action: str, entity=None, changes=None, outcome: str = "o
         "Action": action,
         "CompetitionId": entity.get("RowKey") or "",
         "CompetitionCode": entity.get("Code") or "",
+        "Target": target or "",
         "Changes": json.dumps(changes or {}),
         "Outcome": outcome,
     })
@@ -2256,6 +3430,7 @@ def _audit_to_json(row) -> dict:
         "action": row.get("Action", ""),
         "competitionId": row.get("CompetitionId") or None,
         "competitionCode": row.get("CompetitionCode") or None,
+        "target": row.get("Target") or None,
         "changes": changes if isinstance(changes, dict) else {},
         "outcome": row.get("Outcome", ""),
     }
@@ -2379,9 +3554,9 @@ def _admin_target(req: func.HttpRequest):
     if isinstance(admin, func.HttpResponse):
         return None, admin
 
-    competition_id = req.route_params.get("id")
+    competition_id = _route_competition_id(req)
     if not competition_id:
-        return None, _error("invalid_id", "A competition id is required.", 400)
+        return None, _competition_not_found()
 
     table_client = get_table_client()
     if not table_client:
@@ -2431,13 +3606,39 @@ def _admin_list_competitions(req: func.HttpRequest) -> func.HttpResponse:
         return _error("internal_error", "Could not list competitions.", 500)
 
     clocks, _clock_error = _read_clock_rows()
-    competitions = [
-        entity_to_admin_competition(entity, clocks.get(str(entity.get("RowKey") or "").lower()))
-        for entity in entities
-        if status == "all" or _admin_status(entity) == status
-    ]
+    owners = _all_owner_refs()
+    competitions = []
+    for entity in entities:
+        if status != "all" and _admin_status(entity) != status:
+            continue
+        competition = entity_to_admin_competition(
+            entity, clocks.get(str(entity.get("RowKey") or "").lower()))
+        competition["owner"] = owners.get(_access_pk(entity.get("RowKey", "")))
+        competitions.append(competition)
     competitions.sort(key=_sort_key, reverse=True)
     return _json({"competitions": competitions})
+
+
+def _all_owner_refs() -> dict:
+    """{competition guid: owner UserRef} for every competition with an owner —
+    two scans (owner rows, users) instead of one lookup per row. Best effort:
+    {} when the tables cannot be read."""
+    access = get_table_client(_access_table_name())
+    users = get_table_client(_users_table_name())
+    if access is None or users is None:
+        return {}
+    try:
+        owner_rows = list(access.query_entities(f"Role eq '{ROLE_OWNER}'"))
+        names = {row.get("RowKey"): row for row in users.query_entities(f"PartitionKey eq '{PK_USER}'")}
+    except ResourceNotFoundError:
+        return {}
+    except Exception as e:
+        logging.warning(f"Could not read the competition owners: {e}")
+        return {}
+    owners = {}
+    for row in sorted(owner_rows, key=lambda r: r.get("GrantedUtc") or ""):
+        owners[row.get("PartitionKey")] = _user_ref(row.get("RowKey"), names.get(row.get("RowKey")))
+    return owners
 
 
 def _admin_get_competition(req: func.HttpRequest) -> func.HttpResponse:
@@ -2470,18 +3671,26 @@ def _admin_get_competition(req: func.HttpRequest) -> func.HttpResponse:
         logging.error(f"Error reading the details of competition '{competition_id}': {e}")
         return _error("internal_error", "Could not read the competition details.", 500)
 
+    try:
+        access = _access_list(competition_id)
+    except Exception as e:
+        logging.error(f"Error reading the access list of '{competition_id}': {e}")
+        return _error("internal_error", "Could not read the competition details.", 500)
+
     return _json({
         "competition": entity_to_admin_competition(entity, _read_clock_row(competition_id)),
         "files": files,
         "hovtp": hovtp,
+        "access": access,
     })
 
 
 def _admin_update_competition(req: func.HttpRequest) -> func.HttpResponse:
-    """The user PATCH (same validation, same CODE-row move) plus the owner
-    (`createdBy`) and the deletion date — any day from tomorrow on, synced
-    into the clock table at once. Etag-conditional with retries, so the audit
-    row's "before" is the version the write replaced."""
+    """The user PATCH (same validation, same CODE-row move) plus the deletion
+    date — any day from tomorrow on, synced into the clock table at once.
+    `createdBy` is read-only history now (400): the owner is the
+    competitionaccess owner row, moved by PUT …/owner. Etag-conditional with
+    retries, so the audit row's "before" is the version the write replaced."""
     target, error = _admin_target(req)
     if error is not None:
         return error
@@ -2493,15 +3702,8 @@ def _admin_update_competition(req: func.HttpRequest) -> func.HttpResponse:
 
     extra = {}
     if "createdBy" in body:
-        owner = body.get("createdBy")
-        owner = "" if owner is None else owner
-        if not isinstance(owner, str):
-            return _error("invalid_created_by", "The owner must be an e-mail address.", 400)
-        owner = owner.strip()
-        if len(owner) > MAX_EMAIL_LENGTH or (owner and (
-                owner.count("@") != 1 or any(c.isspace() for c in owner))):
-            return _error("invalid_created_by", "The owner must be an e-mail address.", 400)
-        extra["CreatedBy"] = owner
+        return _error("created_by_read_only",
+                      "Created by is history; change the owner instead.", 400)
 
     if "deletionDate" in body:
         moment = _parse_deletion_date(body.get("deletionDate"), datetime.now(timezone.utc))
@@ -2534,6 +3736,167 @@ def _admin_update_competition(req: func.HttpRequest) -> func.HttpResponse:
         return _admin_competition_response(merged)
 
     return _error("conflict", "The competition kept changing; please try again.", 409)
+
+
+def _admin_set_owner(req: func.HttpRequest) -> func.HttpResponse:
+    """PUT /api/manage/competitions/{id}/owner {"userId"} — make another
+    signed-in user the owner. ONE table transaction in the competition's
+    partition: the ownership sentinel is inserted (none yet) or replaced
+    etag-conditionally, the new owner row is upserted and EVERY current owner
+    row becomes `write` (etag-conditional too). A concurrent swap or legacy
+    claim therefore fails the sentinel write of one of them, and a concurrent
+    grant change fails a demotion: the loser re-reads and retries the whole
+    swap. Works on an unowned (legacy) competition too."""
+    target, error = _admin_target(req)
+    if error is not None:
+        return error
+    admin, competition_id, table_client = target
+
+    body = _read_body(req)
+    if body is None:
+        return _error("invalid_body", "Expected a JSON object body.", 400)
+    new_owner = str(body.get("userId") or "").strip().lower()
+    if not _GUID_RE.fullmatch(new_owner):
+        return _error("invalid_user", "Unknown user.", 400)
+
+    entity, error = _read_admin_entity(table_client, competition_id)
+    if error is not None:
+        return error
+    if entity.get("PurgedUtc"):
+        return _error("purged", "This competition has been purged.", 409)
+
+    new_row = _read_users([new_owner]).get(new_owner)
+    if new_row is None:
+        return _error("user_not_found", "Unknown user.", 404)
+
+    actor = _require_user(req)   # the admin's own userId, for GrantedBy
+    if isinstance(actor, func.HttpResponse):
+        return actor
+    access = get_table_client(_access_table_name())
+    if access is None:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    partition = _access_pk(competition_id)
+    for attempt in range(EXTEND_RETRIES):
+        try:
+            rows = _access_rows(access, competition_id)
+        except Exception as e:
+            logging.error(f"Error reading the access rows of '{competition_id}': {e}")
+            return _error("internal_error", "Could not change the owner.", 500)
+        old_owners = [row for row in rows if row.get("Role") == ROLE_OWNER]
+        lock = next((row for row in rows if row.get("RowKey") == OWNER_LOCK_ROW_KEY), None)
+        if [row["RowKey"] for row in old_owners] == [new_owner]:
+            return _json({"competition": entity_to_admin_competition(
+                entity, _read_clock_row(competition_id)),
+                "access": _access_list(competition_id, access)})
+
+        now = _now_utc()
+        lock_row = _owner_lock_row(competition_id, new_owner, now)
+        operations = [
+            ("create", lock_row) if lock is None else
+            ("update", lock_row, {"mode": UpdateMode.REPLACE, "etag": _entity_etag(lock),
+                                  "match_condition": MatchConditions.IfNotModified}),
+            ("upsert", _owner_row(competition_id, new_owner, actor.user_id, now),
+             {"mode": UpdateMode.REPLACE}),
+        ]
+        for row in old_owners:
+            if row["RowKey"] == new_owner:
+                continue
+            operations.append(("update", {
+                "PartitionKey": partition, "RowKey": row["RowKey"], "Role": ROLE_WRITE,
+                "GrantedBy": actor.user_id, "GrantedUtc": now,
+            }, {"mode": UpdateMode.REPLACE, "etag": _entity_etag(row),
+                "match_condition": MatchConditions.IfNotModified}))
+        try:
+            access.submit_transaction(operations)
+        except (TableTransactionError, ResourceExistsError, ResourceModifiedError,
+                ResourceNotFoundError) as e:
+            logging.info(f"Owner swap of '{competition_id}' lost a race "
+                         f"(attempt {attempt + 1}/{EXTEND_RETRIES}): {e}")
+            continue
+        except Exception as e:
+            logging.error(f"Error changing the owner of '{competition_id}': {e}")
+            return _error("internal_error", "Could not change the owner.", 500)
+
+        old_ids = [row["RowKey"] for row in old_owners if row["RowKey"] != new_owner]
+        old_rows = _read_users(old_ids)
+        before = ", ".join((old_rows.get(uid) or {}).get("Email") or uid for uid in old_ids) or None
+        _audit(admin, "competition.owner", entity,
+               {"owner": [before, new_row.get("Email") or new_owner]},
+               target=new_row.get("Email") or "")
+        return _json({"competition": entity_to_admin_competition(
+            entity, _read_clock_row(competition_id)),
+            "access": _access_list(competition_id, access)})
+
+    return _error("conflict", "The access kept changing; please try again.", 409)
+
+
+def _admin_list_users(req: func.HttpRequest) -> func.HttpResponse:
+    """GET /api/manage/users — the user directory with first/last seen and how
+    many competitions each one owns or has been shared. With `?q=` (at least
+    USER_SEARCH_MIN_CHARS) only the users whose name or e-mail contains it, at
+    most USER_SEARCH_MAX_RESULTS — the admin "Change owner…" picker. Admins
+    see full e-mails; the admin themselves is included."""
+    admin = _require_admin(req)
+    if isinstance(admin, func.HttpResponse):
+        return admin
+
+    query = None
+    if "q" in req.params:
+        query = " ".join(str(req.params.get("q") or "").split()).lower()[:USER_SEARCH_MAX_QUERY]
+        if len(query) < USER_SEARCH_MIN_CHARS:
+            return _error("query_too_short",
+                          f"Type at least {USER_SEARCH_MIN_CHARS} characters.", 400)
+
+    users = get_table_client(_users_table_name())
+    access = get_table_client(_access_table_name())
+    identities = get_table_client(_user_identities_table_name())
+    if users is None or access is None or identities is None:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    def scan(rows):
+        try:
+            return list(rows())
+        except ResourceNotFoundError:
+            return []
+
+    try:
+        rows = scan(lambda: users.query_entities(f"PartitionKey eq '{PK_USER}'"))
+        grants = scan(access.list_entities)
+        links = scan(lambda: identities.query_entities(f"PartitionKey eq '{PK_IDENTITY}'"))
+    except Exception as e:
+        logging.error(f"Error listing users for the admin panel: {e}")
+        return _error("internal_error", "Could not list users.", 500)
+
+    owned, shared, linked = {}, {}, {}
+    for grant in grants:
+        if grant.get("Role") not in ROLE_RANK:
+            continue   # the ownership sentinel
+        counter = owned if grant.get("Role") == ROLE_OWNER else shared
+        counter[grant.get("RowKey")] = counter.get(grant.get("RowKey"), 0) + 1
+    for link in links:
+        linked[link.get("UserId")] = linked.get(link.get("UserId"), 0) + 1
+
+    items = []
+    for row in rows:
+        user_id = row.get("RowKey") or ""
+        if query is not None and query not in (row.get("DisplayName") or "").lower() \
+                and query not in (row.get("Email") or "").lower():
+            continue
+        items.append({
+            **_user_ref(user_id, row),
+            "firstSeenUtc": row.get("FirstSeenUtc") or None,
+            "lastSeenUtc": row.get("LastSeenUtc") or None,
+            "owned": owned.get(user_id, 0),
+            "shared": shared.get(user_id, 0),
+            "identities": linked.get(user_id, 0),
+        })
+    if query is not None:
+        items.sort(key=lambda item: ((item["name"] or item["email"]).lower(), item["userId"]))
+        items = items[:USER_SEARCH_MAX_RESULTS]
+    else:
+        items.sort(key=lambda item: (item["lastSeenUtc"] or "", item["userId"]), reverse=True)
+    return _json({"users": items})
 
 
 def _admin_restore_competition(req: func.HttpRequest) -> func.HttpResponse:
@@ -2751,6 +4114,11 @@ def _admin_diagnostics(req: func.HttpRequest) -> func.HttpResponse:
         "clockTable": _clock_table_name(),
         "adminLogTable": _admin_log_table_name(),
         "auditRetentionDays": AUDIT_RETENTION_DAYS,
+        "usersTable": _users_table_name(),
+        "userIdentitiesTable": _user_identities_table_name(),
+        "competitionAccessTable": _access_table_name(),
+        "allowedTenantCount": len(_allowed_tenant_ids()),
+        "inactiveUserDays": INACTIVE_USER_DAYS,
     }
     by_status = {STATUS_ACTIVE: 0, STATUS_DELETED: 0, STATUS_PURGED: 0}
     sources_by_status = {HOVTP_STATUS_PENDING: 0, HOVTP_STATUS_ACCEPTED: 0,
@@ -2932,6 +4300,35 @@ def competition_hovtp_source_by_ip(req: func.HttpRequest) -> func.HttpResponse:
     return _deny_hovtp_source(req)
 
 
+@app.route(route="competitions/{id}/access", auth_level=func.AuthLevel.ANONYMOUS,
+           methods=["GET"])
+def competition_access(req: func.HttpRequest) -> func.HttpResponse:
+    return _list_access(req)
+
+
+@app.route(route="competitions/{id}/access/{userId}", auth_level=func.AuthLevel.ANONYMOUS,
+           methods=["PUT", "DELETE"])
+def competition_access_by_user(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "DELETE":
+        return _remove_access(req)
+    return _set_access(req)
+
+
+@app.route(route="users/search", auth_level=func.AuthLevel.ANONYMOUS, methods=["GET"])
+def users_search(req: func.HttpRequest) -> func.HttpResponse:
+    return _search_users(req)
+
+
+@app.route(route="users/recent", auth_level=func.AuthLevel.ANONYMOUS, methods=["GET"])
+def users_recent(req: func.HttpRequest) -> func.HttpResponse:
+    return _recent_share_users(req)
+
+
+@app.route(route="users/me", auth_level=func.AuthLevel.ANONYMOUS, methods=["GET"])
+def users_me(req: func.HttpRequest) -> func.HttpResponse:
+    return _current_user(req)
+
+
 # Admin routes. "manage", not "admin": the Functions host reserves the `admin`
 # route segment for its own management API.
 
@@ -2960,6 +4357,17 @@ def manage_competition_restore(req: func.HttpRequest) -> func.HttpResponse:
            methods=["POST"])
 def manage_competition_purge(req: func.HttpRequest) -> func.HttpResponse:
     return _admin_purge_competition(req)
+
+
+@app.route(route="manage/competitions/{id}/owner", auth_level=func.AuthLevel.ANONYMOUS,
+           methods=["PUT"])
+def manage_competition_owner(req: func.HttpRequest) -> func.HttpResponse:
+    return _admin_set_owner(req)
+
+
+@app.route(route="manage/users", auth_level=func.AuthLevel.ANONYMOUS, methods=["GET"])
+def manage_users(req: func.HttpRequest) -> func.HttpResponse:
+    return _admin_list_users(req)
 
 
 @app.route(route="manage/sweep/dry-run", auth_level=func.AuthLevel.ANONYMOUS, methods=["POST"])

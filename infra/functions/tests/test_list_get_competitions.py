@@ -4,7 +4,7 @@ The list is what the nav's competition selector renders, so soft-deleted rows
 must not leak into it and the newest competition has to come first.
 """
 import function_app as fa
-from conftest import make_request, payload
+from conftest import USER_ID, make_request, payload
 
 
 def create(table, name, **fields):
@@ -29,7 +29,11 @@ def test_list_returns_a_bare_array_of_competitions(table):
     assert set(competitions[0]) == {
         "id", "code", "name", "date", "endDate", "venue",
         "createdBy", "createdUtc", "updatedUtc", "deletionDate", "status",
+        "access", "owner",
     }
+    assert competitions[0]["access"] == "owner"
+    assert competitions[0]["owner"] == {"userId": USER_ID, "name": "Skater Person",
+                                        "email": "skater@example.com"}
 
 
 def test_list_is_newest_first_by_date(table):

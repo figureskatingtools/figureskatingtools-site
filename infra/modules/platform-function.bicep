@@ -2,7 +2,8 @@
 //
 // Unlike the tool Function Apps this one has NO Entra provider of its own: the
 // site Web App owns the login and proxies here with X-Proxy-Secret +
-// X-Forwarded-User-Email (see infra/functions/function_app.py). The browser
+// X-Forwarded-User-Tid/-Oid/-Email/-Name/-Admin (see
+// infra/functions/function_app.py). The browser
 // never talks to it directly, so CORS is explicitly empty.
 param location string
 param functionAppName string
@@ -14,8 +15,9 @@ param deploymentContainerUrl string
 @description('Shared blob container the registry writes competition data into.')
 param dataContainerName string = 'competition-data'
 
-// Shared secret the Web App proxy sends as X-Proxy-Secret. Empty = the
-// function doesn't enforce it (local/dev). See function_app.py:_proxy_secret_ok.
+// Shared secret the Web App proxy sends as X-Proxy-Secret. The app fails
+// closed: empty = every user and admin route answers 401. See
+// function_app.py:_proxy_secret_ok.
 @secure()
 param proxySharedSecret string = ''
 
@@ -37,6 +39,21 @@ param adminEmails string = ''
 
 @description('Table for the admin audit log and the retention sweep history.')
 param adminLogTableName string = 'adminlog'
+
+@description('Table of the user directory (PII; this app only).')
+param usersTableName string = 'users'
+
+@description('Table linking sign-in identities (tid_oid) to platform user ids.')
+param userIdentitiesTableName string = 'useridentities'
+
+@description('Table of the competition access grants (owner/write/read).')
+param competitionAccessTableName string = 'competitionaccess'
+
+// Defence in depth behind the router's own check: principals of any other
+// Entra tenant are refused. Comma-separated; main.bicep defaults it to the
+// deployment tenant. Empty = nobody gets in (fail closed).
+@description('Comma-separated Entra tenant ids whose users may use the API (ALLOWED_TENANT_IDS).')
+param allowedTenantIds string
 
 // Informational only: the admin diagnostics show it. The HOVTP listener has its
 // own copy of the setting, and that one is what switches it.
@@ -122,6 +139,22 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
           name: 'HOVTP_ENABLED'
           value: string(hovtpEnabled)
         }
+        {
+          name: 'USERS_TABLE'
+          value: usersTableName
+        }
+        {
+          name: 'USER_IDENTITIES_TABLE'
+          value: userIdentitiesTableName
+        }
+        {
+          name: 'COMPETITION_ACCESS_TABLE'
+          value: competitionAccessTableName
+        }
+        {
+          name: 'ALLOWED_TENANT_IDS'
+          value: allowedTenantIds
+        }
       ]
     }
     functionAppConfig: {
@@ -152,8 +185,8 @@ resource authSettings 'Microsoft.Web/sites/config@2022-03-01' = {
   name: 'authsettingsV2'
   properties: {
     // Anonymous by design: the site Web App does the Entra login and forwards
-    // the user's email. Authorization happens in get_user_email_from_header(),
-    // gated by the X-Proxy-Secret shared secret.
+    // the user's identity. Authorization happens in _require_user() /
+    // _require_admin(), gated by the X-Proxy-Secret shared secret (fail closed).
     globalValidation: {
       requireAuthentication: false
       unauthenticatedClientAction: 'AllowAnonymous'

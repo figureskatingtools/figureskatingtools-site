@@ -693,7 +693,7 @@ a {
   color: var(--ink-faint);
 }
 
-/* "Created <date> by <email>" provenance lines */
+/* "Created <date> · Owner <name>" provenance lines */
 .comp-created {
   display: block;
   margin: 0.15rem 0 0;
@@ -732,6 +732,30 @@ a {
 .comp-recent-created {
   font-size: 0.7rem;
   color: var(--ink-faint);
+}
+
+/* "Shared with you by <owner> · view only" under a competition someone else owns */
+.comp-shared {
+  margin: 0.35rem 0 0;
+  padding: 0.3rem 0.6rem;
+  border-left: 2px solid var(--rink);
+  border-radius: 0.25rem;
+  background-color: rgb(18 113 181 / 0.06);
+  font-size: 0.75rem;
+  color: var(--ink-soft);
+}
+
+/* "Shared" / "Shared · view only" in a recent-list row */
+.comp-shared-badge {
+  align-self: flex-start;
+  margin-top: 0.1rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 999px;
+  background-color: rgb(18 113 181 / 0.08);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--rink);
 }
 
 .comp-recent-empty {
@@ -850,17 +874,20 @@ a {
   opacity: 0.5;
 }
 
-/* Editing the active competition — same weight as the delete link, accent hover */
+/* Sharing and editing the active competition — same weight as the delete link, accent hover */
+.comp-share-link,
 .comp-edit-link {
   color: var(--ink-faint);
   font-size: 0.75rem;
   font-weight: 400;
 }
 
+.comp-share-link:hover,
 .comp-edit-link:hover {
   color: var(--rink);
 }
 
+.comp-share-link:disabled,
 .comp-edit-link:disabled {
   cursor: default;
   opacity: 0.5;

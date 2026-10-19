@@ -31,7 +31,7 @@
       <div class="doc-head">
         <p class="eyebrow eyebrow--gold">figureskatingtools.com</p>
         <h1>Privacy notice</h1>
-        <p class="updated">Last updated 15 October 2026</p>
+        <p class="updated">Last updated 17 October 2026</p>
       </div>
     </div>
   </header>
@@ -48,7 +48,7 @@
       <h2 id="h-controller"><span class="num">1</span>Controller and processors</h2>
       <p>The controller is Markus Lintuala, who maintains figureskatingtools.com. Contact: <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>.</p>
       <p>Signed-in users, such as result service operators and the organising club's staff, process data in the service on the controller's behalf (as processors). They may use the data only for the competition at hand and in line with this notice.</p>
-      <p>The service's administrators (currently the controller) can view and manage every competition, including a deleted one until its data has been removed: they can correct its details, change its deletion date, restore a competition deleted by mistake or remove its data at once. Administrators act on the controller's behalf, for example when an operator asks for help or to keep the service running.</p>
+      <p>The service's administrators (currently the controller) can view and manage every competition, including a deleted one until its data has been removed: they can correct its details, change its deletion date, hand it over to another user as its owner, restore a competition deleted by mistake or remove its data at once. Administrators act on the controller's behalf, for example when an operator asks for help or to keep the service running.</p>
     </section>
 
     <section id="data" aria-labelledby="h-data">
@@ -62,9 +62,9 @@
           <tbody>
             <tr>
               <th scope="row">Users of the service</th>
-              <td data-label="Data">Name, e-mail address and account identifier. Your e-mail address is recorded with what you do in the service: creating, editing or deleting a competition, uploading a file, accepting or rejecting an FS Manager sender and sending judges' papers. An administrator's e-mail address is also recorded in the administrator log with each administrative action.</td>
+              <td data-label="Data">Name, e-mail address and account identifiers. The service keeps a user directory of everyone who has signed in: name, e-mail address, the identifiers of your Microsoft account (its object ID and your organisation's tenant ID) and when you first and last signed in. It also records which competitions you own and which are shared with you, and whether you may only view them or also edit them. Your e-mail address is recorded with what you do in the service: creating, editing or deleting a competition, uploading a file, accepting or rejecting an FS Manager sender and sending judges' papers. Sharing a competition, changing or removing someone's access and leaving a competition are recorded in the administrator log with the e-mail addresses of the person who did it and the person whose access changed. An administrator's e-mail address is also recorded in the administrator log with each administrative action.</td>
               <td data-label="Source">Microsoft sign-in, and your use of the tools</td>
-              <td data-label="Legal basis" class="basis">Legitimate interest: running the service and keeping it secure</td>
+              <td data-label="Legal basis" class="basis">Legitimate interest: running the service, letting users share competitions with each other, and keeping it secure</td>
             </tr>
             <tr>
               <th scope="row">Skaters and team members</th>
@@ -128,19 +128,24 @@
       </ul>
       <p>Microsoft and Mailgun are US companies, so data may in limited cases be accessed from the United States, for example for support or security. Both companies are certified under the EU-U.S. Data Privacy Framework (checked on 13 October 2026), and their data processing terms also include the EU standard contractual clauses.</p>
       <p>Data is not sold or shared for marketing. Nothing in the tools is public: everything requires sign-in, except the judges' papers download link sent by e-mail, which contains a random code and works for at most 5 days.</p>
+
+      <h3>Who can see a competition</h3>
+      <p>A competition and everything stored about it is visible only to its owner (normally the user who created it), the users the owner has shared it with, and the administrators. The owner decides whether each of them may only view it or also edit it, and can take the access away again.</p>
+      <p>When sharing, a signed-in user can find other users who have signed in to the service in two ways: by typing at least 3 characters of their name, or by typing their exact, full e-mail address. Part of an e-mail address finds nobody. A name search shows the name and only a masked e-mail address, for example a•••@club.fi. The full e-mail address is shown only when it was typed in full, or to a user who already has a competition in common with that person (as its owner or through sharing).</p>
+      <p>The people working on a competition see each other's e-mail addresses. The owner sees the names and e-mail addresses of the users the competition is shared with in its access list, and they see the owner's. Everyone with access to a competition also sees the e-mail address of the user who uploaded each of its files and of the user who accepted each FS Manager sender.</p>
     </section>
 
     <section id="retention" aria-labelledby="h-retention">
       <h2 id="h-retention"><span class="num">4</span>How long data is kept</h2>
-      <p>Everything stored about a competition is removed after the competition: the uploaded files and the files sent from FS Manager, rosters, photos, the generated judges' papers and protocols, the e-mail send log and the FS Manager sender records. The operator may delete the competition earlier, and its data is then removed from every tool the following night. At the latest, the automatic deletion removes it: each competition has one deletion date that applies to all of its data in every tool, <strong>60 days after the competition is created</strong>. The operator may move the date one week later at a time when there is a reason to, for example when the competition takes place later than that, and the new date applies to every tool alike. An administrator may also set another deletion date, for example when an operator asks for it.</p>
+      <p>Everything stored about a competition is removed after the competition: the uploaded files and the files sent from FS Manager, rosters, photos, the generated judges' papers and protocols, the e-mail send log, the FS Manager sender records and the list of users it is shared with. The operator may delete the competition earlier, and its data is then removed from every tool the following night. At the latest, the automatic deletion removes it: each competition has one deletion date that applies to all of its data in every tool, <strong>60 days after the competition is created</strong>. The operator may move the date one week later at a time when there is a reason to, for example when the competition takes place later than that, and the new date applies to every tool alike. An administrator may also set another deletion date, for example when an operator asks for it.</p>
       <p>After deletion, only the competition's name, dates and usage counts remain, as statistics without personal data.</p>
       <ul>
         <li>Judges' papers download links: at most 5 days.</li>
         <li>Technical logs (errors and request traces of the service, and Microsoft's sign-in logs, which can include IP addresses and e-mail addresses): at most 90 days.</li>
-        <li>Administrator log (each administrative action, the administrator's e-mail address and the details that were changed): 1 year.</li>
+        <li>Administrator log (each administrative action and each sharing change: the e-mail address of whoever made it, the e-mail address of the user whose access changed, and the details that were changed): 1 year.</li>
         <li>FS Manager transfer session records: deleted after 30 days without activity.</li>
         <li>Mailgun: the service uses Mailgun's free plan, which keeps no copies of the messages and shows the delivery log (recipient address, time and delivery status) for 1 day. According to Mailgun's documentation, it keeps the delivery event data for 30 days, so the record is gone after 30 days at the latest.</li>
-        <li>Your user account: for as long as you have access to the service. It is removed when you no longer need access, or when you ask for it.</li>
+        <li>Your entry in the user directory (name, e-mail address, account identifiers, first and last sign-in): removed after 12 months without signing in, unless you still own a competition whose data has not been deleted. Your access to competitions shared with you is removed with it. You can also ask for it to be removed earlier.</li>
       </ul>
     </section>
 
@@ -164,7 +169,7 @@
 
     <section id="updates" aria-labelledby="h-updates">
       <h2 id="h-updates"><span class="num">8</span>Updates to this notice</h2>
-      <p>This notice is updated when practices change. Last updated 15 October 2026.</p>
+      <p>This notice is updated when practices change. Last updated 17 October 2026.</p>
     </section>
   </main>
 

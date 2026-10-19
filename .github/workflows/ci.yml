@@ -71,5 +71,8 @@ jobs:
       - name: Build shared-ui
         run: npm run build --workspace=@figureskatingtools/shared-ui
 
+      - name: Test shared-ui
+        run: npm test --workspace=@figureskatingtools/shared-ui
+
       - name: Build site
         run: npm run build --workspace=site

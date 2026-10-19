@@ -31,6 +31,22 @@ import {
   syncCompetitionSnapshot,
   toPlatformCompetition,
   updateCompetition,
+  canManageCompetition,
+  competitionAccess,
+  getMe,
+  isReadOnlyCompetition,
+  leaveCompetition,
+  listAccess,
+  ownerLabel,
+  recentShareUsers,
+  refreshActiveCompetition,
+  removeAccess,
+  searchHitEmail,
+  searchUsers,
+  setAccess,
+  toUserSearchHit,
+  userRefToSearchHit,
+  USERS_API,
   type PlatformCompetition,
 } from '../src/competition.js';
 
@@ -543,6 +559,19 @@ describe('platform errors from the tool backends', () => {
     expect(readPlatformError(400, 'platform_id_required')).toBe('platform_id_required');
   });
 
+  it('reads the owner-only refusal (403) in both body shapes', () => {
+    expect(readPlatformError(403, '{"error":"platform_owner_required"}')).toBe('platform_owner_required');
+    expect(readPlatformError(403, '{"error": "platform_owner_required", "message": "x"}'))
+      .toBe('platform_owner_required');
+    expect(readPlatformError(403, 'platform_owner_required')).toBe('platform_owner_required');
+    expect(readPlatformError(403, 'platform_owner_required: only the owner may delete')).toBe('platform_owner_required');
+    // The status must match: another status is not this code
+    expect(readPlatformError(401, '{"error":"platform_owner_required"}')).toBeNull();
+    expect(readPlatformError(410, 'platform_owner_required')).toBeNull();
+    // …and it stays distinct from the view-only refusal on the same status
+    expect(readPlatformError(403, 'platform_read_only')).toBe('platform_read_only');
+  });
+
   it('ignores other codes, free text and a status that does not match', () => {
     expect(readPlatformError(404, 'Competition not found')).toBeNull();
     expect(readPlatformError(404, '{"error":"not_found"}')).toBeNull();
@@ -555,6 +584,8 @@ describe('platform errors from the tool backends', () => {
     expect(isGoneCompetitionError('platform_deleted')).toBe(true);
     expect(isGoneCompetitionError('platform_not_found')).toBe(true);
     expect(isGoneCompetitionError('platform_unavailable')).toBe(false);
+    expect(isGoneCompetitionError('platform_read_only')).toBe(false);
+    expect(isGoneCompetitionError('platform_owner_required')).toBe(false);
     expect(isGoneCompetitionError(null)).toBe(false);
   });
 
@@ -568,6 +599,9 @@ describe('platform errors from the tool backends', () => {
       "The competition registry can't be reached right now, try again shortly."
     );
     expect(platformErrorMessage('platform_id_required')).toBe('Select a competition in the top bar first.');
+    expect(platformErrorMessage('platform_owner_required', 'Winter Cup')).toBe(
+      "Only the competition's owner can do this."
+    );
   });
 });
 
@@ -603,5 +637,227 @@ describe('syncCompetitionSnapshot', () => {
     expect(syncCompetitionSnapshot(list, null)).toBe(false);
     expect(syncCompetitionSnapshot(list, OTHER)).toBe(false);
     expect(syncCompetitionSnapshot(list, { ...COMP })).toBe(false);
+  });
+});
+
+describe('access and owner', () => {
+  const OWNER = { userId: 'u-owner', name: 'Olli Owner', email: 'olli@example.com' };
+
+  it('maps access and owner from the API and validates them', () => {
+    const shared = toPlatformCompetition({ ...COMP, access: 'read', owner: OWNER });
+    expect(shared).toEqual({ ...COMP, access: 'read', owner: OWNER });
+    expect(isPlatformCompetition(shared)).toBe(true);
+
+    expect(toPlatformCompetition({ ...COMP, access: 'owner', owner: null })?.owner).toBeNull();
+    // Unknown roles and broken owners are dropped, not trusted
+    const junk = toPlatformCompetition({ ...COMP, access: 'admin', owner: { name: 'x' } });
+    expect(junk).not.toHaveProperty('access');
+    expect(junk).not.toHaveProperty('owner');
+
+    expect(isPlatformCompetition({ ...COMP, access: 'admin' })).toBe(false);
+    expect(isPlatformCompetition({ ...COMP, owner: { userId: 1 } })).toBe(false);
+    expect(isPlatformCompetition({ ...COMP, owner: null })).toBe(true);
+  });
+
+  it('round-trips through storage, dropping stray owner keys', () => {
+    const withOwner = {
+      ...COMP, access: 'write', owner: { ...OWNER, secret: 'x' },
+    } as unknown as PlatformCompetition;
+    const parsed = parseActiveCompetition(serializeActiveCompetition(withOwner));
+    expect(parsed).toEqual({ ...COMP, access: 'write', owner: OWNER });
+    expect(parseActiveCompetition(serializeActiveCompetition({ ...COMP, owner: null }))?.owner).toBeNull();
+  });
+
+  it('reads a missing role as owner (pre-sharing selection or API)', () => {
+    expect(competitionAccess(COMP)).toBe('owner');
+    expect(competitionAccess(null)).toBe('owner');
+    expect(isReadOnlyCompetition(COMP)).toBe(false);
+    expect(isReadOnlyCompetition({ ...COMP, access: 'read' })).toBe(true);
+    expect(canManageCompetition({ ...COMP, access: 'write' })).toBe(false);
+    expect(canManageCompetition({ ...COMP, access: 'owner' })).toBe(true);
+  });
+
+  it('labels the owner by name, then e-mail', () => {
+    expect(ownerLabel(OWNER)).toBe('Olli Owner');
+    expect(ownerLabel({ ...OWNER, name: ' ' })).toBe('olli@example.com');
+    expect(ownerLabel(null)).toBe('');
+  });
+
+  describe('refreshActiveCompetition', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('picks up a role change for the active competition', async () => {
+      setActiveCompetition({ ...COMP, access: 'write', owner: OWNER });
+      vi.stubGlobal('fetch', vi.fn(async () => response(200, [{ ...COMP, access: 'read', owner: OWNER }])));
+
+      await refreshActiveCompetition();
+
+      expect(getActiveCompetition()?.access).toBe('read');
+    });
+
+    it('drops a competition that is no longer shared with the caller', async () => {
+      setActiveCompetition({ ...COMP, access: 'read', owner: OWNER });
+      vi.stubGlobal('fetch', vi.fn(async () => response(200, [])));
+
+      expect(await refreshActiveCompetition()).toBeNull();
+      expect(getActiveCompetition()).toBeNull();
+    });
+  });
+});
+
+describe('sharing clients', () => {
+  const ANNA = { userId: 'u-anna', name: 'Anna', email: 'anna@example.com' };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('listAccess GETs the access route and keeps only usable grants', async () => {
+    const fetchMock = vi.fn(async () => response(200, {
+      items: [
+        { userId: 'u-owner', name: 'Olli', email: 'olli@example.com', role: 'owner' },
+        { ...ANNA, role: 'read' },
+        { userId: '', name: 'Broken', email: '', role: 'read' },
+        { userId: 'u-x', name: 'X', email: '', role: 'admin' },
+      ],
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const grants = await listAccess('a/b');
+
+    expect(grants.map((g) => [g.userId, g.role])).toEqual([['u-owner', 'owner'], ['u-anna', 'read']]);
+    expect(fetchMock.mock.calls[0][0]).toBe(`${COMPETITIONS_API}/a%2Fb/access`);
+  });
+
+  it('listAccess surfaces owner_required with its code', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      response(403, { error: 'owner_required', message: 'Only the owner can do that.' })));
+
+    const error = await listAccess(COMP.id).catch((e: unknown) => e) as CompetitionApiError;
+    expect(error).toBeInstanceOf(CompetitionApiError);
+    expect(error.status).toBe(403);
+    expect(error.code).toBe('owner_required');
+    expect(error.message).toBe('Only the owner can do that.');
+  });
+
+  it('setAccess PUTs the role and resolves with the grant', async () => {
+    const fetchMock = vi.fn(async () => response(200, { item: { ...ANNA, role: 'write' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await setAccess(COMP.id, 'u-anna', 'write')).toEqual({ ...ANNA, role: 'write' });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`${COMPETITIONS_API}/${COMP.id}/access/u-anna`);
+    expect(init.method).toBe('PUT');
+    expect(JSON.parse(init.body as string)).toEqual({ role: 'write' });
+  });
+
+  it('setAccess maps share errors and a bad body', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      response(400, { error: 'cannot_change_owner', message: 'The owner keeps full access.' })));
+    const error = await setAccess(COMP.id, 'u-owner', 'read').catch((e: unknown) => e) as CompetitionApiError;
+    expect(error.code).toBe('cannot_change_owner');
+
+    vi.stubGlobal('fetch', vi.fn(async () => response(200, { item: { userId: 'u', role: 'boss' } })));
+    await expect(setAccess(COMP.id, 'u', 'read')).rejects.toBeInstanceOf(CompetitionApiError);
+
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+    const offline = await setAccess(COMP.id, 'u', 'read').catch((e: unknown) => e) as CompetitionApiError;
+    expect(offline.status).toBe(0);
+  });
+
+  it('removeAccess DELETEs a grant; leaveCompetition targets "me"', async () => {
+    const fetchMock = vi.fn(async () => response(200, { status: 'removed', userId: 'u-me', left: true }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await leaveCompetition(COMP.id)).toEqual({ userId: 'u-me', left: true });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(`${COMPETITIONS_API}/${COMP.id}/access/me`);
+    expect(init.method).toBe('DELETE');
+
+    vi.stubGlobal('fetch', vi.fn(async () => response(200)));
+    expect(await removeAccess(COMP.id, 'u-anna')).toEqual({ userId: 'u-anna', left: false });
+
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      response(404, { error: 'grant_not_found', message: 'No such grant.' })));
+    const error = await removeAccess(COMP.id, 'u-x').catch((e: unknown) => e) as CompetitionApiError;
+    expect([error.status, error.code]).toEqual([404, 'grant_not_found']);
+  });
+
+  it('searchUsers skips short queries, encodes the query and maps hits', async () => {
+    const masked = { userId: 'u-aino', name: 'Aino', email: null, emailHint: 'a•••@club.fi' };
+    const fetchMock = vi.fn(async () => response(200, {
+      items: [{ ...ANNA, emailHint: 'a•••@example.com' }, masked, { name: 'no id' }],
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await searchUsers(' an ')).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+
+    expect(await searchUsers('anna & co')).toEqual([
+      { ...ANNA, emailHint: 'a•••@example.com' },
+      masked,
+    ]);
+    expect(fetchMock.mock.calls[0][0]).toBe(`${USERS_API}/search?q=anna%20%26%20co`);
+  });
+
+  it('toUserSearchHit maps a hit and reads a missing or empty e-mail as null', () => {
+    expect(toUserSearchHit({ userId: 'u-1', name: 'Aino', email: null, emailHint: 'a•••@club.fi' }))
+      .toEqual({ userId: 'u-1', name: 'Aino', email: null, emailHint: 'a•••@club.fi' });
+    expect(toUserSearchHit({ userId: 'u-1', name: 'Aino', email: '' }))
+      .toEqual({ userId: 'u-1', name: 'Aino', email: null, emailHint: '' });
+    expect(toUserSearchHit({ userId: 'u-1', email: 'aino@club.fi', emailHint: 7 }))
+      .toEqual({ userId: 'u-1', name: '', email: 'aino@club.fi', emailHint: '' });
+    expect(toUserSearchHit({ name: 'no id', email: 'x@y.fi' })).toBeNull();
+    expect(toUserSearchHit(null)).toBeNull();
+    expect(toUserSearchHit('u-1')).toBeNull();
+  });
+
+  it('searchHitEmail prefers the full e-mail and falls back to the masked hint', () => {
+    expect(searchHitEmail({ email: 'aino@club.fi', emailHint: 'a•••@club.fi' })).toBe('aino@club.fi');
+    expect(searchHitEmail({ email: null, emailHint: 'a•••@club.fi' })).toBe('a•••@club.fi');
+    expect(searchHitEmail({ email: null, emailHint: '' })).toBe('');
+  });
+
+  it('userRefToSearchHit keeps a known full e-mail', () => {
+    expect(userRefToSearchHit(ANNA)).toEqual({ ...ANNA, emailHint: '' });
+    expect(userRefToSearchHit({ userId: 'u-x', name: 'X', email: '' }))
+      .toEqual({ userId: 'u-x', name: 'X', email: null, emailHint: '' });
+  });
+
+  it('searchUsers surfaces rate limiting', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      response(429, { error: 'rate_limited', message: 'Too many searches; wait a moment.' })));
+    const error = await searchUsers('anna').catch((e: unknown) => e) as CompetitionApiError;
+    expect([error.status, error.code]).toEqual([429, 'rate_limited']);
+  });
+
+  it('recentShareUsers and getMe read the user routes', async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      url.endsWith('/recent')
+        ? response(200, { items: [ANNA] })
+        : response(200, { userId: 'u-me', name: 'Me', email: 'me@example.com', isAdmin: true }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    expect(await recentShareUsers()).toEqual([ANNA]);
+    expect(await getMe()).toEqual({ userId: 'u-me', name: 'Me', email: 'me@example.com', isAdmin: true });
+    expect(fetchMock.mock.calls.map((c) => c[0])).toEqual([`${USERS_API}/recent`, `${USERS_API}/me`]);
+  });
+});
+
+describe('platform_read_only', () => {
+  it('is recognised at 403 only, in both body shapes', () => {
+    expect(readPlatformError(403, 'platform_read_only')).toBe('platform_read_only');
+    expect(readPlatformError(403, '{"error":"platform_read_only"}')).toBe('platform_read_only');
+    expect(readPlatformError(404, 'platform_read_only')).toBeNull();
+  });
+
+  it('keeps the selection (not a gone competition) and words it', () => {
+    expect(isGoneCompetitionError('platform_read_only')).toBe(false);
+    expect(platformErrorMessage('platform_read_only', 'Winter Cup')).toBe(
+      'You have view-only access to “Winter Cup”. Ask the owner for write access to make changes.'
+    );
+    expect(platformErrorMessage('platform_read_only')).toMatch(/^You have view-only access to this competition\./);
   });
 });
