@@ -329,6 +329,80 @@ function readOnlyRefusal(status: number, text: string): string | null {
     return platformErrorMessage('platform_read_only', boundLabel ?? '');
 }
 
+const COPY_LINK_TITLE = 'Copy a link to share (valid 5 days, or until the competition is deleted)';
+
+/** A share link could not be created; `message` is for the user */
+class ShareLinkError extends Error {}
+
+/**
+ * A 5-day share link of a generated file (POST create_download_link): the same
+ * public link the e-mail carries. Read access is enough.
+ */
+async function createShareLink(competitionId: string, fileName: string): Promise<{ url: string; expiration: string }> {
+    let resp: Response;
+    try {
+        resp = await fetch(`${API_BASE}/create_download_link`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: competitionId, fileName }),
+        });
+    } catch (_e) {
+        throw new ShareLinkError('Could not create the link. Check your connection and try again.');
+    }
+    if (!resp.ok) {
+        const body = await resp.text().catch(() => '');
+        const code = readPlatformError(resp.status, body);
+        if (code) {
+            if (code === 'platform_not_found' || code === 'platform_deleted') void refreshActiveCompetition();
+            throw new ShareLinkError(platformErrorMessage(code, boundLabel ?? ''));
+        }
+        if (resp.status === 409) {
+            throw new ShareLinkError('This competition is about to be deleted. ' +
+                'Extend its deletion date first, then copy the link again.');
+        }
+        if (resp.status === 429) throw new ShareLinkError(body.trim() || 'Too many links today, try again later.');
+        if (resp.status === 404) throw new ShareLinkError('This file is no longer available. Reload the page.');
+        throw new ShareLinkError('Could not create the link. Try again.');
+    }
+    const data = await resp.json().catch(() => null);
+    const url = data && typeof data.url === 'string' ? data.url : '';
+    if (!/^https?:\/\//i.test(url) || typeof data.expiration !== 'string') {
+        throw new ShareLinkError('Could not create the link. Try again.');
+    }
+    return { url, expiration: data.expiration };
+}
+
+/**
+ * Copy text that is still being fetched. ClipboardItem with a promised value
+ * keeps the write tied to the click (Safari refuses writes after an await);
+ * browsers without it fall back to writeText once the text is there.
+ */
+function writeClipboard(text: Promise<string>): Promise<void> {
+    if (typeof ClipboardItem !== 'undefined' && navigator.clipboard?.write) {
+        try {
+            const item = new ClipboardItem({
+                'text/plain': text.then(t => new Blob([t], { type: 'text/plain' })),
+            });
+            // A failed request rejects `await text` — the real error, not the
+            // clipboard's; otherwise retry the plain way (Chrome, Firefox allow it)
+            return navigator.clipboard.write([item]).catch(async () => {
+                await navigator.clipboard.writeText(await text);
+            });
+        } catch (_e) {
+            // Older ClipboardItem without promise support: fall through
+        }
+    }
+    return text.then(t => navigator.clipboard.writeText(t));
+}
+
+/** "21.10.2026 14:05" in the user's time zone */
+function formatLinkExpiry(iso: string): string {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getDate()}.${d.getMonth() + 1}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 /** Render one card into the "pick a competition" view */
 function renderBindCard(html: string) {
     showView('view-pick-competition');
@@ -1112,9 +1186,10 @@ async function init() {
     }
 
     /**
-     * The generated papers list. Links are short-lived (15 min) and may be
-     * null when the backend could not sign one: such a file is listed without a
-     * link (and without a copy button), with a hint to reload.
+     * The generated papers list. Download links are short-lived (15 min) and
+     * may be null when the backend could not sign one: such a file is listed
+     * without a link, with a hint to reload. Copy link creates a separate 5-day
+     * share link on click, so it is offered for every file (view-only too).
      */
     function renderGeneratedFiles(files: GeneratedPaperFile[]) {
         const genContainer = document.getElementById('generated-files-list');
@@ -1162,11 +1237,10 @@ async function init() {
                    <button class="icon-btn icon-btn--send send-papers-btn" data-filename="${safeFileName}" title="Send by E-mail">
                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
                    </button>` : ''}
-                   ${url ? `
-                   <button class="icon-btn icon-btn--copy copy-link-btn" data-filename="${safeFileName}" data-url="${escapeAttr(url)}"
-                           data-expiration="${escapeAttr(f.expiration ?? '')}" title="Copy link (valid 15 min) — to share for longer, use Send by e-mail">
+                   <button class="icon-btn icon-btn--copy copy-link-btn" data-filename="${safeFileName}"
+                           title="${escapeAttr(COPY_LINK_TITLE)}" aria-label="${escapeAttr(COPY_LINK_TITLE)}">
                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
-                   </button>` : ''}
+                   </button>
                    <button class="icon-btn icon-btn--danger delete-gen-file-btn" data-filename="${safeJudgePapersPath}" title="Delete File">
                        ×
                    </button>
@@ -1190,33 +1264,14 @@ async function init() {
             });
         });
 
-        // Copy-link buttons: copy a fresh link when the listed one is (nearly) expired
+        // Copy-link buttons: a 5-day share link (create_download_link), not the
+        // 15-minute download link — it's for passing on, in any chat
         genContainer.querySelectorAll<HTMLElement>('.copy-link-btn').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
+            btn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                const el = e.currentTarget as HTMLElement;
-                const fileName = el.dataset.filename!;
-                let url: string | null = el.dataset.url ?? null;
-                if (isDownloadLinkStale(generatedFetchedAt, el.dataset.expiration)) {
-                    const competitionId = currentCompetitionData?.id;
-                    if (!competitionId) return;
-                    try {
-                        const fresh = await refreshGeneratedFiles(competitionId);
-                        url = usableDownloadUrl(fresh?.find(g => g.fileName === fileName)?.url);
-                    } catch (_e) {
-                        url = null;
-                    }
-                    // Another competition was opened meanwhile: this click no longer applies
-                    if (currentCompetitionData?.id !== competitionId) return;
-                    if (!url) { markGeneratedUnavailable(competitionId, fileName); return; }
-                    // The list was re-rendered: confirm on the new button
-                    const again = Array.from(genContainer.querySelectorAll<HTMLElement>('.copy-link-btn'))
-                        .find(b => b.dataset.filename === fileName);
-                    if (!again) return;
-                    copyAndConfirm(again, url);
-                    return;
-                }
-                if (url) copyAndConfirm(el, url);
+                const competitionId = currentCompetitionData?.id;
+                if (!competitionId || btn.getAttribute('aria-busy') === 'true') return;
+                void copyShareLink(btn, competitionId, btn.dataset.filename!);
             });
         });
 
@@ -1237,16 +1292,41 @@ async function init() {
         });
     }
 
-    function copyAndConfirm(el: HTMLElement, url: string) {
-        navigator.clipboard.writeText(url).then(() => {
-            const originalHTML = el.innerHTML;
-            el.innerHTML = '✓';
-            el.classList.add('is-copied');
-            setTimeout(() => {
-                el.innerHTML = originalHTML;
-                el.classList.remove('is-copied');
-            }, 2000);
-        }).catch(() => {});
+    /**
+     * Create a share link of `fileName` and copy it. The clipboard write starts
+     * inside the click with a promised value (ClipboardItem), so Safari, which
+     * drops writes made after an await, still copies; a failed request rejects
+     * that promise and nothing is copied.
+     */
+    async function copyShareLink(btn: HTMLElement, competitionId: string, fileName: string) {
+        btn.setAttribute('aria-busy', 'true');
+        const link = createShareLink(competitionId, fileName);
+        try {
+            await writeClipboard(link.then(l => l.url));
+            const { expiration } = await link;
+            confirmCopied(btn, expiration);
+        } catch (err) {
+            // Another competition was opened meanwhile: this click no longer applies
+            if (currentCompetitionData?.id !== competitionId) return;
+            alert(err instanceof ShareLinkError ? err.message : 'Could not copy the link.');
+        } finally {
+            btn.removeAttribute('aria-busy');
+        }
+    }
+
+    function confirmCopied(el: HTMLElement, expiration: string) {
+        const originalHTML = el.innerHTML;
+        const note = `Link copied — valid until ${formatLinkExpiry(expiration)}`;
+        el.innerHTML = '✓';
+        el.classList.add('is-copied');
+        el.title = note;
+        el.setAttribute('aria-label', note);
+        setTimeout(() => {
+            el.innerHTML = originalHTML;
+            el.classList.remove('is-copied');
+            el.title = COPY_LINK_TITLE;
+            el.setAttribute('aria-label', COPY_LINK_TITLE);
+        }, 2500);
     }
 
     /**
