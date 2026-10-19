@@ -637,7 +637,7 @@ def test_only_competitions_created_before_the_cutoff_are_claimable(table):
 
 def test_the_cutoff_is_no_later_than_the_rollout():
     # Must be <= the prod rollout of the access model (see LEGACY_CLAIM_CUTOFF).
-    assert fa.LEGACY_CLAIM_CUTOFF == "2026-10-18T00:00:00Z"
+    assert fa.LEGACY_CLAIM_CUTOFF == "2026-10-19T09:30:00Z"
 
 
 def test_a_claimed_row_is_never_claimed_again_even_after_its_owner_is_gone(table):

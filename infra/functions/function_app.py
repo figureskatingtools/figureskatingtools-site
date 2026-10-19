@@ -367,7 +367,7 @@ INACTIVE_USER_DAYS = 365
 # MUST be <= the moment the access model reaches prod — anything created
 # after it already has an owner row from its create, and a later row must
 # never be claimable by whoever signs in with its CreatedBy e-mail.
-LEGACY_CLAIM_CUTOFF = "2026-10-18T00:00:00Z"
+LEGACY_CLAIM_CUTOFF = "2026-10-19T09:30:00Z"
 # The ownership sentinel: one row per competition in its competitionaccess
 # partition (RowKey is not a GUID, so it is nobody's grant and the tools'
 # point reads never see it). Every ownership change — create, legacy claim,
