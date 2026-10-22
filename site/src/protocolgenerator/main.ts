@@ -20,6 +20,7 @@ import {
   subscribeActiveCompetition,
   listCompetitionFiles,
   uploadCompetitionFile,
+  CompetitionApiError,
   sortCategoriesForMatching,
   matchCategory,
   planAutoAssignment,
@@ -1929,7 +1930,13 @@ async function uploadOneFile(file: File, params: URLSearchParams): Promise<void>
     let pooled: PoolFile | null = null;
     try {
       pooled = await uploadCompetitionFile(boundPlatformId, file, 'protocolgenerator');
-    } catch {
+    } catch (e) {
+      // 422: a participant file whose birth dates the pool could not remove.
+      // The fallback below would store it here with them, so stop instead.
+      if (e instanceof CompetitionApiError && e.status === 422) {
+        alert(`Upload failed for ${file.name}: ${e.message}`);
+        return;
+      }
       notePoolUnavailable();
     }
     if (pooled) {

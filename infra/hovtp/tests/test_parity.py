@@ -1,4 +1,4 @@
-"""`normalize_code` must be identical in both Function Apps.
+"""The code shared with the platform API must be identical in both Function Apps.
 
 This app resolves a competition CODE row that the platform API wrote. If the two
 normalizations ever drift, FSM's messages start 451-ing against a competition
@@ -80,6 +80,35 @@ def test_the_copied_helpers_are_byte_identical():
                  "_get_container_client", "_pool_content_type"):
         assert inspect.getsource(getattr(fa, name)) == \
                inspect.getsource(getattr(platform, name)), name
+
+
+def test_the_birth_date_removal_is_byte_identical():
+    """FSM pushes and user uploads must clean a participant file the same way:
+    one copy that drifted would let birth dates in through the other door."""
+    platform = _platform_module()
+
+    for name in ("strip_birth_dates", "_remove_birth_date_markup", "_is_birth_date_name",
+                 "_has_birth_date", "_birth_date_free_shape"):
+        assert inspect.getsource(getattr(fa, name)) == \
+               inspect.getsource(getattr(platform, name)), name
+    assert fa.PARTICIPANT_DOCUMENT_TYPES == platform.PARTICIPANT_DOCUMENT_TYPES
+    assert fa._XML_MARKUP_RE.pattern == platform._XML_MARKUP_RE.pattern
+    assert fa._XML_MARKUP_RE.flags == platform._XML_MARKUP_RE.flags
+    assert fa._XML_ATTRIBUTE_RE.pattern == platform._XML_ATTRIBUTE_RE.pattern
+
+
+def test_the_whole_birth_date_section_is_byte_identical():
+    """Belt and braces: the section as a whole, comments included."""
+    marker = "# ── birth dates out of participant files ──"
+
+    def section(path):
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        start = text.index(marker)
+        end = text.index("\n# ── ", start + len(marker))
+        return text[start:end]
+
+    assert section(fa.__file__) == section(PLATFORM_PATH)
 
 
 def test_the_data_account_is_resolved_independently_of_the_host_account(monkeypatch):

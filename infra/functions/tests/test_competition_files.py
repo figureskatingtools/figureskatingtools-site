@@ -453,3 +453,116 @@ def test_the_proxy_gate_is_enforced_for_file_routes(table, blobs):
     assert PROXY_SECRET
     competition = create_competition()
     assert upload(competition["id"], proxy_secret=None).status_code == 401
+
+
+# ── participant files lose their birth dates ──────────────────────────────────
+# The same `strip_birth_dates` as the HOVTP listener (pinned byte-identical by
+# infra/hovtp/tests/test_parity.py, which also covers the stripping itself in
+# depth); what is tested here is when an upload gets it.
+
+PARTIC_WITH_BIRTHDATES = (
+    b'<?xml version="1.0" encoding="utf-8"?>\n'
+    b'<OdfBody CompetitionCode="YL110926HTL" DocumentType="DT_PARTIC " Version="1">\n'
+    b'  <Competition>\n'
+    b'    <Participant Code="1234567" GivenName="Aino" FamilyName="Koskinen" '
+    b'BirthDate="2012-03-04" Organisation="FIN"/>\n'
+    b"    <Participant Code='1234568' GivenName='Bertil' birthDate='2011-12-31'/>\n"
+    b'    <Participant Code="1234569"><BirthDate>2013-01-15</BirthDate></Participant>\n'
+    b'  </Competition>\n'
+    b'</OdfBody>\n'
+)
+PARTIC_STRIPPED = (
+    b'<?xml version="1.0" encoding="utf-8"?>\n'
+    b'<OdfBody CompetitionCode="YL110926HTL" DocumentType="DT_PARTIC " Version="1">\n'
+    b'  <Competition>\n'
+    b'    <Participant Code="1234567" GivenName="Aino" FamilyName="Koskinen" '
+    b'Organisation="FIN"/>\n'
+    b"    <Participant Code='1234568' GivenName='Bertil'/>\n"
+    b'    <Participant Code="1234569"></Participant>\n'
+    b'  </Competition>\n'
+    b'</OdfBody>\n'
+)
+
+
+def _stored(blobs):
+    assert len(blobs.blobs) == 1, sorted(blobs.blobs)
+    return next(iter(blobs.blobs.values()))
+
+
+def test_an_uploaded_participant_file_is_stored_without_birth_dates(table, blobs):
+    competition = create_competition()
+
+    info = payload(upload(competition["id"], filename="DT_PARTIC.xml",
+                          data=PARTIC_WITH_BIRTHDATES))
+
+    assert _stored(blobs).data == PARTIC_STRIPPED
+    assert info["size"] == len(PARTIC_STRIPPED)
+
+
+def test_the_participant_file_is_recognised_by_content_not_name(table, blobs):
+    competition = create_competition()
+    teams = PARTIC_WITH_BIRTHDATES.replace(b"DT_PARTIC ", b"dt_partic_teams")
+
+    upload(competition["id"], filename="roster.xml", data=teams)
+
+    assert b"BirthDate" not in _stored(blobs).data
+    assert b"2012-03-04" not in _stored(blobs).data
+
+
+def test_an_odf_file_declaring_no_type_is_cleaned_too(table, blobs):
+    """The tools recognise an undeclared roster by its shape, so it counts."""
+    competition = create_competition()
+    untyped = PARTIC_WITH_BIRTHDATES.replace(b' DocumentType="DT_PARTIC "', b"")
+
+    upload(competition["id"], filename="x.xml", data=untyped)
+
+    assert _stored(blobs).data == PARTIC_STRIPPED.replace(b' DocumentType="DT_PARTIC "', b"")
+
+
+def test_other_uploads_are_stored_byte_for_byte(table, blobs):
+    competition = create_competition()
+    schedule = PARTIC_WITH_BIRTHDATES.replace(b"DT_PARTIC ", b"DT_SCHEDULE")
+
+    upload(competition["id"], filename="schedule.xml", data=schedule)
+    upload(competition["id"], filename="not-odf.xml",
+           data=b'<Root><P BirthDate="2012-03-04"/></Root>')
+    upload(competition["id"])
+
+    stored = {name.rsplit("/", 1)[-1]: blob.data for name, blob in blobs.blobs.items()}
+    assert stored == {
+        "schedule.xml": schedule,
+        "not-odf.xml": b'<Root><P BirthDate="2012-03-04"/></Root>',
+        FILENAME: PDF,
+    }
+
+
+def test_a_participant_file_without_birth_dates_is_stored_byte_for_byte(table, blobs):
+    competition = create_competition()
+    clean = PARTIC_STRIPPED
+
+    upload(competition["id"], filename="DT_PARTIC.xml", data=clean)
+
+    assert _stored(blobs).data == clean
+
+
+def test_a_participant_file_that_cannot_be_cleaned_is_refused(table, blobs):
+    competition = create_competition()
+    utf16 = ('<?xml version="1.0" encoding="utf-16"?>'
+             '<OdfBody DocumentType="DT_PARTIC"><Participant Code="1" BirthDate="2012-03-04"/>'
+             '</OdfBody>').encode("utf-16")
+
+    response = upload(competition["id"], filename="DT_PARTIC.xml", data=utf16)
+
+    assert response.status_code == 422
+    assert payload(response)["error"] == "birth_dates_not_removed"
+    assert blobs.blobs == {}
+
+
+def test_a_broken_participant_file_is_refused_rather_than_stored(table, blobs):
+    competition = create_competition()
+    broken = PARTIC_WITH_BIRTHDATES.replace(b"</Competition>", b"</Competitio>")
+
+    response = upload(competition["id"], filename="DT_PARTIC.xml", data=broken)
+
+    assert response.status_code == 422
+    assert blobs.blobs == {}
