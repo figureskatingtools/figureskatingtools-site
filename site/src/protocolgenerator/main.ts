@@ -343,7 +343,17 @@ function viewOnly(): boolean {
 async function failureText(resp: Response): Promise<string> {
   const text = await resp.text();
   const code = readPlatformError(resp.status, text);
-  if (!code) return text;
+  if (!code) {
+    // The tool's own coded errors ({"error", "message"}, e.g. 422
+    // birth_dates_not_removed) carry a sentence meant for the user.
+    try {
+      const body: unknown = JSON.parse(text);
+      if (body && typeof body === 'object' && typeof (body as { message?: unknown }).message === 'string') {
+        return (body as { message: string }).message;
+      }
+    } catch { /* not JSON: show the text as before */ }
+    return text;
+  }
   // The role changed since the page loaded (view-only now, or no longer the owner)
   if (code === 'platform_read_only' || code === 'platform_owner_required') void refreshActiveCompetition();
   return platformErrorMessage(code, boundLabel ?? '');
