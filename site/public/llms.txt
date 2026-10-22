@@ -18,5 +18,5 @@ Only the front page, the privacy notice and the terms of use are public. The too
 - [Privacy notice](https://figureskatingtools.com/privacy/): how the service processes personal data
 - [Tietosuojaseloste](https://figureskatingtools.com/tietosuoja/): the privacy notice in Finnish
 - [Terms of use](https://figureskatingtools.com/terms/): the service's terms of use, including the data processing terms
-- [Source code on GitHub](https://github.com/figureskatingtools): all tools are open source
+- [Source code on GitHub](https://github.com/figureskatingtools): the source code of the site and the tools, published under the GNU Affero General Public License v3.0 (AGPL-3.0)
 - [Request access](mailto:markus@lintuala.fi)

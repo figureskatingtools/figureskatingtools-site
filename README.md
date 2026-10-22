@@ -99,3 +99,9 @@ All in the [figureskatingtools](https://github.com/figureskatingtools) organisat
 [fs-judgepapers](https://github.com/figureskatingtools/fs-judgepapers) ·
 [fs-protocolgenerator](https://github.com/figureskatingtools/fs-protocolgenerator) ·
 [fs-scoremodifier](https://github.com/figureskatingtools/fs-scoremodifier)
+
+## Licence
+
+The code in this repository is licensed under the [GNU Affero General Public License v3.0](LICENSE) only (`AGPL-3.0-only`). If you run a modified version as a network service, the AGPL requires you to offer its source code to the users of that service.
+
+The licence covers the code only. The figureskatingtools name, the logo and the document templates are not covered by it and remain the owner's.
