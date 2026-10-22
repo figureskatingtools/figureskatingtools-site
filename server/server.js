@@ -177,9 +177,12 @@ function loadConfig(env = process.env) {
         devFakeUser: isProduction ? '' : (env.DEV_FAKE_USER || '').trim(),
         // Easy Auth provider segment of /.auth/login/<provider> used by /signin.
         loginProvider: (env.AUTH_LOGIN_PROVIDER || '').trim() || DEFAULT_LOGIN_PROVIDER,
-        // Whether webapp.bicep configured the externalid Easy Auth provider
-        // (Entra External ID). Diagnostics only; Easy Auth itself decides.
-        externalProviderConfigured: (env.AUTH_EXTERNAL_PROVIDER_CONFIGURED || '').trim().toLowerCase() === 'true',
+        // Which tenant Easy Auth signs in with (webapp.bicep). Diagnostics only;
+        // Easy Auth itself decides.
+        authTenantMode: (env.AUTH_TENANT_MODE || '').trim().toLowerCase() === 'external' ? 'external' : 'workforce',
+        // Entra External ID tenants: their identities' e-mail comes only from
+        // the `email` claim.
+        externalTenantIds: parseTenantIds(env.EXTERNAL_TENANT_IDS),
         nodeEnv: (env.NODE_ENV || '').trim(),
         // Who gets the admin panel and /api/manage/*. Empty = nobody.
         adminEmails: parseAdminEmails(env.ADMIN_EMAILS),
@@ -306,12 +309,12 @@ function findClaim(parsed, types) {
 }
 
 const NAME_CLAIMS = ['name', 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name'];
-// Entra External ID arrives through the custom OIDC Easy Auth provider of this
-// name (webapp.bicep). Its principal carries the short claim names, and its
-// userDetails / X-MS-CLIENT-PRINCIPAL-NAME is the display name (nameClaimType
-// 'name'), so the e-mail comes from the `email` claim and nothing else.
-const EXTERNAL_ID_PROVIDER = 'externalid';
-const EXTERNAL_EMAIL_CLAIMS = ['email'];
+// Entra External ID identities arrive through the same `aad` Easy Auth provider
+// (AUTH_TENANT_MODE=external) and are told apart by their tid being in
+// EXTERNAL_TENANT_IDS. Their e-mail comes from the `email` claim and nothing
+// else: preferred_username / the principal name need not be an e-mail there.
+// App Service may hand `email` on under its long schema name.
+const EXTERNAL_EMAIL_CLAIMS = ['email', 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress'];
 const EMAIL_CLAIMS = [
     'preferred_username',
     'email',
@@ -337,21 +340,16 @@ function devObjectId(email) {
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
-// True for a principal of the externalid (Entra External ID) provider. App
-// Service names the provider in auth_typ; identityProvider is the SWA-style
-// spelling some fixtures and tooling use.
-function isExternalIdPrincipal(parsed) {
-    const provider = String((parsed && (parsed.auth_typ || parsed.identityProvider)) || '')
-        .trim()
-        .toLowerCase();
-    return provider === EXTERNAL_ID_PROVIDER;
+// True for an identity of an Entra External ID tenant (EXTERNAL_TENANT_IDS).
+function isExternalTenant(tid, config) {
+    return Boolean(tid) && Boolean(config.externalTenantIds) && config.externalTenantIds.has(tid);
 }
 
 // The raw (not yet normalised) e-mail of a principal. Workforce: userDetails,
-// then the e-mail claims, then the principal-name header. External ID: only the
-// `email` claim — its userDetails and name header are the display name.
-function principalEmail(parsed, req) {
-    if (isExternalIdPrincipal(parsed)) return findClaim(parsed, EXTERNAL_EMAIL_CLAIMS);
+// then the e-mail claims, then the principal-name header. External ID tenant:
+// only the `email` claim.
+function principalEmail(parsed, req, external) {
+    if (external) return findClaim(parsed, EXTERNAL_EMAIL_CLAIMS);
     return parsed.userDetails || findClaim(parsed, EMAIL_CLAIMS) || req.headers['x-ms-client-principal-name'] || '';
 }
 
@@ -374,7 +372,7 @@ function requestIdentity(req, config) {
         return {
             tid,
             oid,
-            email: normalizeEmail(principalEmail(parsed, req)),
+            email: normalizeEmail(principalEmail(parsed, req, isExternalTenant(tid, config))),
             name: String(findClaim(parsed, NAME_CLAIMS) || '').trim(),
             dev: false,
         };
@@ -441,9 +439,9 @@ function handleUserInfo(req, res, config) {
     const parsed = decodePrincipal(req);
     const principalName = req.headers['x-ms-client-principal-name'];
     // Prefer email, then name, then userDetails, then the principal-name header.
-    // External ID: its `email` claim only (preferred_username is not an e-mail there).
+    // External ID tenant: its `email` claim only (preferred_username need not be an e-mail).
     const displayName =
-        findClaim(parsed, isExternalIdPrincipal(parsed) ? EXTERNAL_EMAIL_CLAIMS : EMAIL_CLAIMS) ||
+        findClaim(parsed, isExternalTenant(identity.tid, config) ? EXTERNAL_EMAIL_CLAIMS : EMAIL_CLAIMS) ||
         findClaim(parsed, NAME_CLAIMS) ||
         parsed.userDetails ||
         principalName ||
@@ -1015,7 +1013,8 @@ async function handleDiagnostics(res, config, runtime) {
             adminCount: config.adminEmails.size,
             allowedTenantCount: config.allowedTenantIds.size,
             loginProvider: config.loginProvider,
-            externalProviderConfigured: Boolean(config.externalProviderConfigured),
+            authTenantMode: config.authTenantMode || 'workforce',
+            externalTenantCount: config.externalTenantIds ? config.externalTenantIds.size : 0,
             devFakeUser: Boolean(config.devFakeUser),
         },
         backends,

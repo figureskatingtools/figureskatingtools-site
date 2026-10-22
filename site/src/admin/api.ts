@@ -155,7 +155,8 @@ export interface RouterDiagnostics {
     hovtpHealthUrl?: boolean;
     adminCount: number;
     loginProvider: string;
-    externalProviderConfigured?: boolean;
+    authTenantMode?: string;
+    externalTenantCount?: number;
     devFakeUser: boolean;
   };
   backends: BackendHealth[];

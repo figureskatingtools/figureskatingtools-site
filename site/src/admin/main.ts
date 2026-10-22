@@ -1419,7 +1419,8 @@ function routerDiagHtml(): string {
       ${fact('Node', esc(r.node))}
       ${fact('NODE_ENV', r.nodeEnv ? esc(r.nodeEnv) : badge('not set', 'warn'))}
       ${fact('Login provider', esc(d.config?.loginProvider))}
-      ${fact('External ID provider', d.config?.externalProviderConfigured ? badge('configured', 'ok') : badge('not configured', 'muted'))}
+      ${fact('Sign-in tenant', d.config?.authTenantMode === 'external' ? badge('External ID', 'info') : badge('workforce', 'muted'))}
+      ${fact('External ID tenants', esc(d.config?.externalTenantCount ?? 0))}
       ${fact('Admins', esc(d.config?.adminCount))}
       ${fact('DEV_FAKE_USER', d.config?.devFakeUser ? badge('active', 'error') : badge('off', 'ok'))}
       ${fact('Changelog cache', changelog)}
