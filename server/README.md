@@ -32,7 +32,7 @@ site root/
 | 6a | `/api/manage/*` | Admin-only platform routes. Non-admins get `403 {"error":"admin_required"}` without any proxying. Admins are proxied like 6 (same-origin check included). Matched case-insensitively on the decoded, normalised path, like the Functions host routes. The platform checks again: secret, identity, tenant and `x-forwarded-user-admin: 1`. |
 | 6 | `/api/*` | Same-origin check and identity required, like 5. Proxied to the platform Function App (competitions registry). |
 | 7 | `/<tool>` | `301` → `/<tool>/` (query string preserved). |
-| 8 | anything else | Static file from `public/`, else a **per-prefix** SPA fallback. This is also how the public privacy notice (`/privacy/`, `/tietosuoja/`) and the self-hosted fonts (`/fonts/*`) are served: plain static files, the same for everyone, reachable signed out because `/privacy`, `/privacy/*`, `/tietosuoja`, `/tietosuoja/*` and `/fonts/*` are Easy Auth `excludedPaths`. |
+| 8 | anything else | Static file from `public/`, else a **per-prefix** SPA fallback. This is also how the public privacy notice (`/privacy/`), the terms of use (`/terms/`) and the self-hosted fonts (`/fonts/*`) are served: plain static files, the same for everyone, reachable signed out because `/privacy`, `/privacy/*`, `/tietosuoja`, `/tietosuoja/*` and `/fonts/*` are Easy Auth `excludedPaths`. |
 
 `<tool>` ∈ `judgepapers`, `scoremodifier`, `protocolgenerator`.
 

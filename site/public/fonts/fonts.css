@@ -1,8 +1,9 @@
 /* Self-hosted web fonts for every figureskatingtools.com document, so no page
  * asks a third party (Google Fonts) for anything and visitors' IP addresses
  * stay with this site. Linked as <link rel="stylesheet" href="/fonts/fonts.css">
- * from all seven HTML documents and the privacy pages; /fonts/* is an Easy Auth
- * excluded path (infra/modules/webapp.bicep), so signed-out pages can load it.
+ * from all seven HTML documents and the privacy and terms pages; /fonts/* is an
+ * Easy Auth excluded path (infra/modules/webapp.bicep), so signed-out pages
+ * can load it.
  *
  * Source: the variable woff2 files of the npm packages
  * @fontsource-variable/fraunces, /instrument-sans and /spline-sans-mono, all

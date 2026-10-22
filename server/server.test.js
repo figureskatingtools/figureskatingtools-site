@@ -658,47 +658,46 @@ test('/ shows the home page when DEV_FAKE_USER is set, or when the build has no 
     }
 });
 
-// ── Public privacy notice + self-hosted fonts ────────────────────────────────
+// ── Public privacy notice, terms of use + self-hosted fonts ──────────────────
 
 function addPrivacyAndFonts(dir) {
     fs.mkdirSync(path.join(dir, 'privacy'));
-    fs.mkdirSync(path.join(dir, 'tietosuoja'));
+    fs.mkdirSync(path.join(dir, 'terms'));
     fs.mkdirSync(path.join(dir, 'fonts'));
     fs.writeFileSync(path.join(dir, 'privacy', 'index.html'), '<html>PRIVACY_EN</html>');
     fs.writeFileSync(path.join(dir, 'privacy', 'privacy.css'), 'main{}');
-    fs.writeFileSync(path.join(dir, 'tietosuoja', 'index.html'), '<html>PRIVACY_FI</html>');
+    fs.writeFileSync(path.join(dir, 'terms', 'index.html'), '<html>TERMS_EN</html>');
     fs.writeFileSync(path.join(dir, 'fonts', 'fonts.css'), '@font-face{}');
     fs.writeFileSync(path.join(dir, 'fonts', 'fraunces-latin-opsz-normal.v5-3-0.woff2'), Buffer.from('wOF2'));
 }
 
-test('the privacy notice and fonts are plain static files, served the same signed in or out', async () => {
+test('the privacy notice, terms of use and fonts are plain static files, served the same signed in or out', async () => {
     const publicDir = makePublicFixture();
     addLanding(publicDir);
     addPrivacyAndFonts(publicDir);
     const { server, port } = await startRouter({ publicDir });
     try {
-        // Easy Auth lists /privacy, /privacy/*, /tietosuoja, /tietosuoja/* and
-        // /fonts/* as excluded paths, so these requests arrive without any
-        // principal; the router must not need one.
+        // Easy Auth lists /privacy, /terms (each also with /*) and /fonts/* as
+        // excluded paths, so these requests arrive without any principal; the
+        // router must not need one.
         const signedIn = { headers: { 'x-ms-client-principal': principalHeader(PRINCIPAL) } };
         for (const opts of [{}, signedIn, { headers: { cookie: 'AppServiceAuthSession=abc' } }]) {
-            const en = await request(port, '/privacy/', opts);
-            assert.equal(en.status, 200);
-            assert.match(en.text, /PRIVACY_EN/);
-            assert.match(en.headers['content-type'], /text\/html/);
-            assert.equal(en.headers['cache-control'], 'no-cache');
-            assert.equal(en.headers['content-security-policy'], buildCsp(''));
-
-            const fi = await request(port, '/tietosuoja/', opts);
-            assert.equal(fi.status, 200);
-            assert.match(fi.text, /PRIVACY_FI/);
+            for (const [page, marker] of [['/privacy/', /PRIVACY_EN/], ['/terms/', /TERMS_EN/]]) {
+                const res = await request(port, page, opts);
+                assert.equal(res.status, 200, page);
+                assert.match(res.text, marker, page);
+                assert.match(res.headers['content-type'], /text\/html/, page);
+                assert.equal(res.headers['cache-control'], 'no-cache', page);
+                assert.equal(res.headers['content-security-policy'], buildCsp(''), page);
+            }
         }
 
         // The bare paths redirect to the directory so relative URLs resolve.
-        const bare = await request(port, '/privacy');
-        assert.equal(bare.status, 301);
-        assert.equal(bare.headers.location, '/privacy/');
-        assert.equal((await request(port, '/tietosuoja')).headers.location, '/tietosuoja/');
+        for (const page of ['/privacy', '/terms']) {
+            const res = await request(port, page);
+            assert.equal(res.status, 301, page);
+            assert.equal(res.headers.location, `${page}/`, page);
+        }
 
         const css = await request(port, '/privacy/privacy.css');
         assert.match(css.headers['content-type'], /text\/css/);
@@ -719,9 +718,38 @@ test('the privacy notice and fonts are plain static files, served the same signe
     }
 });
 
-test('the real privacy pages and fonts.css reference only this origin', () => {
+test('the retired Finnish privacy notice 301s to /privacy/, signed in or out; no Finnish page is served', async () => {
+    const publicDir = makePublicFixture();
+    addPrivacyAndFonts(publicDir);
+    // A stale copy left in the deployment must not be served either.
+    fs.mkdirSync(path.join(publicDir, 'tietosuoja'));
+    fs.writeFileSync(path.join(publicDir, 'tietosuoja', 'index.html'), '<html>PRIVACY_FI</html>');
+    const { server, port } = await startRouter({ publicDir });
+    try {
+        const signedIn = { headers: { 'x-ms-client-principal': principalHeader(PRINCIPAL) } };
+        for (const opts of [{}, signedIn]) {
+            for (const page of ['/tietosuoja', '/tietosuoja/', '/tietosuoja/index.html', '/tietosuoja/?x=1', '/tietosuoja/a/b']) {
+                const res = await request(port, page, opts);
+                assert.equal(res.status, 301, page);
+                assert.equal(res.headers.location, '/privacy/', page);
+                assert.doesNotMatch(res.text, /PRIVACY_FI/, page);
+            }
+        }
+        // Only the exact prefix: a lookalike is not redirected.
+        assert.notEqual((await request(port, '/tietosuojax')).headers.location, '/privacy/');
+        // /kayttoehdot was never published: no redirect and no terms page.
+        const fiTerms = await request(port, '/kayttoehdot/');
+        assert.notEqual(fiTerms.status, 301);
+        assert.doesNotMatch(fiTerms.text, /TERMS/);
+    } finally {
+        await close(server);
+        fs.rmSync(publicDir, { recursive: true, force: true });
+    }
+});
+
+test('the real privacy and terms pages and fonts.css reference only this origin', () => {
     const publicRoot = path.join(__dirname, '..', 'site', 'public');
-    for (const page of ['privacy/index.html', 'tietosuoja/index.html', 'landing/index.html']) {
+    for (const page of ['privacy/index.html', 'terms/index.html', 'landing/index.html']) {
         const html = fs.readFileSync(path.join(publicRoot, page), 'utf8');
         assert.doesNotMatch(html, /googleapis|gstatic/, page);
         assert.match(html, /<link rel="stylesheet" href="\/fonts\/fonts\.css">/, page);
@@ -732,6 +760,36 @@ test('the real privacy pages and fonts.css reference only this origin', () => {
     for (const url of urls) {
         assert.match(url, /^\.\/[a-z0-9-]+\.v[0-9-]+\.woff2$/, url);
         assert.ok(fs.existsSync(path.join(publicRoot, 'fonts', url)), url);
+    }
+});
+
+test('the privacy notice and terms of use are public, English only and link to each other', () => {
+    const repoRoot = path.join(__dirname, '..');
+    const publicRoot = path.join(repoRoot, 'site', 'public');
+    const bicep = fs.readFileSync(path.join(repoRoot, 'infra', 'modules', 'webapp.bicep'), 'utf8');
+    const excluded = (p) => new RegExp(`^\\s*'${p.replace(/[*]/g, '\\*')}'$`, 'm');
+    // /tietosuoja stays excluded so its redirect also works signed out.
+    for (const dir of ['/privacy', '/terms', '/tietosuoja']) {
+        assert.match(bicep, excluded(dir), `excluded path ${dir}`);
+        assert.match(bicep, excluded(`${dir}/*`), `excluded path ${dir}/*`);
+    }
+    assert.doesNotMatch(bicep, /'\/kayttoehdot/);
+
+    for (const dir of ['tietosuoja', 'kayttoehdot']) {
+        assert.ok(!fs.existsSync(path.join(publicRoot, dir)), `site/public/${dir} is gone`);
+    }
+    const links = { 'privacy/index.html': '/terms/', 'terms/index.html': '/privacy/' };
+    for (const [page, href] of Object.entries(links)) {
+        const html = fs.readFileSync(path.join(publicRoot, page), 'utf8');
+        assert.ok(html.includes(`href="${href}"`), `${page} → ${href}`);
+    }
+    // Nothing links the Finnish pages any more (the Ombudsman's
+    // https://tietosuoja.fi in the privacy notice is not one of them).
+    const sources = ['privacy/index.html', 'terms/index.html', 'landing/index.html', 'llms.txt']
+        .map((p) => path.join(publicRoot, p))
+        .concat(['shell.ts', 'main.ts'].map((p) => path.join(repoRoot, 'site', 'src', p)));
+    for (const file of sources) {
+        assert.doesNotMatch(fs.readFileSync(file, 'utf8'), /(^|[^/])\/(tietosuoja|kayttoehdot)\b/, file);
     }
 });
 
