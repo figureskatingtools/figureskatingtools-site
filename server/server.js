@@ -10,8 +10,8 @@
 //   /tools/<name>/           → small in-site tools (static pages)
 //   /admin/                  → admin panel (SPA; plain 404 unless the user is an admin)
 //   /admin/api/diagnostics   → router-native diagnostics (admins only)
-//   /privacy/, /tietosuoja/  → public privacy notice, EN/FI (static, excluded from Easy Auth)
-//   /terms/, /kayttoehdot/   → public terms of use, EN/FI (static, excluded from Easy Auth)
+//   /privacy/, /terms/       → public privacy notice and terms of use (static, excluded from Easy Auth)
+//   /tietosuoja[/*]          → 301 to /privacy/ (the retired Finnish notice; excluded from Easy Auth)
 //   /fonts/*                 → self-hosted web fonts (static, excluded from Easy Auth)
 //   /health                  → liveness probe (excluded from Easy Auth)
 //   /judgepapers/download    → e-mailed judges'-papers link (excluded from Easy Auth)
@@ -73,15 +73,20 @@ const JUDGEPAPERS_DOWNLOAD_PATH = '/judgepapers/download';
 // session cookie (see hasSignedInSession).
 // LANDING_DOCUMENT_PATHS, SIGNIN_PATH and the landing files must all be listed
 // in the Easy Auth excludedPaths in infra/modules/webapp.bicep. So must the
-// public privacy notice (/privacy/, /tietosuoja/), the terms of use (/terms/,
-// /kayttoehdot/) and the self-hosted fonts (/fonts/*): those need no router
-// logic, serveStatic serves them to everyone.
+// public privacy notice (/privacy/), the terms of use (/terms/) and the
+// self-hosted fonts (/fonts/*): those need no router logic, serveStatic serves
+// them to everyone. So must RETIRED_PRIVACY_PREFIX, which only redirects.
 const LANDING_DIR = 'landing';
 const LANDING_DOCUMENT_PATHS = ['/', '/index.html'];
 
 // Every sign-in link goes through /signin, so a change of identity provider
 // (e.g. Entra External ID) is one app setting instead of a frontend change.
 const SIGNIN_PATH = '/signin';
+
+// The Finnish privacy notice was retired when the site went English only; old
+// links to it (and anything under it) get a permanent redirect to /privacy/.
+const RETIRED_PRIVACY_PREFIX = '/tietosuoja';
+const PRIVACY_PATH = '/privacy/';
 const DEFAULT_LOGIN_PROVIDER = 'aad';
 
 const MIME_TYPES = {
@@ -1199,6 +1204,13 @@ function createRequestHandler(config) {
         // 4c. Sign-in entry point used by every "Sign in" link.
         if (pathname === SIGNIN_PATH) {
             handleSignIn(req, res, config, search);
+            return;
+        }
+
+        // 4c'. The retired Finnish privacy notice: old links land on /privacy/.
+        if (isUnder(pathname, RETIRED_PRIVACY_PREFIX)) {
+            res.writeHead(301, { Location: PRIVACY_PATH, 'Cache-Control': 'no-cache' });
+            res.end();
             return;
         }
 

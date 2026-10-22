@@ -139,8 +139,7 @@ export function renderSignInView(appElement: HTMLElement, redirectPath = '/'): v
           </p>
           <a href="${logoutUrl()}" class="btn btn-primary">Sign out</a>
           <p class="unauth-privacy">
-            <a href="/privacy/">Privacy notice</a> · <a href="/terms/">Terms of use</a><br>
-            <span lang="fi"><a href="/tietosuoja/">Tietosuojaseloste</a> · <a href="/kayttoehdot/">Käyttöehdot</a></span>
+            <a href="/privacy/">Privacy notice</a> · <a href="/terms/">Terms of use</a>
           </p>
         </div>
       </div>
@@ -165,8 +164,7 @@ export function renderSignInView(appElement: HTMLElement, redirectPath = '/'): v
         </p>
         <a href="${href}" class="btn btn-primary reveal reveal-4">Sign In to Continue</a>
         <p class="unauth-privacy reveal reveal-4">
-          <a href="/privacy/">Privacy notice</a> · <a href="/terms/">Terms of use</a><br>
-          <span lang="fi"><a href="/tietosuoja/">Tietosuojaseloste</a> · <a href="/kayttoehdot/">Käyttöehdot</a></span>
+          <a href="/privacy/">Privacy notice</a> · <a href="/terms/">Terms of use</a>
         </p>
       </div>
     </div>

@@ -100,7 +100,7 @@ function renderAuthenticatedView(userInfo: UserInfo) {
 
     <footer class="site-footer">
       <p>Supporting the figure skating community — created with a pinch of AI ❤️</p>
-      <p class="site-footer-links"><a href="/privacy/">Privacy notice</a> · <a href="/terms/">Terms of use</a> · <span lang="fi"><a href="/tietosuoja/">Tietosuojaseloste</a> · <a href="/kayttoehdot/">Käyttöehdot</a></span></p>
+      <p class="site-footer-links"><a href="/privacy/">Privacy notice</a> · <a href="/terms/">Terms of use</a></p>
     </footer>
   `;
 
