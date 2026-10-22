@@ -6,41 +6,68 @@ ARM type for the directory is preview-only and not idempotent, and user flows,
 branding, apps and groups have no Bicep surface anyway. This runbook is the
 record of every hand step, so the setup stays reproducible.
 
-Code owns everything **outside** the tenant: the credential-free `externalid`
-Easy Auth provider (`modules/webapp.bicep`), `ALLOWED_TENANT_IDS`, the router's
-claim handling (`server/server.js`), the platform's `migration_pending` gate
-(`functions/function_app.py`), and later the Front Door route + DNS for the
-custom URL domain (`azure-publishing`). The tenant and app ids reach code as
-GitHub vars (below).
+Code owns everything **outside** the tenant: the Easy Auth configuration
+(`modules/webapp.bicep`, credential-free in external mode), `ALLOWED_TENANT_IDS`,
+the router's claim handling (`server/server.js`), the platform's
+`migration_pending` gate (`functions/function_app.py`), and later the Front Door
+route + DNS for the custom URL domain (`azure-publishing`). The tenant and app
+ids reach code as GitHub vars (below).
 
-Phases: A = this directory (done by hand), **B = code readiness, switched off**
-(this repo: provider deployed, `AUTH_LOGIN_PROVIDER` still `aad`), C = migration
-(link external identities to existing users by verified e-mail, then switch).
+Phases: A = this directory (done by hand), **B = code readiness** (this repo:
+test signs in through External ID, prod stays workforce), C = migration (link
+external identities to existing users by verified e-mail, then switch prod).
+
+## How Easy Auth reaches the tenant: one provider, two modes
+
+There is **one** Easy Auth provider, the built-in Microsoft one
+(`azureActiveDirectory`, URL segment `aad`). The GitHub var
+**`AUTH_TENANT_MODE`** decides which tenant it signs in with:
+
+| Mode | Client id | Issuer | Credential |
+| --- | --- | --- | --- |
+| `workforce` (default) | `AUTH_CLIENT_ID` (workforce app) | `https://login.microsoftonline.com/<workforce tenant>/v2.0` | MI federated credential (`OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID`) |
+| `external` | `AUTH_EXTERNAL_CLIENT_ID` | `https://<AUTH_EXTERNAL_AUTHORITY_HOST>/<EXTERNAL_TENANT_ID>/v2.0` | **none** |
+
+In external mode `allowedAudiences` is the external client id, and
+`loginParameters` asks for `scope=openid profile email` so the `email` claim
+arrives. `/signin`, `/.auth/login/aad` and `AUTH_LOGIN_PROVIDER=aad` are the same
+in both modes, so the frontends never notice.
+
+- **test** runs `external` (only members of `fst-test-access` get in).
+- **prod** stays `workforce` until phase C goes live. Go-live is one var
+  (`AUTH_TENANT_MODE=external`) plus a redeploy; the rollback is setting it back
+  to `workforce` and redeploying.
+- `EXTERNAL_TENANT_ID` is in the effective `ALLOWED_TENANT_IDS` in **both** modes,
+  so sessions the other tenant issued before a switch keep working until they
+  expire.
+
+**Why there is no custom OIDC provider.** Phase B first added a second provider,
+custom OIDC `externalid`, without a `clientCredential`. ARM accepted it, but
+Easy Auth's custom OIDC provider always starts the **authorization code flow**
+(`response_type=code`, no `form_post`), and redeeming that code needs a client
+secret. The built-in Microsoft provider is the one that falls back to the
+ID-token flow when it has no secret, so External ID goes through that one.
 
 ## The rule: never add a secret to the site apps
 
-The two site app registrations have **no client secret, no certificate and no
-federated credential, ever**, and the `externalid` provider in `webapp.bicep`
-has no `clientCredential`. Do not "fix" a sign-in problem by adding one.
+The two External ID site app registrations have **no client secret, no
+certificate and no federated credential, ever**, and in external mode
+`webapp.bicep` sets no `clientSecretSettingName`. Do not "fix" a sign-in problem
+by adding one.
 
 Why this is enough:
 
 - An app needs a credential only to redeem an authorization code for access or
   refresh tokens. The site uses neither: `tokenStore` is off and nothing calls a
   downstream API. The only thing Easy Auth needs is the **ID token**.
-- Without a credential Easy Auth runs the OIDC **ID-token flow**
-  (`response_type=id_token`, `response_mode=form_post` to
-  `/.auth/login/externalid/callback`) and validates the signature, `iss`, `aud`
-  (our client id) and the nonce itself.
-- The workforce provider's managed-identity FIC can't be reused: App Service
-  supports it for workforce configurations only, and Entra tokens can't be
-  federated into another tenant's app. Azure/M365 Lighthouse don't take part in
-  sign-ins at all.
+- Without a credential Easy Auth's Microsoft provider runs the OIDC
+  **ID-token flow** (`response_type=id_token`, `response_mode=form_post` to
+  `/.auth/login/aad/callback`) and validates the signature, `iss`, `aud` (our
+  client id) and the nonce itself.
+- The workforce managed-identity FIC can't be reused: App Service supports it
+  for workforce configurations only, and Entra tokens can't be federated into
+  another tenant's app. Azure/M365 Lighthouse don't take part in sign-ins at all.
 - No secret means nothing to leak, rotate or expire on the site side.
-
-If Easy Auth ever demands `response_type=code` (i.e. a secret), stop and
-reconsider; the documented fallback is to point the `azureActiveDirectory`
-provider at the external issuer, still without a secret.
 
 ## Tenant
 
@@ -69,8 +96,12 @@ provider at the external issuer, still without a secret.
 
 | Env | Name | Client id | Redirect URI |
 | --- | --- | --- | --- |
-| test | `figureskatingtools-test` | `16c69665-3430-42b5-a789-f27bcb21f718` | `https://test.figureskatingtools.com/.auth/login/externalid/callback` |
-| prod | `figureskatingtools` | `177abce3-dc07-4c94-b217-22c084f47481` | `https://figureskatingtools.com/.auth/login/externalid/callback` |
+| test | `figureskatingtools-test` | `16c69665-3430-42b5-a789-f27bcb21f718` | `https://test.figureskatingtools.com/.auth/login/aad/callback` |
+| prod | `figureskatingtools` | `177abce3-dc07-4c94-b217-22c084f47481` | `https://figureskatingtools.com/.auth/login/aad/callback` |
+
+The redirect URI is the **`/.auth/login/aad/callback`** of the built-in provider.
+The earlier `/.auth/login/externalid/callback` entries (from the dropped custom
+OIDC provider) can be removed.
 
 - Authentication: Web platform, exact `https` redirect URIs only; implicit/hybrid
   **"ID tokens" ticked, "Access tokens" never**.
@@ -149,32 +180,37 @@ provider config first, then deleting the old one.
 
 | Variable | test | prod |
 | --- | --- | --- |
+| `AUTH_TENANT_MODE` | `external` | unset (`workforce`) until phase C go-live |
 | `EXTERNAL_TENANT_ID` | `380073b3-804e-4cc7-bfcc-843637630d04` | same, at phase C |
 | `AUTH_EXTERNAL_CLIENT_ID` | `16c69665-3430-42b5-a789-f27bcb21f718` | `177abce3-dc07-4c94-b217-22c084f47481`, at phase C |
 | `AUTH_EXTERNAL_AUTHORITY_HOST` | `380073b3-804e-4cc7-bfcc-843637630d04.ciamlogin.com` | same, at phase C |
-| `AUTH_LOGIN_PROVIDER` | unset (`aad`) | unset (`aad`) until the switch |
+| `AUTH_LOGIN_PROVIDER` | unset (`aad`) | unset (`aad`) |
 
-Variables only — there is no External ID secret to configure. With both
-`EXTERNAL_TENANT_ID` and `AUTH_EXTERNAL_CLIENT_ID` set, `deploy-site.yml`:
+Variables only — there is no External ID secret to configure. `deploy-site.yml`:
 
-- adds the `externalid` custom OIDC provider to Easy Auth (no `clientCredential`;
-  `nameClaimType: name`; scopes `openid profile email`);
-- appends the tenant to `ALLOWED_TENANT_IDS` for the router and the platform;
-- writes it to the platform as `EXTERNAL_TENANT_IDS`: a new identity of that
-  tenant gets **503 `migration_pending`** and no user is created, until phase C;
-- shows "External ID provider: configured" in the admin Diagnostics tab.
+- refuses to deploy `AUTH_TENANT_MODE=external` without both `EXTERNAL_TENANT_ID`
+  and `AUTH_EXTERNAL_CLIENT_ID`, and any value other than `workforce`/`external`;
+- with `EXTERNAL_TENANT_ID` set (either mode), appends the tenant to
+  `ALLOWED_TENANT_IDS` for the router and the platform, and writes it to both as
+  `EXTERNAL_TENANT_IDS`:
+  - the router takes those identities' e-mail **only** from the `email` claim
+    (their `preferred_username` / principal name need not be an e-mail);
+  - the platform answers a new identity of that tenant with **503
+    `migration_pending`** and creates no user, until phase C;
+- shows the mode ("Sign-in tenant") and the External ID tenant count in the admin
+  Diagnostics tab, and the mode in the run summary.
 
-`AUTH_LOGIN_PROVIDER=externalid` later switches `/signin` and Easy Auth's
-`redirectToProvider` together; `/.auth/login/externalid` works directly before
-that for testing. The workforce provider and its Graph/FIC deploy step stay
-until phase D.
+The workforce provider's Graph step (redirect URIs + FIC on the workforce app)
+keeps running in both modes until phase D.
 
 ## Checks after a deploy
 
 ```bash
-# 302 to the ciamlogin authorize endpoint with response_type=id_token,
-# response_mode=form_post and our client_id
-curl -sI https://test.figureskatingtools.com/.auth/login/externalid | grep -i '^location'
-# the workforce provider is unchanged
-curl -sI https://test.figureskatingtools.com/.auth/login/aad | grep -i '^location'
+# external mode: 302 to the ciamlogin authorize endpoint with
+# response_type=id_token, response_mode=form_post and the external client_id
+# (workforce mode: login.microsoftonline.com, the workforce client_id)
+curl -s -o /dev/null -w '%{redirect_url}\n' https://test.figureskatingtools.com/.auth/login/aad
+# no credential in the deployed config
+az webapp auth show -g rg-fs-site-test -n <app> \
+  --query 'properties.identityProviders.azureActiveDirectory.registration'
 ```
