@@ -177,6 +177,9 @@ function loadConfig(env = process.env) {
         devFakeUser: isProduction ? '' : (env.DEV_FAKE_USER || '').trim(),
         // Easy Auth provider segment of /.auth/login/<provider> used by /signin.
         loginProvider: (env.AUTH_LOGIN_PROVIDER || '').trim() || DEFAULT_LOGIN_PROVIDER,
+        // Whether webapp.bicep configured the externalid Easy Auth provider
+        // (Entra External ID). Diagnostics only; Easy Auth itself decides.
+        externalProviderConfigured: (env.AUTH_EXTERNAL_PROVIDER_CONFIGURED || '').trim().toLowerCase() === 'true',
         nodeEnv: (env.NODE_ENV || '').trim(),
         // Who gets the admin panel and /api/manage/*. Empty = nobody.
         adminEmails: parseAdminEmails(env.ADMIN_EMAILS),
@@ -303,6 +306,12 @@ function findClaim(parsed, types) {
 }
 
 const NAME_CLAIMS = ['name', 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name'];
+// Entra External ID arrives through the custom OIDC Easy Auth provider of this
+// name (webapp.bicep). Its principal carries the short claim names, and its
+// userDetails / X-MS-CLIENT-PRINCIPAL-NAME is the display name (nameClaimType
+// 'name'), so the e-mail comes from the `email` claim and nothing else.
+const EXTERNAL_ID_PROVIDER = 'externalid';
+const EXTERNAL_EMAIL_CLAIMS = ['email'];
 const EMAIL_CLAIMS = [
     'preferred_username',
     'email',
@@ -328,6 +337,24 @@ function devObjectId(email) {
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
+// True for a principal of the externalid (Entra External ID) provider. App
+// Service names the provider in auth_typ; identityProvider is the SWA-style
+// spelling some fixtures and tooling use.
+function isExternalIdPrincipal(parsed) {
+    const provider = String((parsed && (parsed.auth_typ || parsed.identityProvider)) || '')
+        .trim()
+        .toLowerCase();
+    return provider === EXTERNAL_ID_PROVIDER;
+}
+
+// The raw (not yet normalised) e-mail of a principal. Workforce: userDetails,
+// then the e-mail claims, then the principal-name header. External ID: only the
+// `email` claim — its userDetails and name header are the display name.
+function principalEmail(parsed, req) {
+    if (isExternalIdPrincipal(parsed)) return findClaim(parsed, EXTERNAL_EMAIL_CLAIMS);
+    return parsed.userDetails || findClaim(parsed, EMAIL_CLAIMS) || req.headers['x-ms-client-principal-name'] || '';
+}
+
 function guidClaim(parsed, types) {
     const value = String(findClaim(parsed, types) || '').trim().toLowerCase();
     return GUID_PATTERN.test(value) ? value : '';
@@ -344,12 +371,10 @@ function requestIdentity(req, config) {
         const tid = guidClaim(parsed, TID_CLAIMS);
         const oid = guidClaim(parsed, OID_CLAIMS);
         if (!tid || !oid) return null;
-        const email =
-            parsed.userDetails || findClaim(parsed, EMAIL_CLAIMS) || req.headers['x-ms-client-principal-name'] || '';
         return {
             tid,
             oid,
-            email: normalizeEmail(email),
+            email: normalizeEmail(principalEmail(parsed, req)),
             name: String(findClaim(parsed, NAME_CLAIMS) || '').trim(),
             dev: false,
         };
@@ -416,8 +441,9 @@ function handleUserInfo(req, res, config) {
     const parsed = decodePrincipal(req);
     const principalName = req.headers['x-ms-client-principal-name'];
     // Prefer email, then name, then userDetails, then the principal-name header.
+    // External ID: its `email` claim only (preferred_username is not an e-mail there).
     const displayName =
-        findClaim(parsed, EMAIL_CLAIMS) ||
+        findClaim(parsed, isExternalIdPrincipal(parsed) ? EXTERNAL_EMAIL_CLAIMS : EMAIL_CLAIMS) ||
         findClaim(parsed, NAME_CLAIMS) ||
         parsed.userDetails ||
         principalName ||
@@ -989,6 +1015,7 @@ async function handleDiagnostics(res, config, runtime) {
             adminCount: config.adminEmails.size,
             allowedTenantCount: config.allowedTenantIds.size,
             loginProvider: config.loginProvider,
+            externalProviderConfigured: Boolean(config.externalProviderConfigured),
             devFakeUser: Boolean(config.devFakeUser),
         },
         backends,

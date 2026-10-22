@@ -1458,6 +1458,7 @@ test('GET /admin/api/diagnostics: admins only, booleans for config, health of ev
         assert.equal(body.config.hovtpHealthUrl, true);
         assert.equal(body.config.adminCount, 2);
         assert.equal(body.config.loginProvider, 'aad');
+        assert.equal(body.config.externalProviderConfigured, false);
         assert.equal(body.config.devFakeUser, false);
 
         const byName = Object.fromEntries(body.backends.map((b) => [b.name, b]));
@@ -2006,4 +2007,102 @@ test('a non-ASCII e-mail is no e-mail: the Kelvin sign cannot become an admin "k
         await close(server);
         await close(upstream.server);
     }
+});
+
+// ── Entra External ID (custom OIDC provider `externalid`) ────────────────────
+
+const EXTERNAL_TENANT_ID = '380073b3-804e-4cc7-bfcc-843637630d04';
+const EXTERNAL_OID = '9f8e7d6c-5b4a-4392-8170-6f5e4d3c2b1a';
+
+// What App Service puts in X-MS-CLIENT-PRINCIPAL for the custom OIDC provider:
+// auth_typ = the provider name, short claim names, and the display name (not
+// the e-mail) as the principal name, because nameClaimType is 'name'.
+function externalPrincipal({ email = 'Skater@Gmail.com', name = 'Sanna Skater', tid = EXTERNAL_TENANT_ID } = {}) {
+    const claims = [
+        { typ: 'name', val: name },
+        { typ: 'preferred_username', val: 'not-an-email-handle' },
+        { typ: 'oid', val: EXTERNAL_OID },
+        { typ: 'tid', val: tid },
+        { typ: 'termsAccepted', val: 'true' },
+    ];
+    if (email) claims.push({ typ: 'email', val: email });
+    return principalHeader({ auth_typ: 'externalid', name_typ: 'name', userDetails: name, claims });
+}
+
+function externalHeaders(opts) {
+    return { 'x-ms-client-principal': externalPrincipal(opts), 'x-ms-client-principal-name': (opts && opts.name) || 'Sanna Skater' };
+}
+
+test('externalid principal: the e-mail comes from the email claim, never the display-name userDetails', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter({
+        allowedTenantIds: loadConfig({ ALLOWED_TENANT_IDS: `${TENANT_ID},${EXTERNAL_TENANT_ID}` }).allowedTenantIds,
+        targets: targets({ platform: { url: upstream.url, secret: 'pf' } }),
+    });
+    try {
+        const info = await request(port, '/userinfo', { headers: externalHeaders() });
+        assert.equal(info.status, 200);
+        const body = json(info);
+        assert.equal(body.authenticated, true);
+        assert.equal(body.userDetails, 'Skater@Gmail.com');
+        assert.equal(body.name, 'Sanna Skater');
+
+        const res = await request(port, '/api/competitions', { headers: externalHeaders() });
+        assert.equal(res.status, 200);
+        const seen = upstream.received[0];
+        assert.equal(seen.headers['x-forwarded-user-tid'], EXTERNAL_TENANT_ID);
+        assert.equal(seen.headers['x-forwarded-user-oid'], EXTERNAL_OID);
+        assert.equal(seen.headers['x-forwarded-user-email'], 'skater@gmail.com');
+        assert.equal(decodeURIComponent(seen.headers['x-forwarded-user-name']), 'Sanna Skater');
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('externalid principal without an email claim forwards no e-mail (the display name is never used)', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter({
+        allowedTenantIds: loadConfig({ ALLOWED_TENANT_IDS: EXTERNAL_TENANT_ID }).allowedTenantIds,
+        targets: targets({ platform: { url: upstream.url, secret: 'pf' } }),
+    });
+    try {
+        // A display name that looks like an e-mail still is not one.
+        const headers = externalHeaders({ email: '', name: 'admin@example.com' });
+        const res = await request(port, '/api/competitions', { headers });
+        assert.equal(res.status, 200);
+        assert.equal(upstream.received[0].headers['x-forwarded-user-email'], undefined);
+        assert.equal(upstream.received[0].headers['x-forwarded-user-oid'], EXTERNAL_OID);
+        // ...so it can never make an admin either.
+        const config = { ...adminConfig(), allowedTenantIds: new Set([EXTERNAL_TENANT_ID]) };
+        assert.equal(isAdminRequest(fakeReq(headers), config), false);
+        // The e-mail claim does, through the same printable-ASCII + lowercase rules.
+        assert.equal(isAdminRequest(fakeReq(externalHeaders({ email: 'ADMIN@example.com' })), config), true);
+        assert.equal(isAdminRequest(fakeReq(externalHeaders({ email: 'admin@examplK.com' })), config), false);
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('externalid principal from a tenant outside ALLOWED_TENANT_IDS gets 403 tenant_not_allowed', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter({ targets: targets({ platform: { url: upstream.url, secret: 'pf' } }) });
+    try {
+        const res = await request(port, '/api/competitions', { headers: externalHeaders() });
+        assert.equal(res.status, 403);
+        assert.equal(json(res).error, 'tenant_not_allowed');
+        const info = await request(port, '/userinfo', { headers: externalHeaders() });
+        assert.equal(info.status, 403);
+        assert.equal(upstream.received.length, 0);
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('AUTH_EXTERNAL_PROVIDER_CONFIGURED is reported as a boolean', () => {
+    assert.equal(loadConfig({}).externalProviderConfigured, false);
+    assert.equal(loadConfig({ AUTH_EXTERNAL_PROVIDER_CONFIGURED: 'false' }).externalProviderConfigured, false);
+    assert.equal(loadConfig({ AUTH_EXTERNAL_PROVIDER_CONFIGURED: ' True ' }).externalProviderConfigured, true);
 });
