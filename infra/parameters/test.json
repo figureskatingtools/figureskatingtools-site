@@ -53,6 +53,9 @@
     "allowedTenantIds": {
       "value": ""
     },
+    "authTenantMode": {
+      "value": "workforce"
+    },
     "externalTenantId": {
       "value": ""
     },

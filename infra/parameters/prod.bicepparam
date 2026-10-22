@@ -48,10 +48,13 @@ param adminEmails = readEnvironmentVariable('ADMIN_EMAILS', '')
 param allowedTenantIds = readEnvironmentVariable('ALLOWED_TENANT_IDS', '')
 
 // Entra External ID (customer tenant), from the GitHub environment variables
-// EXTERNAL_TENANT_ID, AUTH_EXTERNAL_CLIENT_ID and AUTH_EXTERNAL_AUTHORITY_HOST.
-// Unset = no externalid Easy Auth provider and no extra allowed tenant. There is
-// no secret here and there never will be: the provider is credential-free
+// AUTH_TENANT_MODE, EXTERNAL_TENANT_ID, AUTH_EXTERNAL_CLIENT_ID and
+// AUTH_EXTERNAL_AUTHORITY_HOST. AUTH_TENANT_MODE=external points Easy Auth at
+// the External ID tenant; anything else (unset arrives as '') = workforce.
+// EXTERNAL_TENANT_ID alone only adds the tenant to the allowed ones. There is no
+// secret here and there never will be: external mode is credential-free
 // (ID-token flow) — see infra/EXTERNAL-ID.md.
+param authTenantMode = readEnvironmentVariable('AUTH_TENANT_MODE', '') == 'external' ? 'external' : 'workforce'
 param externalTenantId = readEnvironmentVariable('EXTERNAL_TENANT_ID', '')
 param externalClientId = readEnvironmentVariable('AUTH_EXTERNAL_CLIENT_ID', '')
 param externalAuthorityHost = readEnvironmentVariable('AUTH_EXTERNAL_AUTHORITY_HOST', '')

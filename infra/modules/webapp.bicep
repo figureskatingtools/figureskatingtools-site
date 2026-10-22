@@ -14,14 +14,24 @@ param authManagedIdentityClientId string = ''
 param authManagedIdentityResourceId string = ''
 param tenantId string = subscription().tenantId
 
-// --- Entra External ID (customer tenant), dark until AUTH_LOGIN_PROVIDER says so --
-// A second Easy Auth provider, `externalid`, added next to the workforce
-// `azureActiveDirectory` one. It is CREDENTIAL-FREE on purpose: no clientCredential,
-// so Easy Auth runs the OIDC ID-token flow (response_type=id_token, form_post) and
-// validates the ID token itself. The site never needs access or refresh tokens.
-// Never add a secret here — see infra/EXTERNAL-ID.md.
+// --- Entra External ID (customer tenant) ---------------------------------------
+// AUTH_TENANT_MODE picks which tenant the ONE Easy Auth provider
+// (azureActiveDirectory, segment `aad`) signs users in with:
+//   workforce — the workforce tenant, MI federated credential (as before);
+//   external  — the External ID tenant, CREDENTIAL-FREE: no clientSecretSettingName,
+//               so Easy Auth runs the ID-token flow (response_type=id_token,
+//               form_post) and validates the ID token itself. The site never
+//               needs access or refresh tokens. Never add a secret here — see
+//               infra/EXTERNAL-ID.md (also for why there is no custom OIDC provider).
 
-@description('Client id of the Entra External ID app registration (GitHub var AUTH_EXTERNAL_CLIENT_ID). Empty = the externalid provider is not configured.')
+@description('workforce (default) or external. external needs externalTenantId and externalClientId; without them the deployment stays workforce.')
+@allowed([
+  'workforce'
+  'external'
+])
+param authTenantMode string = 'workforce'
+
+@description('Client id of the Entra External ID app registration (GitHub var AUTH_EXTERNAL_CLIENT_ID).')
 param externalClientId string = ''
 
 @description('External tenant id (GitHub var EXTERNAL_TENANT_ID).')
@@ -29,6 +39,9 @@ param externalTenantId string = ''
 
 @description('Authority host of the external tenant (GitHub var AUTH_EXTERNAL_AUTHORITY_HOST), e.g. <tenantId>.ciamlogin.com. Empty = <externalTenantId>.ciamlogin.com.')
 param externalAuthorityHost string = ''
+
+@description('Comma-separated External ID tenant ids (EXTERNAL_TENANT_IDS) for the router, which reads the e-mail of those identities only from their email claim.')
+param externalTenantIds string = ''
 
 // --- Router proxy targets -------------------------------------------------------
 // The router resolves /api/* and /<tool>/api/* against these. They are part of the
@@ -140,18 +153,29 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
   }
 }
 
-var externalProviderEnabled = !empty(externalClientId) && !empty(externalTenantId)
+// external only when it can work; the workflow refuses the deploy before
+// that, so this fallback is just a last line of defence.
+var externalMode = authTenantMode == 'external' && !empty(externalClientId) && !empty(externalTenantId)
+var effectiveAuthTenantMode = externalMode ? 'external' : 'workforce'
 var effectiveExternalAuthorityHost = !empty(externalAuthorityHost)
   ? externalAuthorityHost
   : '${externalTenantId}.ciamlogin.com'
-var effectiveAuthLoginProvider = empty(authLoginProvider) ? 'aad' : toLower(authLoginProvider)
-// The Easy Auth provider unauthenticated document requests are sent to. Follows
-// AUTH_LOGIN_PROVIDER like the router's /signin: aad -> the workforce provider,
-// externalid -> the custom OIDC provider of that name (only once it exists, so a
-// premature switch never points Easy Auth at a provider that isn't there).
-var redirectToProvider = effectiveAuthLoginProvider == 'externalid' && externalProviderEnabled
-  ? 'externalid'
-  : 'azureactivedirectory'
+var easyAuthClientId = externalMode ? externalClientId : authClientId
+
+// workforce: the MI federated credential stands in for a client secret.
+// external: no credential at all (ID-token flow).
+var aadRegistration = externalMode
+  ? {
+      clientId: externalClientId
+      openIdIssuer: 'https://${effectiveExternalAuthorityHost}/${externalTenantId}/v2.0'
+    }
+  : {
+      clientId: authClientId
+      // Sentinel value: Easy Auth uses the federated managed identity named
+      // by the app setting of this name instead of a client secret.
+      clientSecretSettingName: 'OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID'
+      openIdIssuer: '${environment().authentication.loginEndpoint}${tenantId}/v2.0'
+    }
 
 resource authConfig 'Microsoft.Web/sites/config@2022-09-01' = if (!empty(authClientId)) {
   parent: webApp
@@ -160,48 +184,27 @@ resource authConfig 'Microsoft.Web/sites/config@2022-09-01' = if (!empty(authCli
     globalValidation: {
       requireAuthentication: true
       unauthenticatedClientAction: 'RedirectToLoginPage'
-      redirectToProvider: redirectToProvider
+      redirectToProvider: 'azureactivedirectory'
       excludedPaths: authExcludedPaths
     }
     identityProviders: {
       azureActiveDirectory: {
         enabled: true
-        registration: {
-          clientId: authClientId
-          // Sentinel value: Easy Auth uses the federated managed identity named
-          // by the app setting of this name instead of a client secret.
-          clientSecretSettingName: 'OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID'
-          openIdIssuer: '${environment().authentication.loginEndpoint}${tenantId}/v2.0'
-        }
+        registration: aadRegistration
         validation: {
           allowedAudiences: [
-            authClientId
+            easyAuthClientId
           ]
         }
-      }
-      // Entra External ID. Only when its client id is set; no clientCredential
-      // (credential-free ID-token flow, see the note on externalClientId).
-      customOpenIdConnectProviders: externalProviderEnabled
-        ? {
-            externalid: {
-              enabled: true
-              registration: {
-                clientId: externalClientId
-                openIdConnectConfiguration: {
-                  wellKnownOpenIdConfiguration: 'https://${effectiveExternalAuthorityHost}/${externalTenantId}/v2.0/.well-known/openid-configuration'
-                }
-              }
-              login: {
-                nameClaimType: 'name'
-                scopes: [
-                  'openid'
-                  'profile'
-                  'email'
-                ]
-              }
+        // The External ID ID token carries `email` only when it is asked for.
+        login: externalMode
+          ? {
+              loginParameters: [
+                'scope=openid profile email'
+              ]
             }
-          }
-        : {}
+          : {}
+      }
     }
     login: {
       tokenStore: {
@@ -234,9 +237,12 @@ resource siteAppSettings 'Microsoft.Web/sites/config@2022-09-01' = {
       PROXY_SHARED_SECRET_SCOREMODIFIER: proxySharedSecretScoremodifier
       PROXY_SHARED_SECRET_PROTOCOLGENERATOR: proxySharedSecretProtocolgenerator
       PROXY_SHARED_SECRET_GDPRTOOL: proxySharedSecretGdprtool
-      AUTH_LOGIN_PROVIDER: effectiveAuthLoginProvider
-      // Booleans-only diagnostics input: whether the externalid provider exists.
-      AUTH_EXTERNAL_PROVIDER_CONFIGURED: externalProviderEnabled ? 'true' : 'false'
+      AUTH_LOGIN_PROVIDER: empty(authLoginProvider) ? 'aad' : authLoginProvider
+      // Which tenant Easy Auth signs in with (diagnostics only).
+      AUTH_TENANT_MODE: effectiveAuthTenantMode
+      // External ID tenants: the router takes those identities' e-mail only
+      // from their email claim.
+      EXTERNAL_TENANT_IDS: externalTenantIds
       ADMIN_EMAILS: adminEmails
       ALLOWED_TENANT_IDS: allowedTenantIds
       HOVTP_HEALTH_URL: hovtpHealthUrl
@@ -246,8 +252,8 @@ resource siteAppSettings 'Microsoft.Web/sites/config@2022-09-01' = {
       SCM_DO_BUILD_DURING_DEPLOYMENT: 'false'
     },
     // Sentinel read by the authsettingsV2 clientSecretSettingName above; only
-    // meaningful when Easy Auth is configured.
-    empty(authClientId)
+    // meaningful when Easy Auth is configured in workforce mode.
+    empty(authClientId) || externalMode
       ? {}
       : {
           OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID: authManagedIdentityClientId
@@ -268,3 +274,4 @@ output customDomainVerificationId string = webApp.properties.customDomainVerific
 #disable-next-line BCP053
 output inboundIpAddress string = split(webApp.properties.inboundIpAddress, ',')[0]
 output appServicePlanId string = appServicePlan.id
+output authTenantMode string = effectiveAuthTenantMode

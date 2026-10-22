@@ -147,10 +147,12 @@ jobs:
           # to the router and the platform Function App. Unset = the deployment
           # tenant only.
           ALLOWED_TENANT_IDS: ${{ vars.ALLOWED_TENANT_IDS }}
-          # Entra External ID (customer tenant). Unset = no externalid Easy Auth
-          # provider and no extra allowed tenant. Vars only: the provider is
+          # Entra External ID (customer tenant). AUTH_TENANT_MODE=external points
+          # Easy Auth at it; unset = workforce. EXTERNAL_TENANT_ID alone only adds
+          # the tenant to the allowed ones. Vars only: external mode is
           # credential-free (ID-token flow), so there is no secret to pass —
           # never add one (infra/EXTERNAL-ID.md).
+          AUTH_TENANT_MODE: ${{ vars.AUTH_TENANT_MODE }}
           EXTERNAL_TENANT_ID: ${{ vars.EXTERNAL_TENANT_ID }}
           AUTH_EXTERNAL_CLIENT_ID: ${{ vars.AUTH_EXTERNAL_CLIENT_ID }}
           AUTH_EXTERNAL_AUTHORITY_HOST: ${{ vars.AUTH_EXTERNAL_AUTHORITY_HOST }}
@@ -167,6 +169,22 @@ jobs:
               echo "::warning::${var} is empty — every proxied call to that backend will 401."
             fi
           done
+
+          # Easy Auth tenant mode: refuse a typo or an incomplete external
+          # configuration instead of silently deploying workforce.
+          case "${AUTH_TENANT_MODE:-}" in
+            ''|workforce) ;;
+            external)
+              if [ -z "${EXTERNAL_TENANT_ID:-}" ] || [ -z "${AUTH_EXTERNAL_CLIENT_ID:-}" ]; then
+                echo "::error::AUTH_TENANT_MODE=external needs both EXTERNAL_TENANT_ID and AUTH_EXTERNAL_CLIENT_ID."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::AUTH_TENANT_MODE must be 'workforce' or 'external' (got '${AUTH_TENANT_MODE}')."
+              exit 1
+              ;;
+          esac
 
           OUTPUT=$(az deployment sub create \
             --location "${{ vars.LOCATION }}" \
@@ -196,6 +214,7 @@ jobs:
             echo "Apex A record target (Web App inbound IP): \`$(echo "$OUTPUT" | jq -r '.webAppInboundIpAddress.value')\`"
             echo "Tool Function App principals granted read on competition-data + the retentionclock table: $(echo "$OUTPUT" | jq -r '.toolPrincipalsGranted.value')"
             echo "Retention purge enabled: $(echo "$OUTPUT" | jq -r '.retentionPurgeEnabled.value')"
+            echo "Easy Auth tenant mode: $(echo "$OUTPUT" | jq -r '.authTenantMode.value')"
           } >> "$GITHUB_STEP_SUMMARY"
 
       # Easy Auth uses a federated managed identity instead of a client secret,
