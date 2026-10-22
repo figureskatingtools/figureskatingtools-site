@@ -342,6 +342,10 @@ COMPETITION_ACCESS_TABLE_DEFAULT = "competitionaccess"
 PK_USER = "USER"
 PK_IDENTITY = "IDENTITY"
 IDENTITY_PROVIDER_ENTRA = "entra"
+# `Provider` of an Entra External ID identity row. Written only by the phase C
+# linking code; until that exists, external identities never create a user
+# (see _resolve_user and MigrationPending).
+IDENTITY_PROVIDER_ENTRA_EXTERNAL = "entra-external"
 ROLE_OWNER = "owner"
 ROLE_WRITE = "write"
 ROLE_READ = "read"
@@ -517,6 +521,20 @@ def _allowed_tenant_ids() -> frozenset:
     return frozenset(part.strip().lower() for part in raw.split(",") if part.strip())
 
 
+def _external_tenant_ids() -> frozenset:
+    """EXTERNAL_TENANT_IDS (comma-separated) -> lowercased set: the Entra
+    External ID tenant(s). Empty = none configured."""
+    raw = os.environ.get("EXTERNAL_TENANT_IDS") or ""
+    return frozenset(part.strip().lower() for part in raw.split(",") if part.strip())
+
+
+class MigrationPending(Exception):
+    """An Entra External ID identity with no useridentities row yet. Until the
+    linking code (phase C) exists, such an identity must not become a new
+    user — it would be an orphan to merge later — so the request is refused
+    with 503 migration_pending instead."""
+
+
 _PRINTABLE_ASCII_RE = re.compile(r"[\x21-\x7e]+")
 
 
@@ -579,6 +597,10 @@ def _require_user(req: func.HttpRequest):
 
     try:
         user_id = _resolve_user(tid, oid, email, name)
+    except MigrationPending:
+        logging.warning(f"External identity '{tid}_{oid}' has no platform user yet; migration pending")
+        return _error("migration_pending",
+                      "Sign-in with this account is not available yet.", 503)
     except Exception as e:
         logging.error(f"Could not resolve the user of identity '{tid}_{oid}': {e}")
         user_id = None
@@ -632,6 +654,10 @@ def _resolve_user(tid: str, oid: str, email: str, name: str) -> str | None:
     identity row: two concurrent first requests both try, one insert wins and
     the loser drops its own users row and re-reads, so both converge on one
     userId. The winner alone runs the one-time legacy owner claim.
+
+    An identity of an Entra External ID tenant (EXTERNAL_TENANT_IDS) with no
+    identity row raises MigrationPending before anything is written: until
+    the phase C linking code exists, it must not become a new user.
     """
     identities = get_table_client(_user_identities_table_name())
     users = get_table_client(_users_table_name())
@@ -646,6 +672,11 @@ def _resolve_user(tid: str, oid: str, email: str, name: str) -> str | None:
     if link is not None and link.get("UserId"):
         _touch_user(users, link["UserId"], email, name)
         return link["UserId"]
+
+    # Entra External ID: no new users until the linking code exists (phase C).
+    # Decided before any write, so nothing is left behind.
+    if tid in _external_tenant_ids():
+        raise MigrationPending(key)
 
     user_id = str(uuid4())
     now = _now_utc()
@@ -4118,6 +4149,7 @@ def _admin_diagnostics(req: func.HttpRequest) -> func.HttpResponse:
         "userIdentitiesTable": _user_identities_table_name(),
         "competitionAccessTable": _access_table_name(),
         "allowedTenantCount": len(_allowed_tenant_ids()),
+        "externalTenantCount": len(_external_tenant_ids()),
         "inactiveUserDays": INACTIVE_USER_DAYS,
     }
     by_status = {STATUS_ACTIVE: 0, STATUS_DELETED: 0, STATUS_PURGED: 0}
