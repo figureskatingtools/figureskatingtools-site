@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.48.1.52935",
-      "templateHash": "6625405987137736223"
+      "templateHash": "12700607066308401773"
     }
   },
   "parameters": {
@@ -136,11 +136,11 @@
         "description": "true = the platform retention_sweep purges competitions past their deletion date; false = dry-run (logs only) — the kill switch. See modules/platform-function.bicep."
       }
     },
-    "adminEmails": {
+    "adminRole": {
       "type": "string",
       "defaultValue": "",
       "metadata": {
-        "description": "Comma-separated admin e-mail addresses (GitHub variable ADMIN_EMAILS). Written to both the router (which serves /admin/ and gates /api/manage/*) and the platform Function App (which enforces it again). Empty = nobody is admin."
+        "description": "App role that makes a user an admin (GitHub variable ADMIN_ROLE; empty = Site.Admin), in both tenant modes. The router serves /admin/ and gates /api/manage/* on it and tells the platform via X-Forwarded-User-Admin; there is no e-mail list."
       }
     },
     "allowedTenantIds": {
@@ -385,8 +385,8 @@
           "proxySharedSecretGdprtool": {
             "value": "[parameters('proxySharedSecretGdprtool')]"
           },
-          "adminEmails": {
-            "value": "[parameters('adminEmails')]"
+          "adminRole": {
+            "value": "[parameters('adminRole')]"
           },
           "allowedTenantIds": {
             "value": "[variables('effectiveAllowedTenantIds')]"
@@ -402,7 +402,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.48.1.52935",
-              "templateHash": "6812526680237508561"
+              "templateHash": "7359466384499895414"
             }
           },
           "parameters": {
@@ -555,11 +555,11 @@
                 "description": "X-Proxy-Secret the router sends to the GDPR removal tool Function App."
               }
             },
-            "adminEmails": {
+            "adminRole": {
               "type": "string",
-              "defaultValue": "",
+              "defaultValue": "Site.Admin",
               "metadata": {
-                "description": "Comma-separated admin e-mail addresses (ADMIN_EMAILS). The router serves /admin/ and proxies /api/manage/* only for these; the platform Function App checks its own copy. Empty = nobody is admin."
+                "description": "App role that makes a user an admin (ADMIN_ROLE). The router serves /admin/ and proxies /api/manage/* only for identities carrying it, and tells the backends with X-Forwarded-User-Admin: 1. Empty = Site.Admin."
               }
             },
             "allowedTenantIds": {
@@ -697,7 +697,7 @@
               "type": "Microsoft.Web/sites/config",
               "apiVersion": "2022-09-01",
               "name": "[format('{0}/{1}', parameters('webAppName'), 'appsettings')]",
-              "properties": "[union(createObject('FUNCTION_APP_URL_PLATFORM', parameters('functionAppUrlPlatform'), 'FUNCTION_APP_URL_JUDGEPAPERS', parameters('functionAppUrlJudgepapers'), 'FUNCTION_APP_URL_SCOREMODIFIER', parameters('functionAppUrlScoremodifier'), 'FUNCTION_APP_URL_PROTOCOLGENERATOR', parameters('functionAppUrlProtocolgenerator'), 'FUNCTION_APP_URL_GDPRTOOL', parameters('functionAppUrlGdprtool'), 'PROXY_SHARED_SECRET_PLATFORM', parameters('proxySharedSecretPlatform'), 'PROXY_SHARED_SECRET_JUDGEPAPERS', parameters('proxySharedSecretJudgepapers'), 'PROXY_SHARED_SECRET_SCOREMODIFIER', parameters('proxySharedSecretScoremodifier'), 'PROXY_SHARED_SECRET_PROTOCOLGENERATOR', parameters('proxySharedSecretProtocolgenerator'), 'PROXY_SHARED_SECRET_GDPRTOOL', parameters('proxySharedSecretGdprtool'), 'AUTH_LOGIN_PROVIDER', if(empty(parameters('authLoginProvider')), 'aad', parameters('authLoginProvider')), 'AUTH_TENANT_MODE', variables('effectiveAuthTenantMode'), 'EXTERNAL_TENANT_IDS', parameters('externalTenantIds'), 'EXTERNAL_ACCESS_ROLE', if(empty(trim(parameters('externalAccessRole'))), 'Site.Access', trim(parameters('externalAccessRole'))), 'ADMIN_EMAILS', parameters('adminEmails'), 'ALLOWED_TENANT_IDS', parameters('allowedTenantIds'), 'HOVTP_HEALTH_URL', parameters('hovtpHealthUrl'), 'NODE_ENV', 'production', 'SCM_DO_BUILD_DURING_DEPLOYMENT', 'false'), if(or(empty(parameters('authClientId')), variables('externalMode')), createObject(), createObject('OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID', parameters('authManagedIdentityClientId'))))]",
+              "properties": "[union(createObject('FUNCTION_APP_URL_PLATFORM', parameters('functionAppUrlPlatform'), 'FUNCTION_APP_URL_JUDGEPAPERS', parameters('functionAppUrlJudgepapers'), 'FUNCTION_APP_URL_SCOREMODIFIER', parameters('functionAppUrlScoremodifier'), 'FUNCTION_APP_URL_PROTOCOLGENERATOR', parameters('functionAppUrlProtocolgenerator'), 'FUNCTION_APP_URL_GDPRTOOL', parameters('functionAppUrlGdprtool'), 'PROXY_SHARED_SECRET_PLATFORM', parameters('proxySharedSecretPlatform'), 'PROXY_SHARED_SECRET_JUDGEPAPERS', parameters('proxySharedSecretJudgepapers'), 'PROXY_SHARED_SECRET_SCOREMODIFIER', parameters('proxySharedSecretScoremodifier'), 'PROXY_SHARED_SECRET_PROTOCOLGENERATOR', parameters('proxySharedSecretProtocolgenerator'), 'PROXY_SHARED_SECRET_GDPRTOOL', parameters('proxySharedSecretGdprtool'), 'AUTH_LOGIN_PROVIDER', if(empty(parameters('authLoginProvider')), 'aad', parameters('authLoginProvider')), 'AUTH_TENANT_MODE', variables('effectiveAuthTenantMode'), 'EXTERNAL_TENANT_IDS', parameters('externalTenantIds'), 'EXTERNAL_ACCESS_ROLE', if(empty(trim(parameters('externalAccessRole'))), 'Site.Access', trim(parameters('externalAccessRole'))), 'ADMIN_ROLE', if(empty(trim(parameters('adminRole'))), 'Site.Admin', trim(parameters('adminRole'))), 'ALLOWED_TENANT_IDS', parameters('allowedTenantIds'), 'HOVTP_HEALTH_URL', parameters('hovtpHealthUrl'), 'NODE_ENV', 'production', 'SCM_DO_BUILD_DURING_DEPLOYMENT', 'false'), if(or(empty(parameters('authClientId')), variables('externalMode')), createObject(), createObject('OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID', parameters('authManagedIdentityClientId'))))]",
               "dependsOn": [
                 "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
               ]
@@ -1112,9 +1112,6 @@
           "clockTableName": {
             "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.clockTableName.value]"
           },
-          "adminEmails": {
-            "value": "[parameters('adminEmails')]"
-          },
           "adminLogTableName": {
             "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.adminLogTableName.value]"
           },
@@ -1144,7 +1141,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.48.1.52935",
-              "templateHash": "16473420121772590961"
+              "templateHash": "7379536056923891783"
             }
           },
           "parameters": {
@@ -1189,13 +1186,6 @@
               "defaultValue": "retentionclock",
               "metadata": {
                 "description": "Table the platform mirrors each competition retention state into for the tools."
-              }
-            },
-            "adminEmails": {
-              "type": "string",
-              "defaultValue": "",
-              "metadata": {
-                "description": "Comma-separated admin e-mail addresses (the ADMIN_EMAILS GitHub variable)."
               }
             },
             "adminLogTableName": {
@@ -1312,10 +1302,6 @@
                     {
                       "name": "RETENTION_CLOCK_TABLE",
                       "value": "[parameters('clockTableName')]"
-                    },
-                    {
-                      "name": "ADMIN_EMAILS",
-                      "value": "[parameters('adminEmails')]"
                     },
                     {
                       "name": "ADMIN_LOG_TABLE",

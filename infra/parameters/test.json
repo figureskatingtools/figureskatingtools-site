@@ -47,7 +47,7 @@
     "proxySharedSecretGdprtool": {
       "value": ""
     },
-    "adminEmails": {
+    "adminRole": {
       "value": ""
     },
     "allowedTenantIds": {

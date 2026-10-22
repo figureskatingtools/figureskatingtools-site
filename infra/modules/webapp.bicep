@@ -86,8 +86,8 @@ param proxySharedSecretProtocolgenerator string = ''
 @secure()
 param proxySharedSecretGdprtool string = ''
 
-@description('Comma-separated admin e-mail addresses (ADMIN_EMAILS). The router serves /admin/ and proxies /api/manage/* only for these; the platform Function App checks its own copy. Empty = nobody is admin.')
-param adminEmails string = ''
+@description('App role that makes a user an admin (ADMIN_ROLE). The router serves /admin/ and proxies /api/manage/* only for identities carrying it, and tells the backends with X-Forwarded-User-Admin: 1. Empty = Site.Admin.')
+param adminRole string = 'Site.Admin'
 
 @description('Comma-separated Entra tenant ids whose principals may use the APIs (ALLOWED_TENANT_IDS). Defaults to the deployment tenant; any other tenant gets 403 tenant_not_allowed from the router. Empty = nobody (fail closed).')
 param allowedTenantIds string = tenant().tenantId
@@ -250,10 +250,10 @@ resource siteAppSettings 'Microsoft.Web/sites/config@2022-09-01' = {
       EXTERNAL_TENANT_IDS: externalTenantIds
       // The app role those identities need (else /no-access/).
       EXTERNAL_ACCESS_ROLE: empty(trim(externalAccessRole)) ? 'Site.Access' : trim(externalAccessRole)
-      ADMIN_EMAILS: adminEmails
+      ADMIN_ROLE: empty(trim(adminRole)) ? 'Site.Admin' : trim(adminRole)
       ALLOWED_TENANT_IDS: allowedTenantIds
       HOVTP_HEALTH_URL: hovtpHealthUrl
-      // Hard-disables DEV_FAKE_USER in the router, which the admin check relies on.
+      // Hard-disables DEV_FAKE_USER and DEV_FAKE_ROLES in the router, which the admin check relies on.
       NODE_ENV: 'production'
       // The zip already contains the built dist; Oryx must not try to build it.
       SCM_DO_BUILD_DURING_DEPLOYMENT: 'false'

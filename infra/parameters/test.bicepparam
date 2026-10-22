@@ -35,9 +35,9 @@ param proxySharedSecretScoremodifier = readEnvironmentVariable('PROXY_SHARED_SEC
 param proxySharedSecretProtocolgenerator = readEnvironmentVariable('PROXY_SHARED_SECRET_PROTOCOLGENERATOR', '')
 param proxySharedSecretGdprtool = readEnvironmentVariable('PROXY_SHARED_SECRET_GDPRTOOL', '')
 
-// Admin panel allow-list (comma-separated e-mails), from the GitHub environment
-// variable ADMIN_EMAILS — kept out of the repo. Unset = nobody is admin.
-param adminEmails = readEnvironmentVariable('ADMIN_EMAILS', '')
+// Admins are whoever carries this app role (GitHub environment variable
+// ADMIN_ROLE; unset = Site.Admin). There is no e-mail list.
+param adminRole = readEnvironmentVariable('ADMIN_ROLE', '')
 
 // Entra tenants whose users may use the site (comma-separated), from the GitHub
 // environment variable ALLOWED_TENANT_IDS. Unset = the deployment tenant only.

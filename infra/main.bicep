@@ -73,8 +73,8 @@ param toolFunctionPrincipalIds array = []
 @description('true = the platform retention_sweep purges competitions past their deletion date; false = dry-run (logs only) — the kill switch. See modules/platform-function.bicep.')
 param retentionPurgeEnabled bool = true
 
-@description('Comma-separated admin e-mail addresses (GitHub variable ADMIN_EMAILS). Written to both the router (which serves /admin/ and gates /api/manage/*) and the platform Function App (which enforces it again). Empty = nobody is admin.')
-param adminEmails string = ''
+@description('App role that makes a user an admin (GitHub variable ADMIN_ROLE; empty = Site.Admin), in both tenant modes. The router serves /admin/ and gates /api/manage/* on it and tells the platform via X-Forwarded-User-Admin; there is no e-mail list.')
+param adminRole string = ''
 
 @description('Comma-separated Entra tenant ids whose users may use the site (GitHub variable ALLOWED_TENANT_IDS). Empty = the deployment tenant only. Written to both the router (403 tenant_not_allowed for anyone else) and the platform Function App (which checks again).')
 param allowedTenantIds string = ''
@@ -189,7 +189,7 @@ module webApp 'modules/webapp.bicep' = {
     proxySharedSecretScoremodifier: proxySharedSecretScoremodifier
     proxySharedSecretProtocolgenerator: proxySharedSecretProtocolgenerator
     proxySharedSecretGdprtool: proxySharedSecretGdprtool
-    adminEmails: adminEmails
+    adminRole: adminRole
     allowedTenantIds: effectiveAllowedTenantIds
     // Probed by the router's admin diagnostics.
     hovtpHealthUrl: '${hovtpFunction.outputs.functionAppUrl}/api/health'
@@ -233,7 +233,6 @@ module platformFunction 'modules/platform-function.bicep' = {
     proxySharedSecret: proxySharedSecretPlatform
     retentionPurgeEnabled: retentionPurgeEnabled
     clockTableName: platformStorage.outputs.clockTableName
-    adminEmails: adminEmails
     adminLogTableName: platformStorage.outputs.adminLogTableName
     usersTableName: platformStorage.outputs.usersTableName
     userIdentitiesTableName: platformStorage.outputs.userIdentitiesTableName
