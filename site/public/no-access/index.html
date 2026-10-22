@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>No access yet · Figure Skating Tools</title>
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="stylesheet" href="/fonts/fonts.css">
+  <link rel="stylesheet" href="/landing/landing.css">
+  <link rel="stylesheet" href="/privacy/privacy.css">
+  <link rel="stylesheet" href="/no-access/no-access.css">
+  <script src="/no-access/no-access.js" defer></script>
+</head>
+<body>
+  <!-- Public (Easy Auth excluded path). An Entra External ID user who signed in
+       but has no access app role is sent here by the router. no-access.js asks
+       /userinfo who they are; without an answer the page stays generic. -->
+  <a class="skip-link" href="#main">Skip to content</a>
+
+  <header class="doc-hero">
+    <div class="wrap">
+      <div class="topbar">
+        <a class="brand" href="/">
+          <img src="/landing/img/mark.png" alt="" width="52" height="32">
+          <span>FSTools</span>
+        </a>
+        <nav class="lang-switch" aria-label="Language">
+          <a href="#fi" hreflang="fi" lang="fi">FI</a>
+          <span aria-current="page">EN</span>
+        </nav>
+      </div>
+      <div class="doc-head">
+        <p class="eyebrow eyebrow--gold">figureskatingtools.com</p>
+        <h1 data-state="granted-denied">Sign-in successful</h1>
+        <h1 data-state="generic">No access yet</h1>
+      </div>
+    </div>
+  </header>
+
+  <main class="doc" id="main">
+    <section lang="en" aria-label="English">
+      <p class="signed-in" hidden>You're signed in as <strong data-field="who"></strong>.</p>
+      <p>You don't have access to figureskatingtools.com yet. To get access, contact
+        <a data-mailto="en" href="mailto:markus@lintuala.fi?subject=Access%20request%20to%20figureskatingtools.com">markus@lintuala.fi</a>.</p>
+      <p class="actions"><a class="btn btn-sm btn-dark" href="/.auth/logout?post_logout_redirect_uri=%2F">Sign out</a></p>
+    </section>
+
+    <section id="fi" lang="fi" aria-labelledby="h-fi">
+      <h2 id="h-fi">
+        <span data-state="granted-denied">Kirjautuminen onnistui</span>
+        <span data-state="generic">Ei vielä käyttöoikeutta</span>
+      </h2>
+      <p class="signed-in" hidden>Olet kirjautunut käyttäjänä <strong data-field="who"></strong>.</p>
+      <p>Sinulla ei ole vielä käyttöoikeutta figureskatingtools.com-palveluun. Saat käyttöoikeuden ottamalla yhteyttä osoitteeseen
+        <a data-mailto="fi" href="mailto:markus@lintuala.fi?subject=Access%20request%20to%20figureskatingtools.com">markus@lintuala.fi</a>.</p>
+      <p class="actions"><a class="btn btn-sm btn-dark" href="/.auth/logout?post_logout_redirect_uri=%2F">Kirjaudu ulos</a></p>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap footer-row">
+      <span>© figureskatingtools.com</span>
+      <nav class="footer-links" aria-label="Footer">
+        <a href="/">Home</a>
+        <a href="/privacy/">Privacy notice</a>
+        <a href="/tietosuoja/" lang="fi" hreflang="fi">Tietosuojaseloste</a>
+      </nav>
+    </div>
+  </footer>
+</body>
+</html>
