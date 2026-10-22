@@ -129,7 +129,7 @@ page, which can't be customised. Instead:
   `EXTERNAL_ACCESS_ROLE` overrides) requires the role of every identity of an
   `EXTERNAL_TENANT_IDS` tenant. Without it: documents 302 to the public
   **`/no-access/`** page ("Sign-in successful … you don't have access yet,
-  contact …", EN + FI, with a mailto and Sign out), `/userinfo` is 403
+  contact …", English, with a mailto and Sign out), `/userinfo` is 403
   `access_not_granted` with just the name and e-mail, and every API and
   `/admin/*` is 403 `access_not_granted`, never proxied. Admins get no
   exception. Workforce identities are unaffected.
