@@ -48,7 +48,14 @@ after teardown (step 7).
 | `SKIP_CUSTOM_DOMAIN` | `true` during step 3, unset/empty afterwards | **new** |
 | `HOVTP_ENABLED` | `false` to kill the HOVTP listener, unset/empty for the environment default | **new**, optional (test defaults on, prod off) |
 | `RETENTION_PURGE_ENABLED` | `false` = kill switch: the platform `retention_sweep` only logs what it would purge; unset/anything else = it deletes expired competitions | **new**, optional (on by default in both environments) |
-| `ALLOWED_TENANT_IDS` | comma-separated Entra tenant ids whose users may use the site; unset = the deployment tenant only | **new**, optional. Router (403 `tenant_not_allowed`) and platform API both enforce it; add the External ID tenant here when that migration happens |
+| `ALLOWED_TENANT_IDS` | comma-separated Entra tenant ids whose users may use the site; unset = the deployment tenant only | **new**, optional. Router (403 `tenant_not_allowed`) and platform API both enforce it. The External ID tenant is added automatically from `EXTERNAL_TENANT_ID` — don't list it here |
+| `EXTERNAL_TENANT_ID` | Entra External ID tenant id (`380073b3-804e-4cc7-bfcc-843637630d04`) | **new**, optional. Appended to the allowed tenants and written to the platform as `EXTERNAL_TENANT_IDS` (new identities from it get 503 `migration_pending` until phase C). See `infra/EXTERNAL-ID.md` |
+| `AUTH_EXTERNAL_CLIENT_ID` | client id of this environment's External ID app registration (test `16c69665-…`, prod `177abce3-…`) | **new**, optional. Set together with `EXTERNAL_TENANT_ID`; both set = the credential-free `externalid` Easy Auth provider exists |
+| `AUTH_EXTERNAL_AUTHORITY_HOST` | `380073b3-804e-4cc7-bfcc-843637630d04.ciamlogin.com` (later the custom URL domain) | **new**, optional; empty = `<EXTERNAL_TENANT_ID>.ciamlogin.com` |
+| `AUTH_LOGIN_PROVIDER` | `aad` (default) or `externalid` | optional. Drives the router's `/signin` and Easy Auth's `redirectToProvider` together; `externalid` only takes effect once the provider is configured |
+
+There is **no** External ID secret, in GitHub or anywhere else: the provider is
+credential-free by design (`infra/EXTERNAL-ID.md`).
 
 The URLs and principal ids come from each tool repo's own deployment:
 
