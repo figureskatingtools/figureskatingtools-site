@@ -90,8 +90,9 @@ Why this is enough:
   changes.
 - Admins: the creating workforce account is Global Admin, plus a cloud-only
   break-glass GA. Directory admins are separate from customer identities: the
-  owner uses the site with a self-signed-up account, and `ADMIN_EMAILS`
-  matches that account's e-mail.
+  owner uses the site with a self-signed-up account, which is in the
+  `fst-admins` group (site admin = the `Site.Admin` app role, see
+  [Admins](#admins-the-siteadmin-app-role)).
 
 ## App registrations (single tenant)
 
@@ -176,6 +177,62 @@ az rest --method POST \
 
 For a single user, use the user's object id as `principalId`.
 
+## Admins: the `Site.Admin` app role
+
+Site admins (the `/admin/` panel and `/api/manage/*`) are whoever carries the
+app role **`Site.Admin`** (`ADMIN_ROLE` overrides the name). There is no admin
+e-mail list and no break-glass e-mail: `ADMIN_EMAILS` is gone. The router reads
+the role from the ID token's `roles` claim in **both** tenant modes and tells
+the platform with `X-Forwarded-User-Admin: 1`. `Site.Admin` implies
+`Site.Access`, so admins need no second assignment.
+
+Because prod runs in **workforce** mode until phase C go-live, the role is
+needed in both tenants:
+
+| Tenant | App registration | Assigned to |
+| --- | --- | --- |
+| External ID | test `16c69665-…`, prod `177abce3-…` | group **`fst-admins`** (create it; add the owner's customer account) |
+| Workforce | the Easy Auth app of each environment (`AUTH_CLIENT_ID` of test and of prod) | the owner's workforce account (Enterprise applications → the app → Users and groups → Add, role `Site.Admin`) |
+
+Manifest snippet for `appRoles` (next to `Site.Access` on the External ID apps;
+on its own on the workforce apps). Generate a fresh GUID for `id`:
+
+```json
+{
+  "allowedMemberTypes": ["User"],
+  "description": "Administers figureskatingtools.com",
+  "displayName": "Site admin",
+  "id": "<new GUID, e.g. from uuidgen>",
+  "isEnabled": true,
+  "value": "Site.Admin"
+}
+```
+
+Group assignment in the external tenant, with Graph (as for `Site.Access`):
+
+```bash
+TENANT=380073b3-804e-4cc7-bfcc-843637630d04
+APP_ID=16c69665-3430-42b5-a789-f27bcb21f718          # prod: 177abce3-dc07-4c94-b217-22c084f47481
+az login --tenant "$TENANT" --allow-no-subscriptions
+SP_ID=$(az ad sp show --id "$APP_ID" --query id -o tsv)
+ROLE_ID=$(az ad sp show --id "$APP_ID" --query "appRoles[?value=='Site.Admin'].id | [0]" -o tsv)
+GROUP_ID=$(az ad group show --group fst-admins --query id -o tsv)
+az rest --method POST \
+  --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$SP_ID/appRoleAssignedTo" \
+  --headers 'Content-Type=application/json' \
+  --body "{\"principalId\":\"$GROUP_ID\",\"resourceId\":\"$SP_ID\",\"appRoleId\":\"$ROLE_ID\"}"
+```
+
+**Rollout order** (or prod loses its admins):
+
+1. Add `Site.Admin` and assign it in **both** tenants: the External ID apps
+   (→ `fst-admins`) and the workforce Easy Auth apps of test and prod (→ the
+   owner). Sign out and in again so the new token carries `roles`.
+2. Deploy to test and check the admin panel there.
+3. Merge to `main` (prod deploy). Check the admin panel on prod.
+4. Only then delete the `ADMIN_EMAILS` GitHub environment variables (test and
+   prod); nothing reads them any more.
+
 ## User flow (sign-up and sign-in, shared by both apps)
 
 Identity providers — only ones that give a **verified e-mail**, because phase C
@@ -247,6 +304,7 @@ provider config first, then deleting the old one.
 | `AUTH_EXTERNAL_AUTHORITY_HOST` | `380073b3-804e-4cc7-bfcc-843637630d04.ciamlogin.com` | same, at phase C |
 | `AUTH_LOGIN_PROVIDER` | unset (`aad`) | unset (`aad`) |
 | `EXTERNAL_ACCESS_ROLE` | unset (`Site.Access`) | unset (`Site.Access`) |
+| `ADMIN_ROLE` | unset (`Site.Admin`) | unset (`Site.Admin`) |
 
 Variables only — there is no External ID secret to configure. `deploy-site.yml`:
 
