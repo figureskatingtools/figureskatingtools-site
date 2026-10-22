@@ -1541,7 +1541,7 @@ const SPOOFED = {
 test('requestIdentity reads oid/tid from the long and the short claim types, lowercased', () => {
     const config = loadConfig({});
     const long = requestIdentity(fakeReq(AUTH), config);
-    assert.deepEqual(long, { tid: TENANT_ID, oid: OID, email: 'skater@example.com', name: 'Skater Person', dev: false });
+    assert.deepEqual(long, { tid: TENANT_ID, oid: OID, email: 'skater@example.com', name: 'Skater Person', roles: [], dev: false });
 
     const short = requestIdentity(
         fakeReq({ 'x-ms-client-principal': principalFor('Coach@Example.COM', { oid: OID.toUpperCase(), tid: TENANT_ID.toUpperCase() }) }),
@@ -2025,8 +2025,11 @@ function externalPrincipal({
     name = 'Sanna Skater',
     tid = EXTERNAL_TENANT_ID,
     oid = EXTERNAL_OID,
+    roles = ['Site.Access'],
+    roleClaim = 'roles',
 } = {}) {
     const claims = [
+        ...roles.map((val) => ({ typ: roleClaim, val })),
         { typ: 'name', val: name },
         { typ: 'preferred_username', val: 'not-an-email-handle' },
         { typ: OID_CLAIM, val: oid },
@@ -2048,7 +2051,12 @@ function externalConfig(extra = {}) {
         ALLOWED_TENANT_IDS: `${TENANT_ID},${EXTERNAL_TENANT_ID}`,
         EXTERNAL_TENANT_IDS: ` ${EXTERNAL_TENANT_ID.toUpperCase()} `,
     });
-    return { allowedTenantIds: env.allowedTenantIds, externalTenantIds: env.externalTenantIds, ...extra };
+    return {
+        allowedTenantIds: env.allowedTenantIds,
+        externalTenantIds: env.externalTenantIds,
+        externalAccessRole: env.externalAccessRole,
+        ...extra,
+    };
 }
 
 test('External ID tenant: the e-mail comes from the email claim, never the display-name userDetails', async () => {
@@ -2153,4 +2161,156 @@ test('AUTH_TENANT_MODE and EXTERNAL_TENANT_IDS are parsed for the diagnostics', 
     assert.deepEqual([...loadConfig({ EXTERNAL_TENANT_IDS: ` ${EXTERNAL_TENANT_ID.toUpperCase()} ,` }).externalTenantIds], [
         EXTERNAL_TENANT_ID,
     ]);
+});
+
+// ── External ID access gate (app role EXTERNAL_ACCESS_ROLE) ──────────────────
+
+function noAccessFixture() {
+    const dir = makePublicFixture();
+    fs.mkdirSync(path.join(dir, 'no-access'));
+    fs.writeFileSync(path.join(dir, 'no-access', 'index.html'), '<html>NO_ACCESS</html>');
+    fs.writeFileSync(path.join(dir, 'no-access', 'no-access.js'), 'void 0');
+    fs.mkdirSync(path.join(dir, 'admin'));
+    fs.writeFileSync(path.join(dir, 'admin', 'index.html'), '<html>ADMIN_INDEX</html>');
+    return dir;
+}
+
+test('EXTERNAL_ACCESS_ROLE defaults to Site.Access', () => {
+    assert.equal(loadConfig({}).externalAccessRole, 'Site.Access');
+    assert.equal(loadConfig({ EXTERNAL_ACCESS_ROLE: ' Fst.Users ' }).externalAccessRole, 'Fst.Users');
+});
+
+test('External ID user WITH the access role uses the site normally (short and long role claim)', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter(
+        externalConfig({ publicDir: noAccessFixture(), targets: targets({ platform: { url: upstream.url, secret: 'pf' } }) })
+    );
+    try {
+        for (const roleClaim of ['roles', 'http://schemas.microsoft.com/ws/2008/06/identity/claims/role']) {
+            const headers = externalHeaders({ roleClaim, roles: ['Other.Role', 'Site.Access'] });
+            assert.equal((await request(port, '/userinfo', { headers })).status, 200, roleClaim);
+            assert.equal((await request(port, '/api/competitions', { headers })).status, 200, roleClaim);
+            const doc = await request(port, '/judgepapers/', { headers });
+            assert.equal(doc.status, 200, roleClaim);
+            assert.match(doc.text, /JUDGEPAPERS_INDEX/);
+        }
+        assert.equal(upstream.received.length, 2);
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('External ID user WITHOUT the access role: documents 302 to /no-access/, APIs and /admin 403, nothing proxied', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter(
+        externalConfig({
+            ...adminConfig(),
+            publicDir: noAccessFixture(),
+            targets: targets({
+                platform: { url: upstream.url, secret: 'pf' },
+                judgepapers: { url: upstream.url, secret: 'jp' },
+                gdprtool: { url: upstream.url, secret: 'gd' },
+            }),
+        })
+    );
+    // An admin's e-mail gets no exception: the role is the only source of truth.
+    for (const headers of [
+        externalHeaders({ roles: [] }),
+        externalHeaders({ roles: ['Site.Reader', 'site.access'] }),
+        externalHeaders({ roles: [], email: ADMIN_EMAIL }),
+    ]) {
+        try {
+            for (const p of ['/judgepapers/', '/scoremodifier/', '/tools/banner/', '/logo.png', '/judgepapers']) {
+                const res = await request(port, p, { headers });
+                assert.equal(res.status, 302, p);
+                assert.equal(res.headers.location, '/no-access/', p);
+            }
+            for (const [p, method] of [
+                ['/api/competitions', 'GET'],
+                ['/api/manage/competitions', 'GET'],
+                ['/API/manage/competitions', 'GET'],
+                ['/judgepapers/api/x', 'POST'],
+                ['/tools/gdpr/api/scan', 'GET'],
+                ['/admin/', 'GET'],
+                ['/admin/api/diagnostics', 'GET'],
+            ]) {
+                const res = await request(port, p, { method, headers: { ...headers, ...SAME_ORIGIN } });
+                assert.equal(res.status, 403, p);
+                assert.deepEqual(json(res), { error: 'access_not_granted' }, p);
+            }
+            assert.equal(isAdminRequest(fakeReq(headers), externalConfig(adminConfig())), false);
+            assert.equal(upstream.received.length, 0);
+        } catch (e) {
+            await close(server);
+            await close(upstream.server);
+            throw e;
+        }
+    }
+    await close(server);
+    await close(upstream.server);
+});
+
+test('GET /userinfo without the access role is 403 access_not_granted with only the name and the validated e-mail', async () => {
+    const { server, port } = await startRouter(externalConfig());
+    try {
+        const res = await request(port, '/userinfo', { headers: externalHeaders({ roles: [] }) });
+        assert.equal(res.status, 403);
+        assert.equal(res.headers['cache-control'], 'no-store');
+        assert.deepEqual(json(res), { error: 'access_not_granted', name: 'Sanna Skater', email: 'skater@gmail.com' });
+        assert.doesNotMatch(res.text, new RegExp(`${EXTERNAL_TENANT_ID}|${EXTERNAL_OID}`));
+
+        // A non-ASCII e-mail is no e-mail here either.
+        const kelvin = await request(port, '/userinfo', {
+            headers: externalHeaders({ roles: [], email: 'admin@examplK.com' }),
+        });
+        assert.deepEqual(json(kelvin), { error: 'access_not_granted', name: 'Sanna Skater', email: '' });
+    } finally {
+        await close(server);
+    }
+});
+
+test('a workforce tid needs no role; the gate is off without EXTERNAL_TENANT_IDS', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter(
+        externalConfig({ publicDir: noAccessFixture(), targets: targets({ platform: { url: upstream.url, secret: 'pf' } }) })
+    );
+    const noGate = await startRouter({
+        allowedTenantIds: new Set([TENANT_ID, EXTERNAL_TENANT_ID]),
+        publicDir: noAccessFixture(),
+        targets: targets({ platform: { url: upstream.url, secret: 'pf' } }),
+    });
+    try {
+        assert.equal((await request(port, '/userinfo', { headers: AUTH })).status, 200);
+        assert.equal((await request(port, '/api/competitions', { headers: AUTH })).status, 200);
+        assert.equal((await request(port, '/judgepapers/', { headers: AUTH })).status, 200);
+        const roleless = externalHeaders({ roles: [] });
+        assert.equal((await request(noGate.port, '/api/competitions', { headers: roleless })).status, 200);
+    } finally {
+        await close(server);
+        await close(noGate.server);
+        await close(upstream.server);
+    }
+});
+
+test('/no-access/ and the other public paths are served to everyone, with or without the role', async () => {
+    const { server, port } = await startRouter(externalConfig({ publicDir: noAccessFixture() }));
+    try {
+        for (const headers of [{}, AUTH, externalHeaders(), externalHeaders({ roles: [] })]) {
+            const page = await request(port, '/no-access/', { headers });
+            assert.equal(page.status, 200);
+            assert.match(page.text, /NO_ACCESS/);
+            assert.equal((await request(port, '/no-access/no-access.js', { headers })).status, 200);
+            const bare = await request(port, '/no-access', { headers });
+            assert.equal(bare.status, 301);
+            assert.equal(bare.headers.location, '/no-access/');
+            assert.equal((await request(port, '/assets/app-abc123.js', { headers })).status, 200);
+            assert.equal((await request(port, '/health', { headers })).status, 200);
+            const signin = await request(port, '/signin?return=/judgepapers/', { headers });
+            assert.equal(signin.status, 302);
+            assert.match(signin.headers.location, /^\/\.auth\/login\/aad/);
+        }
+    } finally {
+        await close(server);
+    }
 });

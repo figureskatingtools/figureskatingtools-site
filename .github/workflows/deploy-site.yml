@@ -156,6 +156,9 @@ jobs:
           EXTERNAL_TENANT_ID: ${{ vars.EXTERNAL_TENANT_ID }}
           AUTH_EXTERNAL_CLIENT_ID: ${{ vars.AUTH_EXTERNAL_CLIENT_ID }}
           AUTH_EXTERNAL_AUTHORITY_HOST: ${{ vars.AUTH_EXTERNAL_AUTHORITY_HOST }}
+          # App role External ID users need; without it the router sends them
+          # to /no-access/. Unset = Site.Access.
+          EXTERNAL_ACCESS_ROLE: ${{ vars.EXTERNAL_ACCESS_ROLE }}
         run: |
           set -euo pipefail
           ENV_NAME="${{ needs.set-environment.outputs.env_name }}"

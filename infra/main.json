@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.48.1.52935",
-      "templateHash": "13287515135944843107"
+      "templateHash": "6625405987137736223"
     }
   },
   "parameters": {
@@ -182,6 +182,13 @@
         "description": "Authority host of the external tenant (GitHub var AUTH_EXTERNAL_AUTHORITY_HOST), e.g. <tenantId>.ciamlogin.com."
       }
     },
+    "externalAccessRole": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "App role an External ID identity needs to use the site (GitHub var EXTERNAL_ACCESS_ROLE). Empty = Site.Access."
+      }
+    },
     "hovtpEnabled": {
       "type": "bool",
       "defaultValue": true,
@@ -338,6 +345,9 @@
           "externalTenantIds": {
             "value": "[variables('normalizedExternalTenantId')]"
           },
+          "externalAccessRole": {
+            "value": "[parameters('externalAccessRole')]"
+          },
           "authManagedIdentityClientId": {
             "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'authIdentityDeployment'), '2025-04-01').outputs.clientId.value]"
           },
@@ -392,7 +402,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.48.1.52935",
-              "templateHash": "12772786812012582455"
+              "templateHash": "6812526680237508561"
             }
           },
           "parameters": {
@@ -465,7 +475,14 @@
               "type": "string",
               "defaultValue": "",
               "metadata": {
-                "description": "Comma-separated External ID tenant ids (EXTERNAL_TENANT_IDS) for the router, which reads the e-mail of those identities only from their email claim."
+                "description": "Comma-separated External ID tenant ids (EXTERNAL_TENANT_IDS) for the router, which reads the e-mail of those identities only from their email claim and requires externalAccessRole of them."
+              }
+            },
+            "externalAccessRole": {
+              "type": "string",
+              "defaultValue": "Site.Access",
+              "metadata": {
+                "description": "App role (EXTERNAL_ACCESS_ROLE) an External ID identity needs to use the site; without it the router sends them to /no-access/. Empty = Site.Access."
               }
             },
             "functionAppUrlPlatform": {
@@ -584,10 +601,12 @@
                 "/privacy/*",
                 "/tietosuoja",
                 "/tietosuoja/*",
-                "/fonts/*"
+                "/fonts/*",
+                "/no-access",
+                "/no-access/*"
               ],
               "metadata": {
-                "description": "Paths served without an Easy Auth login redirect. /health must stay open so Azure/uptime probes get a 200 instead of a 302; /judgepapers/download is the judges'-papers link e-mailed to recipients without an account (the token is checked by the judgepapers backend); /, /index.html, /signin, /landing/* and the icons, robots.txt and llms.txt make up the public landing page, which the router serves at / unless the request carries an Easy Auth session (keep in sync with LANDING_DOCUMENT_PATHS and SIGNIN_PATH in server/server.js); /assets/* holds the Vite bundles (open-source code, no data), public so the home page served at / by session cookie can always load and fall back to its sign-in view when the session has expired; /privacy and /tietosuoja (+ /*) are the privacy notice in English and Finnish, which everyone must be able to read before signing in; /fonts/* holds the self-hosted web fonts every page uses, including the public ones."
+                "description": "Paths served without an Easy Auth login redirect. /health must stay open so Azure/uptime probes get a 200 instead of a 302; /judgepapers/download is the judges'-papers link e-mailed to recipients without an account (the token is checked by the judgepapers backend); /, /index.html, /signin, /landing/* and the icons, robots.txt and llms.txt make up the public landing page, which the router serves at / unless the request carries an Easy Auth session (keep in sync with LANDING_DOCUMENT_PATHS and SIGNIN_PATH in server/server.js); /assets/* holds the Vite bundles (open-source code, no data), public so the home page served at / by session cookie can always load and fall back to its sign-in view when the session has expired; /privacy and /tietosuoja (+ /*) are the privacy notice in English and Finnish, which everyone must be able to read before signing in; /fonts/* holds the self-hosted web fonts every page uses, including the public ones; /no-access and /no-access/* are the page an External ID user without the access app role is sent to (keep in sync with NO_ACCESS_PATH and PUBLIC_PATH_PREFIXES in server/server.js)."
               }
             }
           },
@@ -678,7 +697,7 @@
               "type": "Microsoft.Web/sites/config",
               "apiVersion": "2022-09-01",
               "name": "[format('{0}/{1}', parameters('webAppName'), 'appsettings')]",
-              "properties": "[union(createObject('FUNCTION_APP_URL_PLATFORM', parameters('functionAppUrlPlatform'), 'FUNCTION_APP_URL_JUDGEPAPERS', parameters('functionAppUrlJudgepapers'), 'FUNCTION_APP_URL_SCOREMODIFIER', parameters('functionAppUrlScoremodifier'), 'FUNCTION_APP_URL_PROTOCOLGENERATOR', parameters('functionAppUrlProtocolgenerator'), 'FUNCTION_APP_URL_GDPRTOOL', parameters('functionAppUrlGdprtool'), 'PROXY_SHARED_SECRET_PLATFORM', parameters('proxySharedSecretPlatform'), 'PROXY_SHARED_SECRET_JUDGEPAPERS', parameters('proxySharedSecretJudgepapers'), 'PROXY_SHARED_SECRET_SCOREMODIFIER', parameters('proxySharedSecretScoremodifier'), 'PROXY_SHARED_SECRET_PROTOCOLGENERATOR', parameters('proxySharedSecretProtocolgenerator'), 'PROXY_SHARED_SECRET_GDPRTOOL', parameters('proxySharedSecretGdprtool'), 'AUTH_LOGIN_PROVIDER', if(empty(parameters('authLoginProvider')), 'aad', parameters('authLoginProvider')), 'AUTH_TENANT_MODE', variables('effectiveAuthTenantMode'), 'EXTERNAL_TENANT_IDS', parameters('externalTenantIds'), 'ADMIN_EMAILS', parameters('adminEmails'), 'ALLOWED_TENANT_IDS', parameters('allowedTenantIds'), 'HOVTP_HEALTH_URL', parameters('hovtpHealthUrl'), 'NODE_ENV', 'production', 'SCM_DO_BUILD_DURING_DEPLOYMENT', 'false'), if(or(empty(parameters('authClientId')), variables('externalMode')), createObject(), createObject('OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID', parameters('authManagedIdentityClientId'))))]",
+              "properties": "[union(createObject('FUNCTION_APP_URL_PLATFORM', parameters('functionAppUrlPlatform'), 'FUNCTION_APP_URL_JUDGEPAPERS', parameters('functionAppUrlJudgepapers'), 'FUNCTION_APP_URL_SCOREMODIFIER', parameters('functionAppUrlScoremodifier'), 'FUNCTION_APP_URL_PROTOCOLGENERATOR', parameters('functionAppUrlProtocolgenerator'), 'FUNCTION_APP_URL_GDPRTOOL', parameters('functionAppUrlGdprtool'), 'PROXY_SHARED_SECRET_PLATFORM', parameters('proxySharedSecretPlatform'), 'PROXY_SHARED_SECRET_JUDGEPAPERS', parameters('proxySharedSecretJudgepapers'), 'PROXY_SHARED_SECRET_SCOREMODIFIER', parameters('proxySharedSecretScoremodifier'), 'PROXY_SHARED_SECRET_PROTOCOLGENERATOR', parameters('proxySharedSecretProtocolgenerator'), 'PROXY_SHARED_SECRET_GDPRTOOL', parameters('proxySharedSecretGdprtool'), 'AUTH_LOGIN_PROVIDER', if(empty(parameters('authLoginProvider')), 'aad', parameters('authLoginProvider')), 'AUTH_TENANT_MODE', variables('effectiveAuthTenantMode'), 'EXTERNAL_TENANT_IDS', parameters('externalTenantIds'), 'EXTERNAL_ACCESS_ROLE', if(empty(trim(parameters('externalAccessRole'))), 'Site.Access', trim(parameters('externalAccessRole'))), 'ADMIN_EMAILS', parameters('adminEmails'), 'ALLOWED_TENANT_IDS', parameters('allowedTenantIds'), 'HOVTP_HEALTH_URL', parameters('hovtpHealthUrl'), 'NODE_ENV', 'production', 'SCM_DO_BUILD_DURING_DEPLOYMENT', 'false'), if(or(empty(parameters('authClientId')), variables('externalMode')), createObject(), createObject('OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID', parameters('authManagedIdentityClientId'))))]",
               "dependsOn": [
                 "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
               ]

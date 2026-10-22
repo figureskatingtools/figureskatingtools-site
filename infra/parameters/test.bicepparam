@@ -54,6 +54,8 @@ param authTenantMode = readEnvironmentVariable('AUTH_TENANT_MODE', '') == 'exter
 param externalTenantId = readEnvironmentVariable('EXTERNAL_TENANT_ID', '')
 param externalClientId = readEnvironmentVariable('AUTH_EXTERNAL_CLIENT_ID', '')
 param externalAuthorityHost = readEnvironmentVariable('AUTH_EXTERNAL_AUTHORITY_HOST', '')
+// App role External ID users need (else the /no-access/ page). Unset = Site.Access.
+param externalAccessRole = readEnvironmentVariable('EXTERNAL_ACCESS_ROLE', '')
 
 // System-assigned principal ids of the tool Function Apps, for read access to
 // the shared competition-data container. Empty entries are ignored, so this

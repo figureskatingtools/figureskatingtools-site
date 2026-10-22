@@ -98,6 +98,9 @@ param externalClientId string = ''
 @description('Authority host of the external tenant (GitHub var AUTH_EXTERNAL_AUTHORITY_HOST), e.g. <tenantId>.ciamlogin.com.')
 param externalAuthorityHost string = ''
 
+@description('App role an External ID identity needs to use the site (GitHub var EXTERNAL_ACCESS_ROLE). Empty = Site.Access.')
+param externalAccessRole string = ''
+
 var normalizedExternalTenantId = toLower(trim(externalTenantId))
 
 // The tenant the site's Easy Auth app registration lives in, unless overridden,
@@ -168,6 +171,7 @@ module webApp 'modules/webapp.bicep' = {
     externalTenantId: normalizedExternalTenantId
     externalAuthorityHost: trim(externalAuthorityHost)
     externalTenantIds: normalizedExternalTenantId
+    externalAccessRole: externalAccessRole
     authManagedIdentityClientId: authManagedIdentity.outputs.clientId
     authManagedIdentityResourceId: authManagedIdentity.outputs.resourceId
     tenantId: !empty(tenantId) ? tenantId : subscription().tenantId

@@ -11,6 +11,7 @@
 //   /admin/                  → admin panel (SPA; plain 404 unless the user is an admin)
 //   /admin/api/diagnostics   → router-native diagnostics (admins only)
 //   /privacy/, /tietosuoja/  → public privacy notice, EN/FI (static, excluded from Easy Auth)
+//   /no-access/              → public "no access yet" page for External ID users without the app role
 //   /fonts/*                 → self-hosted web fonts (static, excluded from Easy Auth)
 //   /health                  → liveness probe (excluded from Easy Auth)
 //   /judgepapers/download    → e-mailed judges'-papers link (excluded from Easy Auth)
@@ -81,6 +82,20 @@ const LANDING_DOCUMENT_PATHS = ['/', '/index.html'];
 // (e.g. Entra External ID) is one app setting instead of a frontend change.
 const SIGNIN_PATH = '/signin';
 const DEFAULT_LOGIN_PROVIDER = 'aad';
+
+// Entra External ID access gate: an identity of an EXTERNAL_TENANT_IDS tenant
+// must carry this app role (EXTERNAL_ACCESS_ROLE) or it gets the public
+// "no access yet" page instead of the site. /no-access/ is a static document
+// like the privacy notice, so it must be in the Easy Auth excludedPaths too
+// (/no-access, /no-access/*), and in PUBLIC_PATH_PREFIXES below.
+const DEFAULT_EXTERNAL_ACCESS_ROLE = 'Site.Access';
+const NO_ACCESS_PATH = '/no-access/';
+
+// Mirror of the static part of authExcludedPaths in webapp.bicep: what a
+// signed-in user without access may still load (the no-access page itself,
+// its styles, fonts and icons, the privacy notice).
+const PUBLIC_PATH_PREFIXES = ['/no-access', '/privacy', '/tietosuoja', '/landing', '/assets', '/fonts'];
+const PUBLIC_FILES = ['/favicon.png', '/apple-touch-icon.png', '/robots.txt', '/llms.txt'];
 
 const MIME_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -183,6 +198,8 @@ function loadConfig(env = process.env) {
         // Entra External ID tenants: their identities' e-mail comes only from
         // the `email` claim.
         externalTenantIds: parseTenantIds(env.EXTERNAL_TENANT_IDS),
+        // The app role an External ID identity needs to use the site.
+        externalAccessRole: (env.EXTERNAL_ACCESS_ROLE || '').trim() || DEFAULT_EXTERNAL_ACCESS_ROLE,
         nodeEnv: (env.NODE_ENV || '').trim(),
         // Who gets the admin panel and /api/manage/*. Empty = nobody.
         adminEmails: parseAdminEmails(env.ADMIN_EMAILS),
@@ -325,6 +342,8 @@ const EMAIL_CLAIMS = [
 // The two claims that identify a user for authorisation: the Entra object id
 // (stable, never reassigned) and the tenant it belongs to. The e-mail is
 // mutable and only ever forwarded for display and audit.
+// App roles: Easy Auth emits one claim per role, short or long form.
+const ROLE_CLAIMS = ['roles', 'http://schemas.microsoft.com/ws/2008/06/identity/claims/role'];
 const OID_CLAIMS = ['http://schemas.microsoft.com/identity/claims/objectidentifier', 'oid'];
 const TID_CLAIMS = ['http://schemas.microsoft.com/identity/claims/tenantid', 'tid'];
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -353,6 +372,12 @@ function principalEmail(parsed, req, external) {
     return parsed.userDetails || findClaim(parsed, EMAIL_CLAIMS) || req.headers['x-ms-client-principal-name'] || '';
 }
 
+function claimValues(parsed, types) {
+    const claims = (parsed && parsed.claims) || [];
+    if (!Array.isArray(claims)) return [];
+    return claims.filter((c) => c && types.includes(c.typ) && typeof c.val === 'string').map((c) => c.val.trim());
+}
+
 function guidClaim(parsed, types) {
     const value = String(findClaim(parsed, types) || '').trim().toLowerCase();
     return GUID_PATTERN.test(value) ? value : '';
@@ -374,12 +399,13 @@ function requestIdentity(req, config) {
             oid,
             email: normalizeEmail(principalEmail(parsed, req, isExternalTenant(tid, config))),
             name: String(findClaim(parsed, NAME_CLAIMS) || '').trim(),
+            roles: claimValues(parsed, ROLE_CLAIMS),
             dev: false,
         };
     }
     if (config.devFakeUser && !req.headers['x-ms-client-principal-name']) {
         const email = normalizeEmail(config.devFakeUser);
-        return { tid: DEV_TENANT_ID, oid: devObjectId(email), email, name: config.devFakeUser, dev: true };
+        return { tid: DEV_TENANT_ID, oid: devObjectId(email), email, name: config.devFakeUser, roles: [], dev: true };
     }
     return null;
 }
@@ -391,8 +417,33 @@ function tenantAllowed(identity, config) {
     return Boolean(config.allowedTenantIds) && config.allowedTenantIds.has(identity.tid);
 }
 
+// The External ID access gate: identities of an EXTERNAL_TENANT_IDS tenant need
+// the EXTERNAL_ACCESS_ROLE app role. Workforce identities (and the dev stand-in)
+// are unaffected. No admin exception: the role is the single source of truth.
+function accessGranted(identity, config) {
+    if (identity.dev || !isExternalTenant(identity.tid, config)) return true;
+    const role = config.externalAccessRole;
+    return Boolean(role) && Array.isArray(identity.roles) && identity.roles.includes(role);
+}
+
+// True for a signed-in identity of an allowed tenant that lacks the access
+// role: what gets /no-access/ and 403 access_not_granted.
+function accessDenied(req, config) {
+    const identity = requestIdentity(req, config);
+    return Boolean(identity) && tenantAllowed(identity, config) && !accessGranted(identity, config);
+}
+
+function sendAccessNotGranted(res) {
+    sendJson(res, 403, { error: 'access_not_granted' });
+}
+
+function isPublicPath(pathname) {
+    return PUBLIC_FILES.includes(pathname) || PUBLIC_PATH_PREFIXES.some((prefix) => isUnder(pathname, prefix));
+}
+
 // Gate for every proxied API and /userinfo: the identity, or null after a
-// 401 (no usable identity) / 403 tenant_not_allowed has been sent.
+// 401 (no usable identity) / 403 tenant_not_allowed / 403 access_not_granted
+// has been sent.
 function requireIdentity(req, res, config) {
     const identity = requestIdentity(req, config);
     if (!identity) {
@@ -404,6 +455,10 @@ function requireIdentity(req, res, config) {
             error: 'tenant_not_allowed',
             message: 'Accounts of your organisation cannot use this site.',
         });
+        return null;
+    }
+    if (!accessGranted(identity, config)) {
+        sendAccessNotGranted(res);
         return null;
     }
     return identity;
@@ -419,6 +474,14 @@ function handleUserInfo(req, res, config) {
     // No principal, or one without oid/tid: signed out as far as the APIs go.
     if (!requestIdentity(req, config)) {
         json({ authenticated: false });
+        return;
+    }
+    // Signed in but without the access role: the no-access page shows who
+    // they are signed in as — the display name and the validated e-mail only,
+    // never tid or oid.
+    if (accessDenied(req, config)) {
+        const denied = requestIdentity(req, config);
+        sendJson(res, 403, { error: 'access_not_granted', name: denied.name, email: denied.email });
         return;
     }
     const identity = requireIdentity(req, res, config);
@@ -511,7 +574,7 @@ function handleSignIn(req, res, config, search) {
 function isAdminRequest(req, config) {
     if (!config.adminEmails || config.adminEmails.size === 0) return false;
     const identity = requestIdentity(req, config);
-    if (!identity || !tenantAllowed(identity, config)) return false;
+    if (!identity || !tenantAllowed(identity, config) || !accessGranted(identity, config)) return false;
     return identity.email !== '' && config.adminEmails.has(identity.email);
 }
 
@@ -1223,6 +1286,27 @@ function createRequestHandler(config) {
         // 4c. Sign-in entry point used by every "Sign in" link.
         if (pathname === SIGNIN_PATH) {
             handleSignIn(req, res, config, search);
+            return;
+        }
+
+        // A signed-in External ID user without the access role: documents
+        // send them to the public no-access page; /admin/* and every API
+        // below answer 403 access_not_granted (never proxied). The public
+        // paths (the no-access page itself, privacy notice, assets) stay open.
+        const noAccess = !isPublicPath(pathname) && accessDenied(req, config);
+        const lowerPath = pathname.toLowerCase();
+        const isApiPath =
+            isUnder(lowerPath, '/api') ||
+            isUnder(lowerPath, '/' + ADMIN_PREFIX) ||
+            /^\/[^/]+\/api(?:\/|$)/.test(pathname) ||
+            Object.values(SMALL_TOOL_APIS).some((prefix) => isUnder(pathname, prefix + '/api'));
+        if (noAccess) {
+            if (isApiPath) {
+                sendAccessNotGranted(res);
+            } else {
+                res.writeHead(302, { Location: NO_ACCESS_PATH, 'Cache-Control': 'no-store' });
+                res.end();
+            }
             return;
         }
 

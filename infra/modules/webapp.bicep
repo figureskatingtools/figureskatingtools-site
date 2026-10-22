@@ -40,8 +40,11 @@ param externalTenantId string = ''
 @description('Authority host of the external tenant (GitHub var AUTH_EXTERNAL_AUTHORITY_HOST), e.g. <tenantId>.ciamlogin.com. Empty = <externalTenantId>.ciamlogin.com.')
 param externalAuthorityHost string = ''
 
-@description('Comma-separated External ID tenant ids (EXTERNAL_TENANT_IDS) for the router, which reads the e-mail of those identities only from their email claim.')
+@description('Comma-separated External ID tenant ids (EXTERNAL_TENANT_IDS) for the router, which reads the e-mail of those identities only from their email claim and requires externalAccessRole of them.')
 param externalTenantIds string = ''
+
+@description('App role (EXTERNAL_ACCESS_ROLE) an External ID identity needs to use the site; without it the router sends them to /no-access/. Empty = Site.Access.')
+param externalAccessRole string = 'Site.Access'
 
 // --- Router proxy targets -------------------------------------------------------
 // The router resolves /api/* and /<tool>/api/* against these. They are part of the
@@ -95,7 +98,7 @@ param hovtpHealthUrl string = ''
 @description('Easy Auth provider segment the router\'s /signin redirects to (/.auth/login/<provider>). Written to the AUTH_LOGIN_PROVIDER app setting; empty means aad. Changes together with the authsettingsV2 identity provider (e.g. the move to Entra External ID).')
 param authLoginProvider string = 'aad'
 
-@description('Paths served without an Easy Auth login redirect. /health must stay open so Azure/uptime probes get a 200 instead of a 302; /judgepapers/download is the judges\'-papers link e-mailed to recipients without an account (the token is checked by the judgepapers backend); /, /index.html, /signin, /landing/* and the icons, robots.txt and llms.txt make up the public landing page, which the router serves at / unless the request carries an Easy Auth session (keep in sync with LANDING_DOCUMENT_PATHS and SIGNIN_PATH in server/server.js); /assets/* holds the Vite bundles (open-source code, no data), public so the home page served at / by session cookie can always load and fall back to its sign-in view when the session has expired; /privacy and /tietosuoja (+ /*) are the privacy notice in English and Finnish, which everyone must be able to read before signing in; /fonts/* holds the self-hosted web fonts every page uses, including the public ones.')
+@description('Paths served without an Easy Auth login redirect. /health must stay open so Azure/uptime probes get a 200 instead of a 302; /judgepapers/download is the judges\'-papers link e-mailed to recipients without an account (the token is checked by the judgepapers backend); /, /index.html, /signin, /landing/* and the icons, robots.txt and llms.txt make up the public landing page, which the router serves at / unless the request carries an Easy Auth session (keep in sync with LANDING_DOCUMENT_PATHS and SIGNIN_PATH in server/server.js); /assets/* holds the Vite bundles (open-source code, no data), public so the home page served at / by session cookie can always load and fall back to its sign-in view when the session has expired; /privacy and /tietosuoja (+ /*) are the privacy notice in English and Finnish, which everyone must be able to read before signing in; /fonts/* holds the self-hosted web fonts every page uses, including the public ones; /no-access and /no-access/* are the page an External ID user without the access app role is sent to (keep in sync with NO_ACCESS_PATH and PUBLIC_PATH_PREFIXES in server/server.js).')
 param authExcludedPaths array = [
   '/health'
   '/judgepapers/download'
@@ -113,6 +116,8 @@ param authExcludedPaths array = [
   '/tietosuoja'
   '/tietosuoja/*'
   '/fonts/*'
+  '/no-access'
+  '/no-access/*'
 ]
 
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
@@ -243,6 +248,8 @@ resource siteAppSettings 'Microsoft.Web/sites/config@2022-09-01' = {
       // External ID tenants: the router takes those identities' e-mail only
       // from their email claim.
       EXTERNAL_TENANT_IDS: externalTenantIds
+      // The app role those identities need (else /no-access/).
+      EXTERNAL_ACCESS_ROLE: empty(trim(externalAccessRole)) ? 'Site.Access' : trim(externalAccessRole)
       ADMIN_EMAILS: adminEmails
       ALLOWED_TENANT_IDS: allowedTenantIds
       HOVTP_HEALTH_URL: hovtpHealthUrl

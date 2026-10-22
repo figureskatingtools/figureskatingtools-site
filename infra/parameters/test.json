@@ -65,6 +65,9 @@
     "externalAuthorityHost": {
       "value": ""
     },
+    "externalAccessRole": {
+      "value": ""
+    },
     "toolFunctionPrincipalIds": {
       "value": [
         "",
