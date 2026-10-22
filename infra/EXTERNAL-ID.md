@@ -33,7 +33,8 @@ In external mode `allowedAudiences` is the external client id, and
 arrives. `/signin`, `/.auth/login/aad` and `AUTH_LOGIN_PROVIDER=aad` are the same
 in both modes, so the frontends never notice.
 
-- **test** runs `external` (only members of `fst-test-access` get in).
+- **test** runs `external` (only members of `fst-test-access` get in, see
+  [Access gate](#access-gate-the-siteaccess-app-role)).
 - **prod** stays `workforce` until phase C goes live. Go-live is one var
   (`AUTH_TENANT_MODE=external`) plus a redeploy; the rollback is setting it back
   to `workforce` and redeploying.
@@ -107,13 +108,73 @@ OIDC provider) can be removed.
   **"ID tokens" ticked, "Access tokens" never**.
 - Certificates & secrets: **empty**, permanently (see the rule above). An
   app-management policy in the tenant may enforce it.
-- Enterprise application → **Assignment required = Yes** on both:
-  - test is assigned the group `fst-test-access` (add testers there);
-  - prod is assigned **only the owner** until phase C goes live, which keeps the
-    dark launch dark.
+- App role **`Site.Access`** on both, assigned to `fst-test-access` (test) and
+  to the owner only (prod, until phase C goes live — that keeps the dark launch
+  dark). Enterprise application → **Assignment required = No** on both, *after*
+  the access gate is deployed; see [Access gate](#access-gate-the-siteaccess-app-role).
 - Both apps are associated with the one user flow below.
 - Manifest: `acceptMappedClaims: true` (needed for the mapped `termsAccepted`
   claim, since there is no custom signing key).
+
+## Access gate: the `Site.Access` app role
+
+Who may use the site is an **app role**, not Entra's "Assignment required":
+with assignment required, everyone else ends on Entra's AADSTS50105 error
+page, which can't be customised. Instead:
+
+- Each External ID app has the app role `Site.Access`, assigned to the people
+  (or group) who may use the site. Entra puts it in the ID token's `roles` claim.
+- **Assignment required = No**, so anyone can finish signing in.
+- The router (`EXTERNAL_ACCESS_ROLE`, default `Site.Access`; GitHub var
+  `EXTERNAL_ACCESS_ROLE` overrides) requires the role of every identity of an
+  `EXTERNAL_TENANT_IDS` tenant. Without it: documents 302 to the public
+  **`/no-access/`** page ("Sign-in successful … you don't have access yet,
+  contact …", EN + FI, with a mailto and Sign out), `/userinfo` is 403
+  `access_not_granted` with just the name and e-mail, and every API and
+  `/admin/*` is 403 `access_not_granted`, never proxied. Admins get no
+  exception. Workforce identities are unaffected.
+
+**Order matters** (tenant side, by hand):
+
+1. Add the app role to both apps (manifest below) and assign it: test → the
+   group `fst-test-access`, prod → the owner only.
+2. Deploy this code to the environment (the gate must be live first).
+3. Only then set **Assignment required = No** on that enterprise app. Before
+   step 2 it would let everyone in.
+
+Manifest snippet (App registrations → the app → Manifest → `appRoles`; generate
+a fresh GUID for `id`):
+
+```json
+"appRoles": [
+  {
+    "allowedMemberTypes": ["User"],
+    "description": "May use figureskatingtools.com",
+    "displayName": "Site access",
+    "id": "<new GUID, e.g. from uuidgen>",
+    "isEnabled": true,
+    "value": "Site.Access"
+  }
+]
+```
+
+Assigning a **group** to the role may not be offered in the external tenant's
+portal; do it with Microsoft Graph instead (signed in to the external tenant):
+
+```bash
+TENANT=380073b3-804e-4cc7-bfcc-843637630d04
+APP_ID=16c69665-3430-42b5-a789-f27bcb21f718          # prod: 177abce3-dc07-4c94-b217-22c084f47481
+az login --tenant "$TENANT" --allow-no-subscriptions
+SP_ID=$(az ad sp show --id "$APP_ID" --query id -o tsv)
+ROLE_ID=$(az ad sp show --id "$APP_ID" --query "appRoles[?value=='Site.Access'].id | [0]" -o tsv)
+GROUP_ID=$(az ad group show --group fst-test-access --query id -o tsv)
+az rest --method POST \
+  --uri "https://graph.microsoft.com/v1.0/servicePrincipals/$SP_ID/appRoleAssignedTo" \
+  --headers 'Content-Type=application/json' \
+  --body "{\"principalId\":\"$GROUP_ID\",\"resourceId\":\"$SP_ID\",\"appRoleId\":\"$ROLE_ID\"}"
+```
+
+For a single user, use the user's object id as `principalId`.
 
 ## User flow (sign-up and sign-in, shared by both apps)
 
@@ -185,6 +246,7 @@ provider config first, then deleting the old one.
 | `AUTH_EXTERNAL_CLIENT_ID` | `16c69665-3430-42b5-a789-f27bcb21f718` | `177abce3-dc07-4c94-b217-22c084f47481`, at phase C |
 | `AUTH_EXTERNAL_AUTHORITY_HOST` | `380073b3-804e-4cc7-bfcc-843637630d04.ciamlogin.com` | same, at phase C |
 | `AUTH_LOGIN_PROVIDER` | unset (`aad`) | unset (`aad`) |
+| `EXTERNAL_ACCESS_ROLE` | unset (`Site.Access`) | unset (`Site.Access`) |
 
 Variables only — there is no External ID secret to configure. `deploy-site.yml`:
 
@@ -194,7 +256,8 @@ Variables only — there is no External ID secret to configure. `deploy-site.yml
   `ALLOWED_TENANT_IDS` for the router and the platform, and writes it to both as
   `EXTERNAL_TENANT_IDS`:
   - the router takes those identities' e-mail **only** from the `email` claim
-    (their `preferred_username` / principal name need not be an e-mail);
+    (their `preferred_username` / principal name need not be an e-mail), and
+    requires the `EXTERNAL_ACCESS_ROLE` app role of them (else `/no-access/`);
   - the platform answers a new identity of that tenant with **503
     `migration_pending`** and creates no user, until phase C;
 - shows the mode ("Sign-in tenant") and the External ID tenant count in the admin
