@@ -74,3 +74,6 @@
   .doc .intro p { font-size: 17px; }
   .doc section { margin-top: 44px; }
 }
+
+/* The versions of the two documents in force, under the footer links. */
+.footer-versions { flex-basis: 100%; margin: 0; font: 400 12px/1.5 var(--font-mono); letter-spacing: .04em; }

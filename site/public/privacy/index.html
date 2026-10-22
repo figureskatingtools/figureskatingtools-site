@@ -1,12 +1,19 @@
 <!doctype html>
+<!--
+  The privacy notice. Keep the Finnish translation (/tietosuoja/) in step with
+  every change, and keep both consistent with the terms of use (/terms/).
+  The version date in the "Last updated" line and the footer is PRIVACY_VERSION
+  in infra/functions/function_app.py (pinned by tests/test_legal_versions.py).
+-->
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Privacy notice · Figure Skating Tools</title>
-  <meta name="description" content="How figureskatingtools.com processes personal data: what is processed and why, where it is held, how long it is kept and how to use your rights.">
+  <meta name="description" content="How figureskatingtools.com processes personal data: who is responsible for what, what is processed and why, where it is held, how long it is kept and how to use your rights.">
   <link rel="icon" type="image/png" href="/favicon.png">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
+  <link rel="alternate" hreflang="fi" href="/tietosuoja/">
   <link rel="stylesheet" href="/fonts/fonts.css">
   <link rel="stylesheet" href="/landing/landing.css">
   <link rel="stylesheet" href="/privacy/privacy.css">
@@ -25,7 +32,7 @@
       <div class="doc-head">
         <p class="eyebrow eyebrow--gold">figureskatingtools.com</p>
         <h1>Privacy notice</h1>
-        <p class="updated">Last updated 22 October 2026</p>
+        <p class="updated">Last updated <time datetime="2026-10-22" data-version="privacy">22 October 2026</time></p>
       </div>
     </div>
   </header>
@@ -34,136 +41,201 @@
     <a class="back" href="/">← Back to figureskatingtools.com</a>
 
     <div class="intro">
-      <p>This notice explains how personal data is processed in the figureskatingtools.com service. The service is a set of tools for figure skating result services: Judge Paper Creator, Protocol Generator, Score Modifier, the Competition Banner Generator, the GDPR Removal Tool and the live link that receives competition data from FS Manager. The tools are used by signed-in result service operators and organisers' staff, and access is by invitation.</p>
-      <p><strong>figureskatingtools.com does not host or publish results, and no competition data is public here.</strong> The only public pages are the front page, this notice and the <a href="/terms/">terms of use</a>. What the tools produce (judges' papers, protocols, score sheets and banners) is downloaded by the operator. Results are published on other sites, such as fs.lintuala.fi, and each of those sites is responsible for what it publishes under its own privacy notice.</p>
+      <p>This notice explains how personal data is processed in the figureskatingtools.com service. The service is a set of tools for figure skating result services and competition organisers: tools that produce a competition's documents from FS Manager data, tools that run entirely in your browser, tools that process data in memory without storing it, and a live link that receives competition data from FS Manager. The tools are used by signed-in result service operators and organisers' staff, and access is by invitation.</p>
+      <p><strong>figureskatingtools.com does not host or publish results, and no competition data is public here.</strong> The only public pages are the front page, this notice and the <a href="/terms/">terms of use</a>. What the tools produce is downloaded by the operator. Results are published on other sites, and each of those sites is responsible for what it publishes under its own privacy notice.</p>
+      <p>This notice is available in English and <a href="/tietosuoja/" hreflang="fi" lang="fi">Finnish</a>; the English text prevails.</p>
     </div>
 
     <section id="controller" aria-labelledby="h-controller">
-      <h2 id="h-controller"><span class="num">1</span>Controller and processors</h2>
-      <p>The controller is Markus Lintuala, who maintains figureskatingtools.com. Contact: <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>.</p>
-      <p>Signed-in users, such as result service operators and the organising club's staff, process data in the service on the controller's behalf (as processors). They may use the data only for the competition at hand and in line with this notice.</p>
-      <p>The service's administrators (currently the controller) can view and manage every competition, including a deleted one until its data has been removed: they can correct its details, change its deletion date, hand it over to another user as its owner, restore a competition deleted by mistake or remove its data at once. Administrators act on the controller's behalf, for example when an operator asks for help or to keep the service running.</p>
+      <h2 id="h-controller"><span class="num">1</span>Who is responsible</h2>
+      <p>Responsibility is split by whose data it is:</p>
+      <ul>
+        <li><strong>Competition data</strong> (section 2) is the responsibility of the organisation on whose behalf the service is used, such as the organising club or the result service, or the user personally if they use it for no organisation. The terms of use call it the <strong>Customer</strong>. The Customer is the controller: it decides that the competition is run, what is exported from FS Manager, who receives judges' papers and what is published. We process competition data on the Customer's behalf, as its processor, under the <a href="/terms/#data-processing">data processing terms</a>. If the Customer is a result service working for an organiser, the organiser is the controller, the result service its processor and we are a sub-processor.</li>
+        <li><strong>Data about the users and the running of the service</strong> (section 3) is our own responsibility. The controller is Markus Lintuala, a private individual in Finland who maintains figureskatingtools.com as a volunteer project. Contact: <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>.</li>
+      </ul>
+      <p>The service's administrators (currently Markus Lintuala) can view and manage every competition, including a deleted one until its data has been removed: they can correct its details, change its deletion date, hand it over to another user as its owner, restore a competition deleted by mistake or remove its data at once. They do so only to support the Customer, for example when an operator asks for help, or to keep the service running and secure.</p>
     </section>
 
     <section id="data" aria-labelledby="h-data">
-      <h2 id="h-data"><span class="num">2</span>What data is processed, where it comes from and why</h2>
-      <p>Data is processed to produce a competition's paperwork: judges' papers, the protocol, readable score sheets and, when needed, redacted versions of an operator's own published result files, and to keep the service running and secure.</p>
+      <h2 id="h-data"><span class="num">2</span>Competition data we process on the Customer's behalf</h2>
+      <p>Competition data is processed to produce a competition's documents, such as judges' papers, the protocol and readable score sheets, and, when needed, redacted versions of a result service's own published result files.</p>
+      <p>The Customer decides the legal basis. Typically it is the organiser's legitimate interest for competition data and consent for photos. The Customer obtains and keeps the consents; we never see them.</p>
       <div class="table-wrap">
         <table class="data-table">
           <thead>
-            <tr><th scope="col">Concerns</th><th scope="col">Data</th><th scope="col">Source</th><th scope="col">Legal basis</th></tr>
+            <tr><th scope="col">Concerns</th><th scope="col">Data</th><th scope="col">Source</th><th scope="col">Kept until</th></tr>
           </thead>
           <tbody>
             <tr>
-              <th scope="row">Users of the service</th>
-              <td data-label="Data">Name, e-mail address and account identifiers. The service keeps a user directory of everyone who has signed in: name, e-mail address, the identifiers of your Microsoft account (its object ID and your organisation's tenant ID) and when you first and last signed in. It also records which competitions you own and which are shared with you, and whether you may only view them or also edit them. Your e-mail address is recorded with what you do in the service: creating, editing or deleting a competition, uploading a file, accepting or rejecting an FS Manager sender, and sending judges' papers or copying a link to them. Sharing a competition, changing or removing someone's access and leaving a competition are recorded in the administrator log with the e-mail addresses of the person who did it and the person whose access changed. An administrator's e-mail address is also recorded in the administrator log with each administrative action.</td>
-              <td data-label="Source">Microsoft sign-in, and your use of the tools</td>
-              <td data-label="Legal basis" class="basis">Legitimate interest: running the service, letting users share competitions with each other, and keeping it secure</td>
-            </tr>
-            <tr>
               <th scope="row">Skaters and team members</th>
-              <td data-label="Data">Name, club, nation, category, starting order, placement, scores and whether the skater or team withdrew. For synchronized skating, the names of the team members.</td>
-              <td data-label="Source">FS Manager exports uploaded by the operator, or sent live from FS Manager</td>
-              <td data-label="Legal basis" class="basis">Legitimate interest: producing the competition's result documents</td>
+              <td data-label="Data">Name, club, nation, category, starting order, placement, scores and whether the skater or team withdrew. For synchronized skating, the team members' names. FS Manager's participant files also carry gender, nationality and FS Manager's own participant codes (see below).</td>
+              <td data-label="Source">FS Manager files uploaded by the operator, or sent live from FS Manager</td>
+              <td data-label="Kept until" class="basis">The competition's data is deleted (<a href="#retention">section 5</a>)</td>
             </tr>
             <tr>
               <th scope="row">People in podium and team photos</th>
               <td data-label="Data">Photo</td>
               <td data-label="Source">Uploaded by the operator</td>
-              <td data-label="Legal basis" class="basis">Consent</td>
+              <td data-label="Kept until" class="basis">The competition's data is deleted</td>
             </tr>
             <tr>
               <th scope="row">Judges and other competition officials</th>
               <td data-label="Data">Name and role</td>
-              <td data-label="Source">FS Manager exports (panel of judges)</td>
-              <td data-label="Legal basis" class="basis">Legitimate interest: producing judges' papers and the protocol</td>
+              <td data-label="Source">FS Manager files (panel of judges)</td>
+              <td data-label="Kept until" class="basis">The competition's data is deleted</td>
             </tr>
             <tr>
               <th scope="row">Recipients of the judges' papers e-mail</th>
-              <td data-label="Data">E-mail address. A send log records who sent the papers, to whom, when, and when the link expires.</td>
+              <td data-label="Data">E-mail address. A send log records who sent the papers or copied a link to them, to whom, when, when the link expires and how many times it has been used.</td>
               <td data-label="Source">Entered by the operator</td>
-              <td data-label="Legal basis" class="basis">Legitimate interest: delivering the papers for printing</td>
+              <td data-label="Kept until" class="basis">The competition's data is deleted; each link works for at most 5 days</td>
             </tr>
             <tr>
-              <th scope="row">FS Manager senders</th>
-              <td data-label="Data">IP address of the computer sending the data, the times of its transfers, the session identifier and message numbers of the transfer, and the venue and competition details FS Manager sends with each message</td>
-              <td data-label="Source">The FS Manager computer</td>
-              <td data-label="Legal basis" class="basis">Legitimate interest: security, so that only computers the operator has approved can deliver data</td>
-            </tr>
-            <tr>
-              <th scope="row">People whose name an operator removes from its own published results (GDPR Removal Tool)</th>
-              <td data-label="Data">Full name and club as shown in the operator's own published result pages and PDF files</td>
-              <td data-label="Source">The operator's published pages</td>
-              <td data-label="Legal basis" class="basis">The publishing site's legal obligation to fulfil an erasure or objection request (Articles 17 and 21). The publishing site is responsible for the request; this service only provides the tool and keeps nothing.</td>
+              <th scope="row">People whose name a result service removes from its own published results</th>
+              <td data-label="Data">Full name and club as shown in the result service's own published result pages and PDF files</td>
+              <td data-label="Source">The result service's published pages</td>
+              <td data-label="Kept until" class="basis">Not stored: processed only while the request runs</td>
             </tr>
           </tbody>
         </table>
       </div>
-      <p>Legitimate interest refers to the EU General Data Protection Regulation, Article 6(1)(f), consent to Article 6(1)(a) and legal obligation to Article 6(1)(c).</p>
 
       <h3>Podium and team photos</h3>
-      <p>A photo is used only if the person in it has a valid photography consent through their club. For a minor, consent is given by a parent or guardian. Consent can be withdrawn at any time (section 6). Location data and other metadata are removed from the photos in every PDF the tools produce, and HEIC photos (the iPhone format) are converted to a clean JPEG as soon as they are uploaded. Other uploaded photos are stored as they were uploaded, metadata included, until the competition's data is deleted (section 4).</p>
+      <p>A photo may be used only if the person in it has a valid photography consent. For a minor, consent is given by a parent or guardian. Location data and other metadata are removed from the photos in every PDF the tools produce. HEIC photos (the iPhone format) are converted to a clean JPEG as soon as they are uploaded, and so are the photos of a team photo ZIP file. Other uploaded photos are stored as they were uploaded, metadata included, until the competition's data is deleted.</p>
 
-      <h3>FS Manager participant files</h3>
-      <p>Participant files from FS Manager use the ODF data format, which has room for further details such as date of birth, gender and nationality. Dates of birth are removed as soon as a participant file arrives in the competition's files, whether FS Manager sends it or someone uploads it, so they are not stored. Whatever else FS Manager fills in there, such as gender and nationality, is kept in the file until the competition's data is deleted, but the tools read only names and clubs and never print the rest.</p>
+      <h3 id="participant-files">FS Manager participant files</h3>
+      <p>Participant files from FS Manager use the ODF data format. Dates of birth are removed from a participant file before it is stored, whether FS Manager sends it or someone uploads it, so they are not stored. The rest of the file is kept as FS Manager produced it, because the tools read it. That includes the participants' names, club, gender, nationality, the events they are registered for, their team and FS Manager's own participant codes. Gender is kept because competition rules depend on it, for example in categories and in pair and ice dance couples. Nationality is kept because result documents show it, as is customary in the sport. The tools use names, clubs, teams and events and do not print the rest.</p>
 
-      <h3>GDPR Removal Tool and Banner Generator</h3>
-      <p>The GDPR Removal Tool is a tool any result service operator can use to redact its own published result files when that is required, for example when a skater has asked the publishing site to remove their name. The tool fetches the already public pages and PDF files, replaces the person's name and club with the text “Nimi poistettu pyynnöstä” (name removed on request) while placements and scores stay in place, and returns the changed files to the operator as a ZIP file. The pages are processed in memory only, and the tool stores nothing. Publishing the changed files is up to the operator. The Competition Banner Generator runs entirely in your browser: the logos you add never leave your device.</p>
-
-      <p>The data is not used for automated decision-making or profiling.</p>
-    </section>
-
-    <section id="location" aria-labelledby="h-location">
-      <h2 id="h-location"><span class="num">3</span>Where data is held and who receives it</h2>
-      <ul>
-        <li><strong>Microsoft Azure</strong> hosts the service, its files, databases and technical logs. Everything is stored in the Sweden Central region in the EU.</li>
-        <li><strong>Microsoft Entra ID</strong> handles sign-in.</li>
-        <li><strong>Mailgun</strong> (Mailgun Technologies, Inc., part of Sinch) sends the judges' papers e-mail through its EU region. It receives the recipients' addresses and the message with its download link. Open and click tracking is turned off.</li>
-      </ul>
-      <p>Microsoft and Mailgun are US companies, so data may in limited cases be accessed from the United States, for example for support or security. Both companies are certified under the EU-U.S. Data Privacy Framework (checked on 13 October 2026), and their data processing terms also include the EU standard contractual clauses.</p>
-      <p>Data is not sold or shared for marketing. Nothing in the tools is public: everything requires sign-in, except a judges' papers download link sent by e-mail or copied to share, which contains a random code and works for at most 5 days. Anyone who has the link can download the papers, so share it only with the people who need them.</p>
+      <h3>Tools that store nothing</h3>
+      <p>Some tools process data in memory only, for as long as a request runs, and store nothing. The GDPR Removal Tool is one: a result service can use it to redact its own published result files, for example when a skater has asked the publishing site to remove their name. It fetches the already public pages and PDF files from the result sites it is set up for, replaces the person's name with the text “Nimi poistettu pyynnöstä” (name removed on request) and blanks their club, keeps the placements and scores, and returns the changed files to the operator as a ZIP file. Working copies exist on the server only while the request runs. Publishing the changed files is up to the result service.</p>
+      <p>Other tools run entirely in your browser. The Competition Banner Generator is one: the logos you add never leave your device.</p>
 
       <h3>Who can see a competition</h3>
       <p>A competition and everything stored about it is visible only to its owner (normally the user who created it), the users the owner has shared it with, and the administrators. The owner decides whether each of them may only view it or also edit it, and can take the access away again.</p>
-      <p>When sharing, a signed-in user can find other users who have signed in to the service in two ways: by typing at least 3 characters of their name, or by typing their exact, full e-mail address. Part of an e-mail address finds nobody. A name search shows the name and only a masked e-mail address, for example a•••@club.fi. The full e-mail address is shown only when it was typed in full, or to a user who already has a competition in common with that person (as its owner or through sharing).</p>
-      <p>The people working on a competition see each other's e-mail addresses. The owner sees the names and e-mail addresses of the users the competition is shared with in its access list, and they see the owner's. Everyone with access to a competition also sees the e-mail address of the user who uploaded each of its files and of the user who accepted each FS Manager sender.</p>
+      <p>The people working on a competition see each other's names and e-mail addresses. The owner sees the names and e-mail addresses of the users the competition is shared with in its access list, and they see the owner's. Everyone with access to a competition also sees the e-mail address of the user who uploaded each of its shared files, of the user who accepted each FS Manager sender, and of the user who first used the competition in each tool.</p>
+    </section>
+
+    <section id="account-data" aria-labelledby="h-account-data">
+      <h2 id="h-account-data"><span class="num">3</span>Data we process as controller</h2>
+      <div class="table-wrap">
+        <table class="data-table">
+          <thead>
+            <tr><th scope="col">Record</th><th scope="col">Data</th><th scope="col">Why and on what basis</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">User directory</th>
+              <td data-label="Data">For everyone who has signed in: name, e-mail address, account identifiers (the object ID of your account and the ID of the directory it belongs to), when you first and last signed in, and which version of the terms of use and privacy notice you accepted at sign-up and when. It also records which competitions you own and which are shared with you, and whether you may only view them or also edit them.</td>
+              <td data-label="Why and on what basis" class="basis">Providing the service to you (contract, Article 6(1)(b)). Letting users find each other to share competitions (legitimate interest, Article 6(1)(f)).</td>
+            </tr>
+            <tr>
+              <th scope="row">Activity records</th>
+              <td data-label="Data">Your e-mail address with what you do in the service: creating a competition, uploading a file, accepting or rejecting an FS Manager sender, and sending judges' papers or copying a link to them.</td>
+              <td data-label="Why and on what basis" class="basis">Showing the people working on a competition who did what, and security (legitimate interest)</td>
+            </tr>
+            <tr>
+              <th scope="row">Administrator log</th>
+              <td data-label="Data">Each administrative action and each sharing change: the e-mail address of whoever made it, the e-mail address of the user whose access changed, the competition and the details that were changed.</td>
+              <td data-label="Why and on what basis" class="basis">Accountability for administrators' actions and for access changes, and security (legitimate interest)</td>
+            </tr>
+            <tr>
+              <th scope="row">Technical logs</th>
+              <td data-label="Data">Error messages and request traces of the service, which can include IP addresses, account identifiers, and competition, file and web page names; Microsoft's sign-in logs, which can include IP addresses and e-mail addresses.</td>
+              <td data-label="Why and on what basis" class="basis">Keeping the service running and secure, and finding faults (legitimate interest)</td>
+            </tr>
+            <tr>
+              <th scope="row">FS Manager sender records</th>
+              <td data-label="Data">The IP address of the computer sending data from FS Manager, the times and number of its transfers, the session identifier and message numbers of the transfer, the venue and competition details FS Manager sends with each message, and whether an operator accepted or rejected the sender, and who.</td>
+              <td data-label="Why and on what basis" class="basis">Security, so that only computers an operator has accepted can deliver data (legitimate interest)</td>
+            </tr>
+            <tr>
+              <th scope="row">Competition statistics</th>
+              <td data-label="Data">Per competition only: its name, code, venue, dates and usage counts, such as the number of files, documents, e-mails and categories. Never anything about a user.</td>
+              <td data-label="Why and on what basis" class="basis">Developing the service. Contains no personal data.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>Your name, e-mail address and account identifiers come from your sign-in through Microsoft Entra ID. They are needed to use the service: without them you cannot sign in or work on competitions. Depending on how you sign in, you use a work or school account, a personal Microsoft account, a Google account or a one-time code sent to your e-mail address; Google and Microsoft handle their own part of the sign-in under their own privacy terms.</p>
+      <p>No automated decision-making or profiling takes place.</p>
+    </section>
+
+    <section id="location" aria-labelledby="h-location">
+      <h2 id="h-location"><span class="num">4</span>Where data is held and who receives it</h2>
+      <ul>
+        <li><strong>Microsoft Azure</strong> hosts the service, its files, databases and technical logs. Everything is stored in the Sweden Central region in the EU. Data sent live from FS Manager reaches the service through Microsoft's Azure Front Door and API Management.</li>
+        <li><strong>Microsoft Entra ID</strong> handles sign-in.</li>
+        <li><strong>Mailgun</strong> (Mailgun Technologies, Inc., part of Sinch) sends the judges' papers e-mail through its EU region. It receives the recipients' addresses and the message with its download link. Open and click tracking is turned off. Mailgun keeps no copy of the message and keeps delivery event data (recipient address, time and delivery status) for up to 30 days.</li>
+      </ul>
+      <p>Microsoft and Mailgun are US companies, so data may in limited cases be accessed from the United States, for example for support or security. Both companies are certified under the EU-U.S. Data Privacy Framework (checked on 13 October 2026). If that framework no longer applies, the EU standard contractual clauses in their data processing terms do.</p>
+      <p>Data is not sold or shared for marketing. Nothing in the tools is public: everything requires sign-in, except a judges' papers download link sent by e-mail or copied to share, which contains a random code and works for at most 5 days. Anyone who has the link can download the papers, so share it only with the people who need them. Download links shown in the tools expire after 15 minutes.</p>
+
+      <h3 id="subprocessors">Sub-processors</h3>
+      <p>For competition data, we use these sub-processors (list dated 22 October 2026):</p>
+      <ul>
+        <li>Microsoft: hosting (Microsoft Azure, Sweden Central) and sign-in (Microsoft Entra ID).</li>
+        <li>Mailgun Technologies, Inc.: delivery of the judges' papers e-mail (EU region).</li>
+      </ul>
+      <p>We tell users at least 30 days before we add or replace a sub-processor, by e-mail and in the service. A Customer that objects can stop using the service and delete its competitions before the change takes effect.</p>
+
+      <h3>Finding other users</h3>
+      <p>When sharing, a signed-in user can find other users who have signed in to the service in two ways: by typing at least 3 characters of their name, or by typing their exact, full e-mail address. Part of an e-mail address finds nobody. A name search shows the name and only a masked e-mail address, for example a•••@club.fi. The full e-mail address is shown only when it was typed in full, or to a user who already has a competition in common with that person (as its owner or through sharing). Searches are limited per user so that the directory cannot be copied.</p>
+
+      <h3 id="security">How data is protected</h3>
+      <ul>
+        <li>Every tool and every competition requires sign-in, and each competition is visible only to the people described in section 2.</li>
+        <li>Connections are encrypted (HTTPS). The tools' back ends can be reached only through the site, which checks who you are and what you may do before passing a request on.</li>
+        <li>An FS Manager computer can deliver data only after an operator has accepted it; until then its files are held apart and are not visible in the competition.</li>
+        <li>Data is deleted automatically (section 5), dates of birth are removed from participant files, and photo metadata is removed from the documents the tools produce.</li>
+        <li>Download links contain a random code and expire.</li>
+      </ul>
     </section>
 
     <section id="retention" aria-labelledby="h-retention">
-      <h2 id="h-retention"><span class="num">4</span>How long data is kept</h2>
-      <p>Everything stored about a competition is removed after the competition: the uploaded files and the files sent from FS Manager, rosters, photos, the generated judges' papers and protocols, the e-mail send log, the FS Manager sender records and the list of users it is shared with. The operator may delete the competition earlier, and its data is then removed from every tool the following night. At the latest, the automatic deletion removes it: each competition has one deletion date that applies to all of its data in every tool, <strong>60 days after the competition is created</strong>. The operator may move the date one week later at a time when there is a reason to, for example when the competition takes place later than that, and the new date applies to every tool alike. An administrator may also set another deletion date, for example when an operator asks for it.</p>
-      <p>After deletion, only the competition's name, dates and usage counts remain, as statistics without personal data.</p>
+      <h2 id="h-retention"><span class="num">5</span>How long data is kept</h2>
+      <p>Everything stored about a competition is removed after the competition: the uploaded files and the files sent from FS Manager, rosters, photos, the generated judges' papers and protocols, the e-mail send log, the FS Manager sender records and the list of users it is shared with. Each competition has one deletion date that applies to all of its data in every tool, <strong>60 days after the competition is created</strong>. The operator may move the date one week later at a time when there is a reason to, for example when the competition takes place later than that, and the new date applies to every tool alike. An administrator may also set another deletion date, for example when an operator asks for it. The operator may delete the competition earlier, and its data is then removed from every tool the following night.</p>
+      <p>After deletion, only the per-competition statistics described in section 3 remain: the competition's name, dates and usage counts, without any personal data.</p>
       <ul>
-        <li>Judges' papers download links: at most 5 days.</li>
-        <li>Technical logs (errors and request traces of the service, and Microsoft's sign-in logs, which can include IP addresses and e-mail addresses): at most 90 days.</li>
-        <li>Administrator log (each administrative action and each sharing change: the e-mail address of whoever made it, the e-mail address of the user whose access changed, and the details that were changed): 1 year.</li>
+        <li>Judges' papers download links: at most 5 days, and never longer than the competition's data is kept.</li>
+        <li>Technical logs: at most 90 days.</li>
+        <li>Administrator log: 1 year.</li>
         <li>FS Manager transfer session records: deleted after 30 days without activity.</li>
-        <li>Mailgun: the service uses Mailgun's free plan, which keeps no copies of the messages and shows the delivery log (recipient address, time and delivery status) for 1 day. According to Mailgun's documentation, it keeps the delivery event data for 30 days, so the record is gone after 30 days at the latest.</li>
-        <li>Your entry in the user directory (name, e-mail address, account identifiers, first and last sign-in): removed after 12 months without signing in, unless you still own a competition whose data has not been deleted. Your access to competitions shared with you is removed with it. You can also ask for it to be removed earlier.</li>
+        <li>Mailgun's delivery event data: up to 30 days.</li>
+        <li>Your entry in the user directory: removed after 12 months without signing in, unless you still own a competition whose data has not been deleted. Your access to competitions shared with you is removed with it. You can also ask for it to be removed earlier.</li>
       </ul>
     </section>
 
     <section id="cookies" aria-labelledby="h-cookies">
-      <h2 id="h-cookies"><span class="num">5</span>Cookies and browser storage</h2>
-      <p>The service uses one cookie, the sign-in session cookie (<code>AppServiceAuthSession</code>), which is strictly necessary for signing in. A large session may be split into numbered parts (<code>AppServiceAuthSession1</code>, <code>AppServiceAuthSession2</code> and so on). Microsoft's sign-in page sets its own cookies under Microsoft's privacy statement. Your browser's local storage keeps the competition you have selected and a few display preferences, on your own device.</p>
-      <p>The service does not use cookies or anything else for analytics, marketing or tracking. Only the technical request logs described in section 4 are kept. The fonts are served from this site, so loading a page does not contact any third party.</p>
+      <h2 id="h-cookies"><span class="num">6</span>Cookies and browser storage</h2>
+      <p>The service uses one cookie, the sign-in session cookie (<code>AppServiceAuthSession</code>), which is strictly necessary for signing in. A large session may be split into numbered parts (<code>AppServiceAuthSession1</code>, <code>AppServiceAuthSession2</code> and so on). The sign-in pages of Microsoft, and of Google if you sign in with Google, set their own cookies under their own privacy statements.</p>
+      <p>Your browser's local storage keeps, on your own device: the competition you have selected (its name, code, dates, your role and its owner's name and e-mail address), a copy of the “What's New” list for a few minutes, and a display preference of some tools. It stays until you select another competition or clear your browser's site data.</p>
+      <p>The service does not use cookies or anything else for analytics, marketing or tracking. The fonts are served from this site, so loading a page does not contact any third party.</p>
     </section>
 
     <section id="rights" aria-labelledby="h-rights">
-      <h2 id="h-rights"><span class="num">6</span>Your rights</h2>
-      <p>You have the right to access the data concerning you, to have inaccurate data corrected or deleted, to restrict its processing and to object to it. If a photo of you has been used on the basis of consent, you can withdraw that consent at any time. A parent or guardian can make a request on behalf of a minor.</p>
-      <p>Send requests about data stored in figureskatingtools.com to <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>. We reply within one month.</p>
+      <h2 id="h-rights"><span class="num">7</span>Your rights</h2>
+      <p>You have the right to access the data concerning you, to have inaccurate data corrected, to have data deleted, to restrict its processing, to object to it and to receive the data you have given us in a machine-readable form (data portability, Article 20). If a photo of you has been used on the basis of consent, you can withdraw that consent at any time. A parent or guardian can act on behalf of a minor. Who answers depends on whose data it is:</p>
+      <ul>
+        <li><strong>Competition data</strong> (section 2): the organiser or result service that ran the competition, because it is the controller. If we receive such a request, we forward it to that organisation without undue delay and help it respond. A photography consent is withdrawn through the club that collected it.</li>
+        <li><strong>Your account and the logs</strong> (section 3): us, at <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>. We reply within one month, or tell you within that time if we need longer and why.</li>
+      </ul>
       <p>Requests about published results, such as removing your name from a result list, go to the site that publishes those results, because it decides what it publishes and is responsible for it. figureskatingtools.com publishes no results and cannot change other sites.</p>
     </section>
 
     <section id="complaint" aria-labelledby="h-complaint">
-      <h2 id="h-complaint"><span class="num">7</span>Right to lodge a complaint</h2>
+      <h2 id="h-complaint"><span class="num">8</span>Right to lodge a complaint</h2>
       <p>If you believe your data has been processed in breach of data protection law, you can lodge a complaint with the Office of the Data Protection Ombudsman (<a href="https://tietosuoja.fi/en">tietosuoja.fi</a>). We hope you will contact us first so that the matter can be put right quickly.</p>
     </section>
 
     <section id="updates" aria-labelledby="h-updates">
-      <h2 id="h-updates"><span class="num">8</span>Updates to this notice</h2>
-      <p>This notice is updated when practices change. Last updated 22 October 2026.</p>
+      <h2 id="h-updates"><span class="num">9</span>Changes to this notice</h2>
+      <p>This notice is updated when practices change, and when a tool starts to process a new kind of data. Last updated 22 October 2026.</p>
+      <ul>
+        <li>22 October 2026: The Customer is now the controller of competition data and we are its processor. Dates of birth are no longer stored. Added the sub-processor list, the record of accepted terms, how data is protected, and a Finnish translation.</li>
+        <li>19 October 2026: Private competitions with sharing, the user directory and 5-day copied judges' papers links.</li>
+        <li>15 October 2026: The administrator role and the administrator log.</li>
+        <li>14 October 2026: First version.</li>
+      </ul>
     </section>
   </main>
 
@@ -173,10 +245,12 @@
       <nav class="footer-links" aria-label="Footer">
         <a href="/">Home</a>
         <a href="/terms/">Terms of use</a>
+        <a href="/tietosuoja/" lang="fi" hreflang="fi">Tietosuojaseloste</a>
         <a href="https://github.com/figureskatingtools">
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m8 7-5 5 5 5"/><path d="m16 7 5 5-5 5"/></svg>
           Open source on GitHub</a>
       </nav>
+      <p class="footer-versions">Privacy notice <time datetime="2026-10-22" data-version="privacy">22 October 2026</time> · Terms of use <time datetime="2026-10-22" data-version="terms">22 October 2026</time></p>
     </div>
   </footer>
 </body>

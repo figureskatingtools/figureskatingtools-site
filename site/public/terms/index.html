@@ -1,15 +1,17 @@
 <!doctype html>
 <!--
   DRAFT for the owner's legal review: these terms of use have not yet been
-  reviewed by a lawyer. Keep them consistent with the privacy notice
-  (/privacy/), and update the "Last updated" date whenever they change.
+  reviewed by a lawyer. English only, and the English text is binding. Keep them
+  consistent with the privacy notice (/privacy/ and /tietosuoja/). The version
+  date in the "Last updated" line and the footer is TERMS_VERSION in
+  infra/functions/function_app.py (pinned by tests/test_legal_versions.py).
 -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Terms of use · Figure Skating Tools</title>
-  <meta name="description" content="The terms of use of figureskatingtools.com: who may use the service, users' responsibilities, sharing competitions, and the data processing terms for competition data.">
+  <meta name="description" content="The terms of use of figureskatingtools.com: who provides the service, accounts and acceptable use, sharing competitions, liability, and the data processing terms for competition data.">
   <link rel="icon" type="image/png" href="/favicon.png">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="stylesheet" href="/fonts/fonts.css">
@@ -30,7 +32,7 @@
       <div class="doc-head">
         <p class="eyebrow eyebrow--gold">figureskatingtools.com</p>
         <h1>Terms of use</h1>
-        <p class="updated">Last updated 22 October 2026</p>
+        <p class="updated">Last updated <time datetime="2026-10-22" data-version="terms">22 October 2026</time></p>
       </div>
     </div>
   </header>
@@ -39,107 +41,143 @@
     <a class="back" href="/">← Back to figureskatingtools.com</a>
 
     <div class="intro">
-      <p>These terms apply to everyone who uses figureskatingtools.com. You accept them when you sign up, and by using the service. They include the data processing terms you follow when you process personal data in the service on our behalf (section 7).</p>
+      <p>These terms apply to everyone who uses figureskatingtools.com. They include the data processing terms under which we process competition data on behalf of the organisation you use the service for (<a href="#data-processing">section 10</a>).</p>
       <p>How personal data is processed, where it is held and how long it is kept is described in the <a href="/privacy/">privacy notice</a>. These terms refer to it rather than repeat it.</p>
     </div>
 
     <section id="provider" aria-labelledby="h-provider">
       <h2 id="h-provider"><span class="num">1</span>Who provides the service</h2>
-      <p>figureskatingtools.com is provided and maintained by Markus Lintuala (“we”, “us”). Contact: <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>.</p>
+      <p>figureskatingtools.com is provided and maintained by Markus Lintuala (“we”, “us”), a private individual in Finland. It is a volunteer project, not a business, and it is not connected to any company, federation or employer. Contact: <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>.</p>
     </section>
 
     <section id="service" aria-labelledby="h-service">
-      <h2 id="h-service"><span class="num">2</span>The service and who may use it</h2>
-      <p>The service is a set of tools for figure skating result services: Judge Paper Creator, Protocol Generator, Score Modifier, the Competition Banner Generator, the GDPR Removal Tool and the live link that receives competition data from FS Manager. It produces a competition's paperwork; it does not publish results.</p>
+      <h2 id="h-service"><span class="num">2</span>The service</h2>
+      <p>The service is a set of tools for figure skating result services and competition organisers. It includes tools that produce a competition's documents from FS Manager data, tools that run entirely in your browser, tools that process data in memory without storing it, and a live link that receives competition data from FS Manager. It produces a competition's paperwork; it does not publish results.</p>
+      <p>These terms cover every tool of the service, including tools released after you accepted them, from the day they are released. When a tool processes a new kind of personal data, we update the privacy notice.</p>
+      <p>We may mark a tool or feature as a preview. A preview may change or be removed at short notice and may be less reliable than the rest of the service, so check its output with extra care.</p>
+      <p>Figure Skating Manager (FS Manager) is a third-party product. We are not affiliated with its maker, and the live link depends on FS Manager working as documented.</p>
+    </section>
+
+    <section id="accounts" aria-labelledby="h-accounts">
+      <h2 id="h-accounts"><span class="num">3</span>Accounts and access</h2>
       <ul>
         <li>The service is meant for result service operators and the staff of competition organisers. Access is by invitation: we decide who may use it.</li>
         <li>Your account is personal. Do not share your sign-in details or let anyone else use your account. Tell us at once if you suspect that someone else has used it.</li>
-        <li>If you use the service for a club, result service or other organisation, you confirm that you may do so on its behalf. These terms then apply to the organisation too.</li>
-        <li>Use the service and the data in it only to run the competitions you work on.</li>
+        <li>If you use the service on behalf of a club, result service, federation or other organisation, you confirm that you may do so, and that organisation is the <strong>Customer</strong> under these terms. If you use it for no organisation, you are the Customer yourself.</li>
+        <li>You accept these terms when you first sign in. When the terms change, we may ask you to accept them again before you continue (<a href="#changes">section 11</a>).</li>
       </ul>
     </section>
 
-    <section id="responsibilities" aria-labelledby="h-responsibilities">
-      <h2 id="h-responsibilities"><span class="num">3</span>Your responsibilities</h2>
+    <section id="acceptable-use" aria-labelledby="h-acceptable-use">
+      <h2 id="h-acceptable-use"><span class="num">4</span>Acceptable use</h2>
       <ul>
-        <li>Only upload or send the data the competition needs, and only data you are entitled to provide, for example data you have received from the organiser or from FS Manager for that competition.</li>
-        <li>Use a podium or team photo only when the people in it have a valid photography consent, for a minor given by a parent or guardian (see the <a href="/privacy/#data">privacy notice, section 2</a>).</li>
+        <li>Use the service and the data in it only to run the competitions you work on, and not for any other purpose.</li>
+        <li>Upload or send only the data the competition needs, and only data you are entitled to provide, for example data you have received from the organiser or from FS Manager for that competition.</li>
+        <li>Use a podium or team photo only when the people in it have a valid photography consent, which the Customer obtains and keeps. For a minor, consent is given by a parent or guardian.</li>
         <li>Keep the data accurate, and correct or delete it when it is not.</li>
         <li>Do not upload anything unlawful, anything that infringes someone else's rights, or anything harmful such as malware.</li>
         <li>Do not try to get around the sign-in or access controls, reach data you have no access to, or disrupt the service.</li>
         <li>Check what the tools produce before you print, send or publish it. The tools work from the data they are given, and a mistake in the data or in the tools can end up in the documents.</li>
         <li>Share judges' papers download links only with the people who need them: anyone who has a link can download the papers until it expires.</li>
+        <li>Keep your account and devices secure: protect your sign-in, lock your devices, keep their software up to date, and sign out on a computer that others use.</li>
       </ul>
     </section>
 
     <section id="sharing" aria-labelledby="h-sharing">
-      <h2 id="h-sharing"><span class="num">4</span>Sharing competitions</h2>
+      <h2 id="h-sharing"><span class="num">5</span>Sharing competitions</h2>
       <p>The owner of a competition, normally the user who created it, can share it with other users and decide whether each of them may only view it or also edit it. Only the owner and the administrators can change who has access. The owner can take access away, and a user can leave a competition shared with them at any time.</p>
       <ul>
         <li>Share a competition only with people who need it for the competition, and remove their access when they no longer do.</li>
-        <li>Everyone with access to a competition sees its data and each other's names and e-mail addresses, as described in the <a href="/privacy/#location">privacy notice, section 3</a>.</li>
+        <li>Everyone with access to a competition sees its data and each other's names and e-mail addresses, as described in the <a href="/privacy/#data">privacy notice, section 2</a>.</li>
         <li>Users a competition is shared with are bound by these terms in the same way as its owner.</li>
       </ul>
     </section>
 
+    <section id="content" aria-labelledby="h-content">
+      <h2 id="h-content"><span class="num">6</span>Your content, our rights and open source</h2>
+      <p>You keep all rights to what you upload. You give us only the right to store and process it to provide the service. You are responsible for having the right to use the logos, photos and files you upload.</p>
+      <p>The documents the tools produce from your data are yours. They carry a Figureskatingtools mark, such as a “Created with Figureskatingtools.com” footer or closing page, which you may keep or remove. The Figureskatingtools name, logo and document templates are ours.</p>
+      <p>The source code of the tools is published on GitHub. Where a repository includes a licence, currently the Creative Commons Attribution-ShareAlike 4.0 International licence (CC BY-SA 4.0), that licence, not these terms, governs your use of that code. Code published without a licence may be read, but publishing it does not give you a right to reuse it. These terms govern the hosted service at figureskatingtools.com.</p>
+    </section>
+
+    <section id="fees" aria-labelledby="h-fees">
+      <h2 id="h-fees"><span class="num">7</span>Fees</h2>
+      <p>The service is currently provided without charge. We may introduce fees later. If we do, we will tell users at least 60 days before a fee applies, and you can stop using the service before then without paying anything.</p>
+    </section>
+
     <section id="availability" aria-labelledby="h-availability">
-      <h2 id="h-availability"><span class="num">5</span>Free of charge and “as is”</h2>
-      <p>The service is free of charge and provided “as is” and “as available”. We maintain it as well as we reasonably can, but we do not promise that it is always available, free of errors or suitable for a particular purpose. We may change, add or remove features, and we may take the service down for maintenance without notice.</p>
-      <p>The service is not an archive. Competition data is deleted automatically (section 7), so keep your own copies of anything you need later.</p>
-      <p>To the extent permitted by law, we are not liable for indirect or consequential loss, or for loss caused by the service being unavailable, by an error in the tools' output, or by data being deleted as these terms and the privacy notice describe. This does not limit any liability that cannot be limited under mandatory law, such as liability for intentional or grossly negligent conduct, or a data subject's rights under data protection law.</p>
+      <h2 id="h-availability"><span class="num">8</span>Availability, “as is” and liability</h2>
+      <p>The service is provided “as is” and “as available”. We maintain it as well as we reasonably can, but we do not promise that it is always available, free of errors or suitable for a particular purpose. We may change, add or remove features, and we may take the service down for maintenance without notice.</p>
+      <p>The service is not an archive. Competition data is deleted automatically, as the <a href="/privacy/#retention">privacy notice, section 5</a>, describes, so keep your own copies of anything you need later.</p>
+      <p>We are not liable for indirect or consequential loss, such as lost income or the cost of rearranging a competition. Our total liability for direct loss is limited to 500 euros per Customer per calendar year. These limits do not apply to loss caused intentionally or through gross negligence, or to any liability that mandatory law does not allow to be limited, such as a data subject's rights under data protection law.</p>
+      <p>The Customer compensates us for claims that third parties make against us because of content uploaded or shared in the service in breach of these terms, for example photos used without consent or files the Customer had no right to upload.</p>
     </section>
 
     <section id="termination" aria-labelledby="h-termination">
-      <h2 id="h-termination"><span class="num">6</span>Suspension, termination and deleting your account</h2>
+      <h2 id="h-termination"><span class="num">9</span>Suspension, termination and deleting your account</h2>
       <p>We may suspend or end your access if you break these terms, if your use puts the service or other people's data at risk, or if you no longer need access. We may also end the whole service; if we do, we will tell users in advance when we reasonably can, so that they have time to download what they need.</p>
-      <p>You may stop using the service at any time. You can delete your competitions yourself, and you can ask us to delete your account at <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>. An account that has not been used for 12 months is deleted automatically, unless it still owns a competition whose data has not been deleted, as described in the <a href="/privacy/#retention">privacy notice, section 4</a>. When your access ends, delete your own copies of the competition data as section 7 requires; the data in the service is deleted under its retention rules.</p>
+      <p>You may stop using the service at any time. You can delete your competitions yourself, and you can ask us to delete your account at <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>. An account that has not been used for 12 months is deleted automatically, unless it still owns a competition whose data has not been deleted. When your access ends, keep the copies your own retention rules require; we delete the data in the service as the <a href="/privacy/#retention">privacy notice, section 5</a>, describes.</p>
     </section>
 
     <section id="data-processing" aria-labelledby="h-data-processing">
-      <h2 id="h-data-processing"><span class="num">7</span>Data processing terms</h2>
-      <p>This section is the agreement on processing personal data required by Article 28 of the EU General Data Protection Regulation (GDPR). It applies to every user.</p>
+      <h2 id="h-data-processing"><span class="num">10</span>Data processing terms</h2>
+      <p>This section is the agreement on processing personal data required by Article 28 of the EU General Data Protection Regulation (GDPR), between the Customer and us. It applies to the competition data described in the <a href="/privacy/#data">privacy notice, section 2</a>. The data about users and the running of the service, for which we are the controller, is described in the <a href="/privacy/#account-data">privacy notice, section 3</a>.</p>
 
       <h3>Roles</h3>
-      <p>We (Markus Lintuala) are the controller of all personal data in the service, including the competition data, as stated in the <a href="/privacy/#controller">privacy notice, section 1</a>. When you use the service, you process that data on our behalf as a processor. The companies that host the service and send its e-mail (Microsoft and Mailgun) are our own processors, described in the <a href="/privacy/#location">privacy notice, section 3</a>.</p>
+      <p>The Customer is the controller of the competition data: it decides that the competition is run, what data is exported from FS Manager, who receives judges' papers and what is published. We process competition data on the Customer's behalf as its processor. Microsoft and Mailgun are our sub-processors.</p>
+      <p>If the Customer is a result service working for an organiser, the organiser is the controller, the Customer is the organiser's processor and we are a sub-processor. You confirm that the organiser has approved the use of this service for its competition.</p>
 
-      <h3>Subject matter, nature and purpose</h3>
-      <p>You process competition data when you upload it, send it from FS Manager, enter, view or correct it, produce documents from it with the tools (judges' papers, the protocol, readable score sheets and redacted versions of your own published result files), send judges' papers, download files and share a competition with other users. You do so only to produce the paperwork for the competition at hand.</p>
+      <h3>The Customer's obligations as controller</h3>
+      <ul>
+        <li>Have a lawful basis for processing the competition data in the service.</li>
+        <li>Inform skaters, officials and the other people concerned in the Customer's own privacy notice.</li>
+        <li>Obtain and keep the photography consents (for a minor, from a parent or guardian).</li>
+        <li>Upload only what the competition needs.</li>
+        <li>Share competitions and download links only with people the Customer has authorised.</li>
+        <li>Answer the requests of data subjects about competition data. We help (see below).</li>
+        <li>Make sure its users keep their accounts and devices secure.</li>
+      </ul>
 
-      <h3>Duration</h3>
-      <p>Processing lasts as long as you have access to the competition and its data is kept. Each competition has one deletion date, 60 days after it is created; it can be moved one week later at a time when there is a reason to, and an administrator can set another date. A competition can also be deleted earlier, and its data is then removed from every tool the following night. The full retention rules are in the <a href="/privacy/#retention">privacy notice, section 4</a>. What you must do with your own copies is under “End of processing” below.</p>
+      <h3>Our obligations as processor</h3>
+      <ul>
+        <li><strong>Instructions.</strong> We process competition data only on the Customer's documented instructions: these terms, the privacy notice and what the Customer's users do in the tools. If we think an instruction breaks data protection law, we tell the Customer. If EU or Finnish law requires us to process the data in some other way, we tell the Customer before we do, unless that law forbids it.</li>
+        <li><strong>Confidentiality.</strong> The administrators are bound by confidentiality, and they access competition data only to support the Customer or to keep the service running and secure.</li>
+        <li><strong>Security.</strong> We protect the data with the measures described in the <a href="/privacy/#security">privacy notice, section 4</a>.</li>
+        <li><strong>Sub-processors.</strong> The Customer authorises the sub-processors named in the <a href="/privacy/#subprocessors">privacy notice, section 4</a>. Their data processing terms bind them to data protection obligations of the same kind as these. We tell users at least 30 days before we add or replace a sub-processor, by e-mail and in the service. A Customer that objects can stop using the service and delete its competitions before the change takes effect.</li>
+        <li><strong>Data subjects' requests.</strong> If we receive a request about competition data, we forward it to the Customer without undue delay, and we help the Customer respond, as far as the service allows.</li>
+        <li><strong>Breaches and other assistance.</strong> We tell the Customer without undue delay after becoming aware of a personal data breach that affects its competition data, and give it the information we have to help it deal with the breach. We also help the Customer with its security, impact assessment and consultation obligations, taking into account what the service is and the information we have.</li>
+        <li><strong>End of processing.</strong> Competition data is deleted automatically on the competition's deletion date, as the <a href="/privacy/#retention">privacy notice, section 5</a>, describes, or earlier when the Customer deletes the competition or asks us to. Download what you need before then. Only per-competition statistics without personal data remain.</li>
+        <li><strong>Information and audits.</strong> On request, we give the Customer the information needed to show that we meet these obligations. Audits are agreed case by case, carried out remotely where possible and at the Customer's cost.</li>
+        <li><strong>Transfers.</strong> The service is hosted in the EU. Our sub-processors are US companies that may access data from the United States in limited cases, under the safeguards described in the <a href="/privacy/#location">privacy notice, section 4</a>.</li>
+      </ul>
+
+      <h3>Subject matter, duration, nature and purpose</h3>
+      <p>We store competition data and produce documents from it with the tools (such as judges' papers, the protocol, readable score sheets and redacted versions of a result service's own published result files), send judges' papers by e-mail, make files available for download and let users share a competition with other users. The purpose is to produce the paperwork for the competition at hand. Processing lasts until the competition's data is deleted.</p>
 
       <h3>Data subjects and types of data</h3>
       <ul>
-        <li>Skaters and team members: name, club, nation, category, starting order, placement, scores and withdrawal. FS Manager's participant files may also contain other details, such as gender and nationality. Dates of birth are removed from them when they arrive and are not stored.</li>
+        <li>Skaters and team members: name, club, nation, category, starting order, placement, scores and withdrawal. FS Manager's participant files also carry gender, nationality, the events and team a participant is registered for and FS Manager's participant codes. Dates of birth are removed from them before they are stored.</li>
         <li>People in podium and team photos: their photo. They may be minors.</li>
         <li>Judges and other competition officials: name and role.</li>
         <li>Recipients of the judges' papers e-mail: e-mail address, and the send log.</li>
-        <li>People whose name an operator removes from its own published results with the GDPR Removal Tool: name and club as they appear in those results.</li>
-        <li>Other users of the service: the names and e-mail addresses you see when you share a competition or work on it with others.</li>
+        <li>People whose name a result service removes from its own published results: name and club as they appear in those results.</li>
       </ul>
       <p>The service is not meant for special categories of personal data, such as health data. Do not upload them.</p>
-
-      <h3>Your obligations as a processor</h3>
-      <ul>
-        <li><strong>Instructions.</strong> Process the data only on our documented instructions, which are these terms and the privacy notice, and only for the competition at hand. If you believe an instruction breaks data protection law, tell us. If EU or Finnish law requires you to process the data in some other way, tell us before you do, unless that law forbids it.</li>
-        <li><strong>Confidentiality.</strong> Keep the data confidential. Give it only to people who need it for the competition, through sharing in the service or a judges' papers link, and make sure that anyone you give it to knows it is confidential.</li>
-        <li><strong>Security.</strong> Keep your own account and devices secure: protect your sign-in, lock your devices, keep their software up to date, and sign out on a computer that others use.</li>
-        <li><strong>Downloads and copies.</strong> Do not use the data for your own purposes or for anyone else's. Handle downloaded files (judges' papers, protocols, score sheets, ZIP files) and any other copies securely, and keep them only where they are needed.</li>
-        <li><strong>No sub-processors.</strong> Do not engage anyone else to process the data for you, such as another service or company, without our prior written authorisation.</li>
-        <li><strong>Assisting us.</strong> Help us answer data subjects who use their rights: if someone asks you about their data, forward the request to us without undue delay. Report any personal data breach you notice, such as a lost device holding downloaded papers, a link sent to the wrong person or signs that someone else has used your account, to <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a> without undue delay, and help us deal with it.</li>
-        <li><strong>End of processing.</strong> When you no longer need the data for the competition, when your access ends, or at the latest when the competition's data is deleted from the service, delete the files you downloaded or exported and any other copies, unless the law requires you to keep them.</li>
-        <li><strong>Audits.</strong> On reasonable request, give us the information needed to show that you meet these obligations, and allow and contribute to audits.</li>
-      </ul>
     </section>
 
     <section id="changes" aria-labelledby="h-changes">
-      <h2 id="h-changes"><span class="num">8</span>Changes to these terms</h2>
-      <p>We may change these terms, for example when the service or the law changes. We will tell users about significant changes in advance, in the service or by e-mail. If you continue to use the service after a change takes effect, you accept the new terms. We may ask you to accept the changed terms again before you can continue.</p>
+      <h2 id="h-changes"><span class="num">11</span>Changes to these terms</h2>
+      <p>We may change these terms, for example when the service or the law changes. We will tell you about significant changes in advance, in the service or by e-mail, or we may ask you to accept the changed terms again before you continue. If you continue to use the service after a change takes effect, you accept the new terms.</p>
     </section>
 
-    <section id="law" aria-labelledby="h-law">
-      <h2 id="h-law"><span class="num">9</span>Governing law</h2>
-      <p>These terms are governed by the laws of Finland. We hope any disagreement can be settled by talking to us first; otherwise it is resolved in a Finnish court. This does not limit any mandatory right a consumer has under the law of their home country.</p>
+    <section id="other" aria-labelledby="h-other">
+      <h2 id="h-other"><span class="num">12</span>Other terms</h2>
+      <ul>
+        <li>We may transfer the service to another person or organisation that continues it. We will tell users in advance, and you can delete your account and competitions before the transfer takes effect.</li>
+        <li>If a provision of these terms is found invalid, the rest of the terms still apply.</li>
+        <li>These terms are written in English. Any translation is for convenience, and the English text prevails.</li>
+        <li>These terms are governed by the laws of Finland. We hope any disagreement can be settled by talking to us first. Otherwise it is resolved by the District Court of Itä-Uusimaa (Itä-Uudenmaan käräjäoikeus), Finland. If you are a consumer, you may also take the matter to the district court of your own home area, and these terms do not limit any mandatory right you have as a consumer.</li>
+      </ul>
       <p>Last updated 22 October 2026.</p>
     </section>
   </main>
@@ -150,10 +188,12 @@
       <nav class="footer-links" aria-label="Footer">
         <a href="/">Home</a>
         <a href="/privacy/">Privacy notice</a>
+        <a href="/tietosuoja/" lang="fi" hreflang="fi">Tietosuojaseloste</a>
         <a href="https://github.com/figureskatingtools">
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m8 7-5 5 5 5"/><path d="m16 7 5 5-5 5"/></svg>
           Open source on GitHub</a>
       </nav>
+      <p class="footer-versions">Terms of use <time datetime="2026-10-22" data-version="terms">22 October 2026</time> · Privacy notice <time datetime="2026-10-22" data-version="privacy">22 October 2026</time></p>
     </div>
   </footer>
 </body>
