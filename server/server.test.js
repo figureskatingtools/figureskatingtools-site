@@ -1598,6 +1598,7 @@ const IDENTITY_HEADERS = [
     'x-forwarded-user-email',
     'x-forwarded-user-name',
     'x-forwarded-user-admin',
+    'x-forwarded-user-terms-accepted',
 ];
 
 // Everything a malicious browser could try to smuggle to a backend.
@@ -1607,6 +1608,7 @@ const SPOOFED = {
     'x-forwarded-user-email': 'victim@example.com',
     'x-forwarded-user-name': 'Victim',
     'x-forwarded-user-admin': '1',
+    'x-forwarded-user-terms-accepted': '1',
     'x-ms-client-principal-name': 'victim@example.com',
     'x-proxy-secret': 'guess',
     authorization: 'Bearer a.b.c',
@@ -1615,7 +1617,7 @@ const SPOOFED = {
 test('requestIdentity reads oid/tid from the long and the short claim types, lowercased', () => {
     const config = loadConfig({});
     const long = requestIdentity(fakeReq(AUTH), config);
-    assert.deepEqual(long, { tid: TENANT_ID, oid: OID, email: 'skater@example.com', name: 'Skater Person', roles: [], dev: false });
+    assert.deepEqual(long, { tid: TENANT_ID, oid: OID, email: 'skater@example.com', name: 'Skater Person', roles: [], termsAccepted: false, dev: false });
 
     const short = requestIdentity(
         fakeReq({ 'x-ms-client-principal': principalFor('Coach@Example.COM', { oid: OID.toUpperCase(), tid: TENANT_ID.toUpperCase() }) }),
@@ -1674,6 +1676,8 @@ test('every backend gets tid/oid/email/name from the principal; client copies ar
             assert.equal(seen.headers['x-forwarded-user-email'], 'arra.ohman@example.com', seen.url);
             assert.equal(decodeURIComponent(seen.headers['x-forwarded-user-name']), 'Ärrä Öhman 张伟', seen.url);
             assert.equal(seen.headers['x-forwarded-user-admin'], undefined, seen.url);
+            // A workforce principal has no termsAccepted claim; the client copy is dropped.
+            assert.equal(seen.headers['x-forwarded-user-terms-accepted'], undefined, seen.url);
             assert.notEqual(seen.headers['x-proxy-secret'], 'guess', seen.url);
             assert.equal(seen.headers['x-ms-client-principal-name'], undefined, seen.url);
             assert.equal(seen.headers['x-ms-client-principal'], undefined, seen.url);
@@ -2150,6 +2154,54 @@ test('External ID tenant: the e-mail comes from the email claim, never the displ
         await close(server);
         await close(upstream.server);
     }
+});
+
+test('the sign-up termsAccepted claim is forwarded as x-forwarded-user-terms-accepted: 1 to every backend', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter(
+        externalConfig({
+            targets: targets({
+                judgepapers: { url: upstream.url, secret: 'jp' },
+                protocolgenerator: { url: upstream.url, secret: 'pg' },
+                platform: { url: upstream.url, secret: 'pf' },
+            }),
+        })
+    );
+    try {
+        for (const p of ['/api/competitions', '/judgepapers/api/x', '/protocolgenerator/api/x']) {
+            const res = await request(port, p, { headers: externalHeaders() });
+            assert.equal(res.status, 200, p);
+        }
+        for (const seen of upstream.received) {
+            assert.equal(seen.headers['x-forwarded-user-terms-accepted'], '1', seen.url);
+        }
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('termsAccepted counts only as boolean true or the string "true"; anything else forwards nothing', () => {
+    const config = externalConfig();
+    const withClaim = (val) => {
+        const claims = [
+            { typ: 'roles', val: 'Site.Access' },
+            { typ: OID_CLAIM, val: EXTERNAL_OID },
+            { typ: TID_CLAIM, val: EXTERNAL_TENANT_ID },
+            { typ: 'email', val: 'skater@gmail.com' },
+        ];
+        if (val !== undefined) claims.push({ typ: 'termsAccepted', val });
+        return fakeReq({ 'x-ms-client-principal': principalHeader({ auth_typ: 'aad', claims }) });
+    };
+    for (const val of ['true', 'True', ' TRUE ', true]) {
+        assert.equal(requestIdentity(withClaim(val), config).termsAccepted, true, String(val));
+    }
+    for (const val of [undefined, 'false', '', '1', 'yes', false, 1]) {
+        assert.equal(requestIdentity(withClaim(val), config).termsAccepted, false, String(val));
+    }
+    // The dev stand-in never claims an acceptance.
+    const dev = requestIdentity(fakeReq({}), { devFakeUser: 'dev@example.com' });
+    assert.equal(dev.termsAccepted, false);
 });
 
 test('External ID tenant without an email claim forwards no e-mail (userDetails / preferred_username are never used)', async () => {

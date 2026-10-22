@@ -357,6 +357,12 @@ const EMAIL_CLAIMS = [
 const ROLE_CLAIMS = ['roles', 'http://schemas.microsoft.com/ws/2008/06/identity/claims/role'];
 const OID_CLAIMS = ['http://schemas.microsoft.com/identity/claims/objectidentifier', 'oid'];
 const TID_CLAIMS = ['http://schemas.microsoft.com/identity/claims/tenantid', 'tid'];
+// The External ID sign-up's required "I accept the terms of use" checkbox
+// (infra/EXTERNAL-ID.md), a Boolean claim. Forwarded as
+// x-forwarded-user-terms-accepted: 1 so the platform can record which terms
+// version was current; nothing is ever refused without it (workforce sign-ins
+// never carry it).
+const TERMS_ACCEPTED_CLAIMS = ['termsAccepted'];
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 // DEV_FAKE_USER's synthetic identity (never in production): a fixed tenant
@@ -389,13 +395,21 @@ function claimValues(parsed, types) {
     return claims.filter((c) => c && types.includes(c.typ) && typeof c.val === 'string').map((c) => c.val.trim());
 }
 
+// True only for a claim value of boolean true or the string "true" (any case).
+function termsAcceptedClaim(parsed) {
+    const claims = (parsed && parsed.claims) || [];
+    if (!Array.isArray(claims)) return false;
+    return claims.some((c) => c && TERMS_ACCEPTED_CLAIMS.includes(c.typ)
+        && (c.val === true || (typeof c.val === 'string' && c.val.trim().toLowerCase() === 'true')));
+}
+
 function guidClaim(parsed, types) {
     const value = String(findClaim(parsed, types) || '').trim().toLowerCase();
     return GUID_PATTERN.test(value) ? value : '';
 }
 
 // The signed-in user as the backends get to see them:
-// {tid, oid, email (lowercased), name, dev} — or null when there is no usable
+// {tid, oid, email (lowercased), name, roles, termsAccepted, dev} — or null when there is no usable
 // identity. Only a decodable Easy Auth principal that carries both oid and tid
 // counts (a bare X-MS-CLIENT-PRINCIPAL-NAME never does), or DEV_FAKE_USER
 // locally when no principal header is present at all.
@@ -411,13 +425,14 @@ function requestIdentity(req, config) {
             email: normalizeEmail(principalEmail(parsed, req, isExternalTenant(tid, config))),
             name: String(findClaim(parsed, NAME_CLAIMS) || '').trim(),
             roles: claimValues(parsed, ROLE_CLAIMS),
+            termsAccepted: termsAcceptedClaim(parsed),
             dev: false,
         };
     }
     if (config.devFakeUser && !req.headers['x-ms-client-principal-name']) {
         const email = normalizeEmail(config.devFakeUser);
         const roles = Array.isArray(config.devFakeRoles) ? [...config.devFakeRoles] : [];
-        return { tid: DEV_TENANT_ID, oid: devObjectId(email), email, name: config.devFakeUser, roles, dev: true };
+        return { tid: DEV_TENANT_ID, oid: devObjectId(email), email, name: config.devFakeUser, roles, termsAccepted: false, dev: true };
     }
     return null;
 }
@@ -732,6 +747,7 @@ function proxy(req, res, config, tool, targetPath, identity) {
         // Names are non-ASCII more often than not; headers must be ASCII.
         if (identity.name) outHeaders['x-forwarded-user-name'] = encodeURIComponent(identity.name);
         if (isAdminRequest(req, config)) outHeaders['x-forwarded-user-admin'] = '1';
+        if (identity.termsAccepted) outHeaders['x-forwarded-user-terms-accepted'] = '1';
     }
 
     const proxyReq = transport.request(

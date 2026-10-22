@@ -255,8 +255,12 @@ User attributes collected at sign-up:
   label links the privacy notice (`https://figureskatingtools.com/privacy`,
   Finnish `…/tietosuoja`). Language customisation: a Finnish (`fi`) override of
   the page and the checkbox label. Conditional Access "Terms of use" isn't
-  available in external tenants, hence the checkbox. Acceptance is not versioned:
-  changing the terms later needs an app-side re-acceptance gate.
+  available in external tenants, hence the checkbox. The claim is not versioned,
+  so the platform records the version: the router forwards the claim as
+  `X-Forwarded-User-Terms-Accepted: 1`, and the platform writes `TermsVersion`,
+  `PrivacyVersion` and `TermsAcceptedUtc` on the `users` row the first time it
+  sees it (never overwritten; nobody is refused without it).
+  `terms_outdated()` is the check a later re-acceptance step will use.
 
 Token claims (ID token): `tid`, `oid`, `email`, `name`, and **`termsAccepted`**
 — added under the enterprise app's **Single sign-on → Attributes & Claims** as a

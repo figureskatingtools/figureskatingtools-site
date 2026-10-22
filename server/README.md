@@ -75,6 +75,9 @@ site root/
     (names are often non-ASCII); left out when there is none.
   - `x-forwarded-user-admin: 1` — only when `isAdminRequest` is true (the
     `ADMIN_ROLE` app role). The platform's admin routes trust it like the tools do.
+  - `x-forwarded-user-terms-accepted: 1` — only when the principal carries the
+    External ID sign-up's `termsAccepted` claim as `true`. The platform records
+    the terms version it stands for on the `users` row; the tools ignore it.
   The raw Easy Auth principal header is *not* forwarded. `/judgepapers/download`
   (public, no principal) gets the secret but none of the identity headers.
 - Hop-by-hop response headers (`connection`, `transfer-encoding`, …) are

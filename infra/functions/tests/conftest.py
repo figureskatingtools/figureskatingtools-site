@@ -114,8 +114,10 @@ class FakeTableClient(_FakeTableClient):
 def _fresh_process_caches():
     """The LastSeen throttle is per-process state."""
     fa._LAST_SEEN_WRITES.clear()
+    fa._TERMS_RECORDED.clear()
     yield
     fa._LAST_SEEN_WRITES.clear()
+    fa._TERMS_RECORDED.clear()
 
 
 @pytest.fixture

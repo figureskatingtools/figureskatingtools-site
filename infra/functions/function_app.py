@@ -9,6 +9,8 @@ which owns the Entra login and forwards every `/api/*` request here with
     X-Forwarded-User-Email:  their e-mail, lowercased (display and audit only)
     X-Forwarded-User-Name:   their display name, percent-encoded
     X-Forwarded-User-Admin:  "1" for the router's admins (informational here)
+    X-Forwarded-User-Terms-Accepted: "1" when the sign-in carries the sign-up's
+                             termsAccepted claim (recorded once, never required)
 
 The browser never reaches this app directly, but its hostname is public, so
 the gate (`_require_user`) FAILS CLOSED: PROXY_SHARED_SECRET must be set and
@@ -23,7 +25,9 @@ Users and access — the platform owns an internal user id (GUID), decoupled
 from the identity provider, and every grant references only that id:
 
     users              PK "USER",     RK <userId>        Email, DisplayName,
-                                                          FirstSeenUtc, LastSeenUtc
+                                                          FirstSeenUtc, LastSeenUtc,
+                                                          TermsVersion, PrivacyVersion,
+                                                          TermsAcceptedUtc (optional)
                                                           (PII: this app only)
                        PK "SEARCHRATE", RK <userId>      MinuteStart/Count,
                                                           DayStart/Count
@@ -374,6 +378,13 @@ PK_SEARCH_RATE = "SEARCHRATE"
 RECENT_SHARE_USERS = 10
 # A users row unseen this long, owning no live competition, is removed nightly.
 INACTIVE_USER_DAYS = 365
+# The current terms of use and privacy notice, as the dates of their "Last
+# updated" lines. KEEP IN SYNC with site/public/terms/, site/public/privacy/
+# and site/public/tietosuoja/ (pinned by tests/test_legal_versions.py): bump
+# both here and in the pages whenever a document changes in substance.
+TERMS_VERSION = "2026-10-22"
+PRIVACY_VERSION = "2026-10-22"
+_LEGAL_VERSION_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 # The legacy e-mail claim (_claim_legacy_competitions) only ever considers
 # competitions created before this instant: the rollout of the access model.
 # MUST be <= the moment the access model reaches prod — anything created
@@ -604,7 +615,8 @@ def _require_user(req: func.HttpRequest):
         return _error("tenant_not_allowed", "Accounts of your organisation cannot use this site.", 403)
 
     try:
-        user_id = _resolve_user(tid, oid, email, name)
+        user_id = _resolve_user(tid, oid, email, name,
+                                terms_accepted=_forwarded_terms_accepted(req))
     except MigrationPending:
         logging.warning(f"External identity '{tid}_{oid}' has no platform user yet; migration pending")
         return _error("migration_pending",
@@ -655,7 +667,8 @@ def _identity_row_key(tid: str, oid: str) -> str:
     return f"{tid}_{oid}"
 
 
-def _resolve_user(tid: str, oid: str, email: str, name: str) -> str | None:
+def _resolve_user(tid: str, oid: str, email: str, name: str,
+                  terms_accepted: bool = False) -> str | None:
     """Identity -> userId; creates the user on the first request.
 
     Point read first. A new identity writes the users row, then INSERTS the
@@ -666,6 +679,10 @@ def _resolve_user(tid: str, oid: str, email: str, name: str) -> str | None:
     An identity of an Entra External ID tenant (EXTERNAL_TENANT_IDS) with no
     identity row raises MigrationPending before anything is written: until
     the phase C linking code exists, it must not become a new user.
+
+    `terms_accepted` (the router's X-Forwarded-User-Terms-Accepted: the sign-up
+    checkbox's claim) records the current TERMS_VERSION on the users row the
+    first time it is seen; see _record_terms_acceptance.
     """
     identities = get_table_client(_user_identities_table_name())
     users = get_table_client(_users_table_name())
@@ -679,6 +696,8 @@ def _resolve_user(tid: str, oid: str, email: str, name: str) -> str | None:
         link = None
     if link is not None and link.get("UserId"):
         _touch_user(users, link["UserId"], email, name)
+        if terms_accepted:
+            _record_terms_acceptance(users, link["UserId"])
         return link["UserId"]
 
     # Entra External ID: no new users until the linking code exists (phase C).
@@ -695,6 +714,7 @@ def _resolve_user(tid: str, oid: str, email: str, name: str) -> str | None:
         "DisplayName": name,
         "FirstSeenUtc": now,
         "LastSeenUtc": now,
+        **(_terms_acceptance_columns(now) if terms_accepted else {}),
     })
     try:
         _create_row(identities, {
@@ -713,12 +733,16 @@ def _resolve_user(tid: str, oid: str, email: str, name: str) -> str | None:
         winner = link.get("UserId") or None
         if winner:
             _touch_user(users, winner, email, name)
+            if terms_accepted:
+                _record_terms_acceptance(users, winner)
         return winner
     except Exception:
         _delete_user_row(users, user_id)
         raise
 
     _LAST_SEEN_WRITES[user_id] = time.monotonic()
+    if terms_accepted:
+        _TERMS_RECORDED.add(user_id)
     _claim_legacy_competitions(user_id, email)
     return user_id
 
@@ -752,6 +776,68 @@ def _touch_user(users, user_id: str, email: str, name: str) -> None:
         _LAST_SEEN_WRITES[user_id] = now
     except Exception as e:
         logging.warning(f"Could not refresh users row '{user_id}': {e}")
+
+
+# ── terms acceptance ──────────────────────────────────────────────────────────
+# The External ID sign-up has a required "I accept the terms of use" checkbox,
+# which arrives as the `termsAccepted` claim; the router forwards it as
+# X-Forwarded-User-Terms-Accepted: 1. The claim is not versioned, so the
+# platform records which version was current when it first saw the acceptance:
+# users row TermsVersion, PrivacyVersion, TermsAcceptedUtc. Written once, never
+# overwritten by a later sign-in (that would turn an old checkbox into consent
+# to new terms). Nothing is ever refused for a missing record: workforce
+# sign-ins carry no claim. terms_outdated() is the check a future re-acceptance
+# step will use.
+
+# userIds whose acceptance this process has already seen recorded.
+_TERMS_RECORDED: set = set()
+
+
+def _forwarded_terms_accepted(req: func.HttpRequest) -> bool:
+    return _header(req, "X-Forwarded-User-Terms-Accepted").strip() == "1"
+
+
+def _terms_acceptance_columns(now: str) -> dict:
+    return {"TermsVersion": TERMS_VERSION, "PrivacyVersion": PRIVACY_VERSION,
+            "TermsAcceptedUtc": now}
+
+
+def terms_outdated(accepted_version, current_version: str = TERMS_VERSION) -> bool:
+    """True when a user's accepted terms version is older than the current one.
+    A missing or malformed record counts as outdated too, so a re-acceptance
+    step would ask that user; callers decide what to do (today: nothing)."""
+    accepted = str(accepted_version or "").strip()
+    if not _LEGAL_VERSION_RE.fullmatch(accepted):
+        return True
+    return accepted < current_version
+
+
+def _record_terms_acceptance(users, user_id: str) -> None:
+    """Write the acceptance columns on an existing users row that has none yet.
+    At most one read per user per process once recorded; best effort, never
+    raises (a missed write is retried on the next request)."""
+    if user_id in _TERMS_RECORDED:
+        return
+    try:
+        row = users.get_entity(partition_key=PK_USER, row_key=user_id)
+    except ResourceNotFoundError:
+        return
+    except Exception as e:
+        logging.warning(f"Could not read users row '{user_id}' for terms acceptance: {e}")
+        return
+    if row.get("TermsVersion"):
+        _TERMS_RECORDED.add(user_id)
+        return
+    try:
+        users.update_entity(
+            {"PartitionKey": PK_USER, "RowKey": user_id, **_terms_acceptance_columns(_now_utc())},
+            mode=UpdateMode.MERGE, etag=_entity_etag(row),
+            match_condition=MatchConditions.IfNotModified)
+        _TERMS_RECORDED.add(user_id)
+    except ResourceModifiedError:
+        pass  # a concurrent write; the next request looks again
+    except Exception as e:
+        logging.warning(f"Could not record the terms acceptance of '{user_id}': {e}")
 
 
 def _owner_lock_row(competition_id: str, owner_id: str, now: str) -> dict:
@@ -3348,6 +3434,7 @@ def _sweep_inactive_users(now: datetime, purge_enabled: bool, summary: dict) -> 
             continue
         _delete_search_rate_row(users, user_id)
         _LAST_SEEN_WRITES.pop(user_id, None)
+        _TERMS_RECORDED.discard(user_id)
         summary["users_deleted"] += 1
 
 
