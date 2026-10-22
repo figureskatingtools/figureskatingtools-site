@@ -1196,55 +1196,68 @@ test('/changelog-live 502s when the sources file is missing', async () => {
 
 const ADMIN_EMAIL = 'admin@example.com';
 
-function principalFor(email, { tid = TENANT_ID, oid = OID, name = '' } = {}) {
+function principalFor(email, { tid = TENANT_ID, oid = OID, name = '', roles = [], roleClaim = 'roles' } = {}) {
     const claims = [{ typ: 'preferred_username', val: email }];
     if (name) claims.push({ typ: 'name', val: name });
+    for (const val of roles) claims.push({ typ: roleClaim, val });
     if (oid) claims.push({ typ: 'oid', val: oid });
     if (tid) claims.push({ typ: 'tid', val: tid });
     return principalHeader({ ...PRINCIPAL, userDetails: email, claims });
 }
 
-// Two admins, listed with stray case and whitespace.
+// An admin is whoever carries the Site.Admin app role — never an e-mail.
+function adminPrincipalFor(email = ADMIN_EMAIL, opts = {}) {
+    return principalFor(email, { ...opts, roles: ['Site.Admin'] });
+}
+
 function adminConfig(extra = {}) {
-    const { adminEmails } = loadConfig({ ADMIN_EMAILS: ' Admin@Example.com , other-admin@example.com ' });
-    return { adminEmails, ...extra };
+    return { adminRole: loadConfig({}).adminRole, ...extra };
 }
 
 function fakeReq(headers = {}) {
     return { headers };
 }
 
-test('ADMIN_EMAILS is parsed into a trimmed, lowercased set', () => {
-    assert.deepEqual([...loadConfig({ ADMIN_EMAILS: ' A@Example.com,,b@example.com ' }).adminEmails], [
-        'a@example.com',
-        'b@example.com',
-    ]);
-    assert.equal(loadConfig({}).adminEmails.size, 0);
+test('ADMIN_ROLE defaults to Site.Admin; DEV_FAKE_ROLES is a trimmed list, blank in production', () => {
+    assert.equal(loadConfig({}).adminRole, 'Site.Admin');
+    assert.equal(loadConfig({ ADMIN_ROLE: ' Fst.Admins ' }).adminRole, 'Fst.Admins');
+    assert.deepEqual(loadConfig({}).devFakeRoles, []);
+    assert.deepEqual(loadConfig({ DEV_FAKE_ROLES: ' Site.Admin ,, Site.Access ' }).devFakeRoles, ['Site.Admin', 'Site.Access']);
+    assert.deepEqual(loadConfig({ DEV_FAKE_ROLES: 'Site.Admin', NODE_ENV: 'production' }).devFakeRoles, []);
 });
 
-test('isAdminRequest: listed e-mail in any case, nobody else, never a bare principal-name header', () => {
-    const config = { ...loadConfig({ ALLOWED_TENANT_IDS: TENANT_ID }), ...adminConfig() };
-    assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor('ADMIN@example.COM') }), config), true);
-    assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor('skater@example.com') }), config), false);
+test('isAdminRequest: the Site.Admin app role (either claim form) from an allowed tenant, never an e-mail', () => {
+    const config = loadConfig({ ALLOWED_TENANT_IDS: TENANT_ID });
+    const admin = (opts) => isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor('anyone@example.com', opts) }), config);
+    assert.equal(admin({ roles: ['Site.Admin'] }), true);
+    assert.equal(admin({ roles: ['Site.Admin'], roleClaim: 'http://schemas.microsoft.com/ws/2008/06/identity/claims/role' }), true);
+    assert.equal(admin({ roles: ['Site.Access', 'Site.Admin'] }), true);
+    // No role, another role, or another case is nobody — whatever the e-mail.
+    assert.equal(admin({}), false);
+    assert.equal(admin({ roles: ['Site.Access'] }), false);
+    assert.equal(admin({ roles: ['site.admin'] }), false);
+    assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor(ADMIN_EMAIL) }), config), false);
     assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal-name': ADMIN_EMAIL }), config), false);
     assert.equal(isAdminRequest(fakeReq({}), config), false);
-    // The admin's e-mail from another tenant, or without oid/tid, is nobody.
+    // The role from another tenant, or without oid/tid, is nobody.
+    assert.equal(admin({ roles: ['Site.Admin'], tid: OTHER_TENANT_ID }), false);
+    assert.equal(admin({ roles: ['Site.Admin'], oid: '' }), false);
+    // ADMIN_ROLE renames the role.
+    const renamed = { ...config, adminRole: 'Fst.Admins' };
+    assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal': adminPrincipalFor() }), renamed), false);
     assert.equal(
-        isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor(ADMIN_EMAIL, { tid: OTHER_TENANT_ID }) }), config),
-        false
+        isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor('a@example.com', { roles: ['Fst.Admins'] }) }), renamed),
+        true
     );
-    assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor(ADMIN_EMAIL, { oid: '' }) }), config), false);
-    // An empty list means nobody, whatever the identity.
-    const nobody = loadConfig({});
-    assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor(ADMIN_EMAIL) }), nobody), false);
 });
 
-test('isAdminRequest honours DEV_FAKE_USER locally but never under NODE_ENV=production', () => {
-    const dev = loadConfig({ ADMIN_EMAILS: ADMIN_EMAIL, DEV_FAKE_USER: ADMIN_EMAIL });
+test('isAdminRequest honours DEV_FAKE_USER + DEV_FAKE_ROLES locally but never under NODE_ENV=production', () => {
+    const dev = loadConfig({ DEV_FAKE_USER: ADMIN_EMAIL, DEV_FAKE_ROLES: 'Site.Admin' });
     assert.equal(isAdminRequest(fakeReq({}), dev), true);
+    assert.equal(isAdminRequest(fakeReq({}), loadConfig({ DEV_FAKE_USER: ADMIN_EMAIL })), false);
     // The dev stand-in does not lend admin to a principal-name header.
     assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal-name': 'skater@example.com' }), dev), false);
-    const prod = loadConfig({ ADMIN_EMAILS: ADMIN_EMAIL, DEV_FAKE_USER: ADMIN_EMAIL, NODE_ENV: 'production' });
+    const prod = loadConfig({ DEV_FAKE_USER: ADMIN_EMAIL, DEV_FAKE_ROLES: 'Site.Admin', NODE_ENV: 'production' });
     assert.equal(isAdminRequest(fakeReq({}), prod), false);
 });
 
@@ -1252,17 +1265,20 @@ test('GET /userinfo reports isAdmin for admins only', async () => {
     const { server, port } = await startRouter(adminConfig());
     try {
         const admin = await request(port, '/userinfo', {
-            headers: { 'x-ms-client-principal': principalFor('ADMIN@EXAMPLE.COM') },
+            headers: { 'x-ms-client-principal': adminPrincipalFor('ADMIN@EXAMPLE.COM') },
         });
         assert.equal(json(admin).isAdmin, true);
         const user = await request(port, '/userinfo', {
             headers: { 'x-ms-client-principal': principalHeader(PRINCIPAL) },
         });
         assert.equal(json(user).isAdmin, false);
+        // The admin's e-mail without the role is not an admin.
+        const byEmail = await request(port, '/userinfo', { headers: { 'x-ms-client-principal': principalFor(ADMIN_EMAIL) } });
+        assert.equal(json(byEmail).isAdmin, false);
     } finally {
         await close(server);
     }
-    const dev = await startRouter(adminConfig({ devFakeUser: ADMIN_EMAIL }));
+    const dev = await startRouter(adminConfig({ devFakeUser: ADMIN_EMAIL, devFakeRoles: ['Site.Admin'] }));
     try {
         assert.equal(json(await request(dev.port, '/userinfo')).isAdmin, true);
     } finally {
@@ -1275,7 +1291,7 @@ test('/admin/ is a plain 404 for non-admins and the admin document (with deep li
     fs.mkdirSync(path.join(publicDir, 'admin'));
     fs.writeFileSync(path.join(publicDir, 'admin', 'index.html'), '<html>ADMIN_INDEX</html>');
     const { server, port } = await startRouter(adminConfig({ publicDir }));
-    const adminHeaders = { 'x-ms-client-principal': principalFor(ADMIN_EMAIL) };
+    const adminHeaders = { 'x-ms-client-principal': adminPrincipalFor(ADMIN_EMAIL) };
     const userHeaders = { 'x-ms-client-principal': principalHeader(PRINCIPAL) };
     try {
         // Encoded and non-normalised spellings are gated like the plain one.
@@ -1350,7 +1366,7 @@ test('/api/manage/* proxies admins, and rejects cross-site state changes', async
     const { server, port } = await startRouter(
         adminConfig({ targets: targets({ platform: { url: upstream.url, secret: 'platform-secret' } }) })
     );
-    const admin = { 'x-ms-client-principal': principalFor(ADMIN_EMAIL) };
+    const admin = { 'x-ms-client-principal': adminPrincipalFor(ADMIN_EMAIL) };
     try {
         const list = await request(port, '/api/manage/competitions?status=all', { headers: admin });
         assert.equal(list.status, 200);
@@ -1439,7 +1455,7 @@ test('GET /admin/api/diagnostics: admins only, booleans for config, health of ev
         assert.equal(json(denied).error, 'admin_required');
 
         const res = await request(port, '/admin/api/diagnostics', {
-            headers: { 'x-ms-client-principal': principalFor(ADMIN_EMAIL) },
+            headers: { 'x-ms-client-principal': adminPrincipalFor(ADMIN_EMAIL) },
         });
         assert.equal(res.status, 200);
         assert.equal(res.headers['cache-control'], 'no-store');
@@ -1456,7 +1472,7 @@ test('GET /admin/api/diagnostics: admins only, booleans for config, health of ev
         assert.deepEqual(body.config.targets.protocolgenerator, { url: true, secret: false });
         assert.deepEqual(body.config.targets.gdprtool, { url: false, secret: false });
         assert.equal(body.config.hovtpHealthUrl, true);
-        assert.equal(body.config.adminCount, 2);
+        assert.equal(body.config.adminRole, 'Site.Admin');
         assert.equal(body.config.loginProvider, 'aad');
         assert.equal(body.config.authTenantMode, 'workforce');
         assert.equal(body.config.externalTenantCount, 0);
@@ -1507,7 +1523,7 @@ test('diagnostics report a null commit without build info', async () => {
     );
     try {
         const res = await request(port, '/admin/api/diagnostics', {
-            headers: { 'x-ms-client-principal': principalFor(ADMIN_EMAIL) },
+            headers: { 'x-ms-client-principal': adminPrincipalFor(ADMIN_EMAIL) },
         });
         assert.equal(res.status, 200);
         assert.equal(json(res).router.commit, null);
@@ -1645,7 +1661,7 @@ test('x-forwarded-user-admin: 1 reaches the backends for admins only', async () 
             }),
         })
     );
-    const admin = { 'x-ms-client-principal': principalFor(ADMIN_EMAIL) };
+    const admin = { 'x-ms-client-principal': adminPrincipalFor(ADMIN_EMAIL) };
     try {
         await request(port, '/api/competitions', { headers: admin });
         await request(port, '/judgepapers/api/list', { headers: admin });
@@ -1699,7 +1715,7 @@ test('a principal of a tenant outside ALLOWED_TENANT_IDS gets 403 tenant_not_all
         })
     );
     const foreign = { 'x-ms-client-principal': principalFor('skater@example.com', { tid: OTHER_TENANT_ID }) };
-    const foreignAdmin = { 'x-ms-client-principal': principalFor(ADMIN_EMAIL, { tid: OTHER_TENANT_ID }) };
+    const foreignAdmin = { 'x-ms-client-principal': adminPrincipalFor(ADMIN_EMAIL, { tid: OTHER_TENANT_ID }) };
     try {
         for (const p of ['/api/competitions', '/scoremodifier/api/generate', '/tools/gdpr/api/scan']) {
             const res = await request(port, p, { headers: foreign });
@@ -1905,7 +1921,7 @@ test('paths with dot segments, encoded separators or backslashes are a 400 befor
     const { server, port } = await startRouter(
         adminConfig({ publicDir, targets: targets({ judgepapers: all, platform: all, gdprtool: all }) })
     );
-    const admin = { 'x-ms-client-principal': principalFor(ADMIN_EMAIL), ...SAME_ORIGIN };
+    const admin = { 'x-ms-client-principal': adminPrincipalFor(ADMIN_EMAIL), ...SAME_ORIGIN };
     const bad = [
         '/landing/../api/manage/x',
         '/api/manage/%2e%2e/competitions',
@@ -1977,33 +1993,22 @@ test('the backends get the canonical path, re-encoded, never the raw one', async
 
 // ── E-mail: printable ASCII is checked before lowercasing ────────────────────
 
-test('a non-ASCII e-mail is no e-mail: the Kelvin sign cannot become an admin "k"', async () => {
-    const config = {
-        ...loadConfig({ ALLOWED_TENANT_IDS: TENANT_ID, ADMIN_EMAILS: 'kim@example.com, Kate@example.com' }),
-    };
-    // The look-alike entry in ADMIN_EMAILS is dropped, the real one kept.
-    assert.deepEqual([...config.adminEmails], ['kim@example.com']);
-    assert.equal('Kim@example.com'.toLowerCase(), 'kim@example.com'); // the trick itself
+test('a non-ASCII e-mail is no e-mail: the Kelvin sign cannot pose as an ASCII address', async () => {
+    const config = loadConfig({ ALLOWED_TENANT_IDS: TENANT_ID });
+    assert.equal('\u212Aim@example.com'.toLowerCase(), 'kim@example.com'); // the trick itself
 
     const lookalike = fakeReq({ 'x-ms-client-principal': principalFor('KIM@example.com') });
     assert.equal(requestIdentity(lookalike, config).email, '');
-    assert.equal(isAdminRequest(lookalike, config), false);
     const real = fakeReq({ 'x-ms-client-principal': principalFor('KIM@example.com') });
     assert.equal(requestIdentity(real, config).email, 'kim@example.com');
-    assert.equal(isAdminRequest(real, config), true);
 
-    // Not forwarded either, and not let through the /api/manage gate.
+    // Not forwarded either.
     const upstream = await startUpstream((req, res) => res.end('{}'));
     const { server, port } = await startRouter({ ...config, targets: targets({ platform: { url: upstream.url, secret: 's' } }) });
     try {
         await request(port, '/api/competitions', { headers: lookalike.headers });
         assert.equal(upstream.received[0].headers['x-forwarded-user-email'], undefined);
         assert.equal(upstream.received[0].headers['x-forwarded-user-admin'], undefined);
-        const manage = await request(port, '/api/manage/competitions', { headers: lookalike.headers });
-        assert.equal(manage.status, 403);
-        assert.equal(upstream.received.length, 1);
-        const info = json(await request(port, '/userinfo', { headers: lookalike.headers }));
-        assert.equal(info.isAdmin, false);
     } finally {
         await close(server);
         await close(upstream.server);
@@ -2101,11 +2106,11 @@ test('External ID tenant without an email claim forwards no e-mail (userDetails 
         assert.equal(res.status, 200);
         assert.equal(upstream.received[0].headers['x-forwarded-user-email'], undefined);
         assert.equal(upstream.received[0].headers['x-forwarded-user-oid'], EXTERNAL_OID);
-        // ...so it can never make an admin either.
+        // No e-mail makes an admin, from any claim; only the Site.Admin role does.
         const config = externalConfig(adminConfig());
         assert.equal(isAdminRequest(fakeReq(headers), config), false);
-        // The e-mail claim does, through the same printable-ASCII + lowercase rules.
-        assert.equal(isAdminRequest(fakeReq(externalHeaders({ email: 'ADMIN@example.com' })), config), true);
+        assert.equal(isAdminRequest(fakeReq(externalHeaders({ email: 'ADMIN@example.com' })), config), false);
+        assert.equal(isAdminRequest(fakeReq(externalHeaders({ roles: ['Site.Admin'] })), config), true);
         assert.equal(isAdminRequest(fakeReq(externalHeaders({ email: 'admin@examplK.com' })), config), false);
     } finally {
         await close(server);
@@ -2312,5 +2317,23 @@ test('/no-access/ and the other public paths are served to everyone, with or wit
         }
     } finally {
         await close(server);
+    }
+});
+
+test('Site.Admin implies access: an External ID admin without Site.Access passes the gate and is an admin', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter(
+        externalConfig({ ...adminConfig(), publicDir: noAccessFixture(), targets: targets({ platform: { url: upstream.url, secret: 'pf' } }) })
+    );
+    try {
+        const headers = externalHeaders({ roles: ['Site.Admin'] });
+        assert.equal((await request(port, '/judgepapers/', { headers })).status, 200);
+        assert.equal(json(await request(port, '/userinfo', { headers })).isAdmin, true);
+        assert.equal((await request(port, '/api/manage/competitions', { headers })).status, 200);
+        assert.equal(upstream.received[0].headers['x-forwarded-user-admin'], '1');
+        assert.equal((await request(port, '/admin/', { headers })).status, 200);
+    } finally {
+        await close(server);
+        await close(upstream.server);
     }
 });

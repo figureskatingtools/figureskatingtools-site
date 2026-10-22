@@ -89,6 +89,8 @@ const DEFAULT_LOGIN_PROVIDER = 'aad';
 // like the privacy notice, so it must be in the Easy Auth excludedPaths too
 // (/no-access, /no-access/*), and in PUBLIC_PATH_PREFIXES below.
 const DEFAULT_EXTERNAL_ACCESS_ROLE = 'Site.Access';
+// Admins are whoever carries this app role (ADMIN_ROLE); nothing else makes one.
+const DEFAULT_ADMIN_ROLE = 'Site.Admin';
 const NO_ACCESS_PATH = '/no-access/';
 
 // Mirror of the static part of authExcludedPaths in webapp.bicep: what a
@@ -151,7 +153,7 @@ function parseTenantIds(raw) {
 // An e-mail as the router compares and forwards it: printable ASCII only,
 // tested BEFORE lowercasing — toLowerCase() folds some non-ASCII letters into
 // ASCII ones (U+212A KELVIN SIGN becomes 'k'), which would let a look-alike
-// address match an admin's. Anything else is no e-mail at all ('').
+// address match someone else's. Anything else is no e-mail at all ('').
 const PRINTABLE_ASCII = /^[\x21-\x7e]+$/;
 
 function normalizeEmail(value) {
@@ -159,14 +161,12 @@ function normalizeEmail(value) {
     return PRINTABLE_ASCII.test(text) ? text.toLowerCase() : '';
 }
 
-// ADMIN_EMAILS: comma-separated, compared case-insensitively (ASCII only).
-function parseAdminEmails(raw) {
-    return new Set(
-        String(raw || '')
-            .split(',')
-            .map(normalizeEmail)
-            .filter(Boolean)
-    );
+// DEV_FAKE_ROLES: comma-separated app roles for the DEV_FAKE_USER stand-in.
+function parseList(raw) {
+    return String(raw || '')
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean);
 }
 
 function loadConfig(env = process.env) {
@@ -190,6 +190,9 @@ function loadConfig(env = process.env) {
         // Local dev only: pretend a user is signed in when Easy Auth headers are
         // absent. Hard-disabled in production so it can never leak into a real env.
         devFakeUser: isProduction ? '' : (env.DEV_FAKE_USER || '').trim(),
+        // Local dev only: the app roles DEV_FAKE_USER carries (e.g. Site.Admin
+        // for the admin panel). Blanked in production like DEV_FAKE_USER.
+        devFakeRoles: isProduction ? [] : parseList(env.DEV_FAKE_ROLES),
         // Easy Auth provider segment of /.auth/login/<provider> used by /signin.
         loginProvider: (env.AUTH_LOGIN_PROVIDER || '').trim() || DEFAULT_LOGIN_PROVIDER,
         // Which tenant Easy Auth signs in with (webapp.bicep). Diagnostics only;
@@ -201,8 +204,9 @@ function loadConfig(env = process.env) {
         // The app role an External ID identity needs to use the site.
         externalAccessRole: (env.EXTERNAL_ACCESS_ROLE || '').trim() || DEFAULT_EXTERNAL_ACCESS_ROLE,
         nodeEnv: (env.NODE_ENV || '').trim(),
-        // Who gets the admin panel and /api/manage/*. Empty = nobody.
-        adminEmails: parseAdminEmails(env.ADMIN_EMAILS),
+        // The app role that makes an identity an admin (the admin panel and
+        // /api/manage/*), in both tenant modes. Implies access.
+        adminRole: (env.ADMIN_ROLE || '').trim() || DEFAULT_ADMIN_ROLE,
         // Entra tenants whose principals may use the site's APIs. Empty =
         // none (fail closed); webapp.bicep sets the deployment tenant.
         allowedTenantIds: parseTenantIds(env.ALLOWED_TENANT_IDS),
@@ -405,7 +409,8 @@ function requestIdentity(req, config) {
     }
     if (config.devFakeUser && !req.headers['x-ms-client-principal-name']) {
         const email = normalizeEmail(config.devFakeUser);
-        return { tid: DEV_TENANT_ID, oid: devObjectId(email), email, name: config.devFakeUser, roles: [], dev: true };
+        const roles = Array.isArray(config.devFakeRoles) ? [...config.devFakeRoles] : [];
+        return { tid: DEV_TENANT_ID, oid: devObjectId(email), email, name: config.devFakeUser, roles, dev: true };
     }
     return null;
 }
@@ -422,7 +427,11 @@ function tenantAllowed(identity, config) {
 // are unaffected. No admin exception: the role is the single source of truth.
 function accessGranted(identity, config) {
     if (identity.dev || !isExternalTenant(identity.tid, config)) return true;
-    const role = config.externalAccessRole;
+    // The admin role implies access.
+    return hasRole(identity, config.externalAccessRole) || hasRole(identity, config.adminRole);
+}
+
+function hasRole(identity, role) {
     return Boolean(role) && Array.isArray(identity.roles) && identity.roles.includes(role);
 }
 
@@ -565,17 +574,16 @@ function handleSignIn(req, res, config, search) {
     res.end();
 }
 
-// Whether the request comes from an admin: the identity's (lowercased) e-mail
-// in ADMIN_EMAILS, from an allowed tenant. Needs the same identity the APIs
-// need — a decodable Easy Auth principal with oid and tid, or DEV_FAKE_USER
-// locally (it is '' under NODE_ENV=production); a bare
-// X-MS-CLIENT-PRINCIPAL-NAME is never enough. Phase 2 (Entra External ID
-// group membership) changes only this.
+// Whether the request comes from an admin: the identity carries the ADMIN_ROLE
+// app role (`roles` claim, either form) and is from an allowed tenant — in both
+// tenant modes; the e-mail plays no part. Needs the same identity the APIs need
+// — a decodable Easy Auth principal with oid and tid, or DEV_FAKE_USER with
+// DEV_FAKE_ROLES locally (both blank under NODE_ENV=production); a bare
+// X-MS-CLIENT-PRINCIPAL-NAME is never enough.
 function isAdminRequest(req, config) {
-    if (!config.adminEmails || config.adminEmails.size === 0) return false;
     const identity = requestIdentity(req, config);
     if (!identity || !tenantAllowed(identity, config) || !accessGranted(identity, config)) return false;
-    return identity.email !== '' && config.adminEmails.has(identity.email);
+    return hasRole(identity, config.adminRole);
 }
 
 // CSRF guard for every state-changing API call on top of the session cookie:
@@ -1073,7 +1081,7 @@ async function handleDiagnostics(res, config, runtime) {
         config: {
             targets,
             hovtpHealthUrl: Boolean(config.hovtpHealthUrl),
-            adminCount: config.adminEmails.size,
+            adminRole: config.adminRole,
             allowedTenantCount: config.allowedTenantIds.size,
             loginProvider: config.loginProvider,
             authTenantMode: config.authTenantMode || 'workforce',
@@ -1422,7 +1430,8 @@ if (require.main === module) {
         console.log(`Static root: ${config.publicDir}`);
         console.log(`Proxy targets configured: ${configured.join(', ') || '(none)'}`);
         if (config.devFakeUser) console.log(`DEV_FAKE_USER active: ${config.devFakeUser}`);
-        console.log(`Admins configured: ${config.adminEmails.size}`);
+        console.log(`Admin role: ${config.adminRole}`);
+        if (config.devFakeRoles.length) console.log(`DEV_FAKE_ROLES active: ${config.devFakeRoles.join(', ')}`);
         if (config.allowedTenantIds.size === 0) {
             console.warn('ALLOWED_TENANT_IDS is empty: every signed-in API call is refused (403 tenant_not_allowed).');
         }

@@ -118,7 +118,7 @@ function changeValue(value: unknown): string {
 
 const ERROR_TEXT: Record<string, string> = {
   unreachable: 'The admin API could not be reached. Check the connection and try again.',
-  admin_required: 'This account is not an administrator on the platform (check ADMIN_EMAILS on both the router and the platform).',
+  admin_required: 'This account is not an administrator on the platform (it needs the Site.Admin app role).',
   unauthorized: 'The platform refused the router: its proxy secret is missing or does not match.',
   cross_site: 'The request was refused as cross-site. Reload the page and try again.',
   proxy_target_not_configured: 'The platform backend is not configured on this router.',
@@ -1421,7 +1421,7 @@ function routerDiagHtml(): string {
       ${fact('Login provider', esc(d.config?.loginProvider))}
       ${fact('Sign-in tenant', d.config?.authTenantMode === 'external' ? badge('External ID', 'info') : badge('workforce', 'muted'))}
       ${fact('External ID tenants', esc(d.config?.externalTenantCount ?? 0))}
-      ${fact('Admins', esc(d.config?.adminCount))}
+      ${fact('Admin role', d.config?.adminRole ? `<span class="adm-mono">${esc(d.config.adminRole)}</span>` : '<span class="adm-dim">unknown</span>')}
       ${fact('DEV_FAKE_USER', d.config?.devFakeUser ? badge('active', 'error') : badge('off', 'ok'))}
       ${fact('Changelog cache', changelog)}
     </dl>

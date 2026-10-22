@@ -153,7 +153,7 @@ export interface RouterDiagnostics {
   config: {
     targets: Record<string, { url: boolean; secret: boolean }>;
     hovtpHealthUrl?: boolean;
-    adminCount: number;
+    adminRole?: string;
     loginProvider: string;
     authTenantMode?: string;
     externalTenantCount?: number;
