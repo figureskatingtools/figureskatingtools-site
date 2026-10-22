@@ -43,6 +43,15 @@ param adminEmails = readEnvironmentVariable('ADMIN_EMAILS', '')
 // environment variable ALLOWED_TENANT_IDS. Unset = the deployment tenant only.
 param allowedTenantIds = readEnvironmentVariable('ALLOWED_TENANT_IDS', '')
 
+// Entra External ID (customer tenant), from the GitHub environment variables
+// EXTERNAL_TENANT_ID, AUTH_EXTERNAL_CLIENT_ID and AUTH_EXTERNAL_AUTHORITY_HOST.
+// Unset = no externalid Easy Auth provider and no extra allowed tenant. There is
+// no secret here and there never will be: the provider is credential-free
+// (ID-token flow) — see infra/EXTERNAL-ID.md.
+param externalTenantId = readEnvironmentVariable('EXTERNAL_TENANT_ID', '')
+param externalClientId = readEnvironmentVariable('AUTH_EXTERNAL_CLIENT_ID', '')
+param externalAuthorityHost = readEnvironmentVariable('AUTH_EXTERNAL_AUTHORITY_HOST', '')
+
 // System-assigned principal ids of the tool Function Apps, for read access to
 // the shared competition-data container. Empty entries are ignored, so this
 // works before the tool repos have been reduced (workstream 6).

@@ -55,6 +55,12 @@ param competitionAccessTableName string = 'competitionaccess'
 @description('Comma-separated Entra tenant ids whose users may use the API (ALLOWED_TENANT_IDS).')
 param allowedTenantIds string
 
+// The Entra External ID tenant(s). Identities from these tenants are never
+// turned into new users until the phase C linking code exists: the platform
+// answers 503 migration_pending instead (see _resolve_user). Empty = none.
+@description('Comma-separated Entra External ID tenant ids (EXTERNAL_TENANT_IDS).')
+param externalTenantIds string = ''
+
 // Informational only: the admin diagnostics show it. The HOVTP listener has its
 // own copy of the setting, and that one is what switches it.
 @description('The value the HOVTP listener gets for HOVTP_ENABLED.')
@@ -154,6 +160,10 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'ALLOWED_TENANT_IDS'
           value: allowedTenantIds
+        }
+        {
+          name: 'EXTERNAL_TENANT_IDS'
+          value: externalTenantIds
         }
       ]
     }

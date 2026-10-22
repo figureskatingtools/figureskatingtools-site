@@ -79,10 +79,31 @@ param adminEmails string = ''
 @description('Comma-separated Entra tenant ids whose users may use the site (GitHub variable ALLOWED_TENANT_IDS). Empty = the deployment tenant only. Written to both the router (403 tenant_not_allowed for anyone else) and the platform Function App (which checks again).')
 param allowedTenantIds string = ''
 
-// The tenant the site's Easy Auth app registration lives in, unless overridden.
-var effectiveAllowedTenantIds = !empty(trim(allowedTenantIds))
+// Entra External ID (customer tenant). All three come from GitHub vars; empty =
+// not configured, and nothing changes. There is deliberately no secret param:
+// the externalid Easy Auth provider is credential-free (infra/EXTERNAL-ID.md).
+@description('Entra External ID tenant id (GitHub var EXTERNAL_TENANT_ID). Added to the allowed tenants and handed to the platform as EXTERNAL_TENANT_IDS. Empty = not configured.')
+param externalTenantId string = ''
+
+@description('Client id of the Entra External ID app registration (GitHub var AUTH_EXTERNAL_CLIENT_ID). Empty = no externalid Easy Auth provider.')
+param externalClientId string = ''
+
+@description('Authority host of the external tenant (GitHub var AUTH_EXTERNAL_AUTHORITY_HOST), e.g. <tenantId>.ciamlogin.com.')
+param externalAuthorityHost string = ''
+
+var normalizedExternalTenantId = toLower(trim(externalTenantId))
+
+// The tenant the site's Easy Auth app registration lives in, unless overridden,
+// plus the external tenant once it is configured.
+var baseAllowedTenantIds = !empty(trim(allowedTenantIds))
   ? toLower(replace(allowedTenantIds, ' ', ''))
   : toLower(!empty(tenantId) ? tenantId : tenant().tenantId)
+var effectiveAllowedTenantIds = empty(normalizedExternalTenantId) || contains(
+    split(baseAllowedTenantIds, ','),
+    normalizedExternalTenantId
+  )
+  ? baseAllowedTenantIds
+  : '${baseAllowedTenantIds},${normalizedExternalTenantId}'
 
 @description('Kill switch for the HOVTP listener. false = the app is still deployed but answers every request 503 (see modules/hovtp-function.bicep).')
 param hovtpEnabled bool = true
@@ -134,6 +155,9 @@ module webApp 'modules/webapp.bicep' = {
     appServicePlanName: 'asp-fs-site-web'
     authClientId: authClientId
     authLoginProvider: authLoginProvider
+    externalClientId: externalClientId
+    externalTenantId: normalizedExternalTenantId
+    externalAuthorityHost: trim(externalAuthorityHost)
     authManagedIdentityClientId: authManagedIdentity.outputs.clientId
     authManagedIdentityResourceId: authManagedIdentity.outputs.resourceId
     tenantId: !empty(tenantId) ? tenantId : subscription().tenantId
@@ -201,6 +225,7 @@ module platformFunction 'modules/platform-function.bicep' = {
     userIdentitiesTableName: platformStorage.outputs.userIdentitiesTableName
     competitionAccessTableName: platformStorage.outputs.competitionAccessTableName
     allowedTenantIds: effectiveAllowedTenantIds
+    externalTenantIds: normalizedExternalTenantId
     // Informational copy for the admin diagnostics; the listener's own
     // setting (below) is the one that switches it.
     hovtpEnabled: hovtpEnabled

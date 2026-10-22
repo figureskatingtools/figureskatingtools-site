@@ -14,6 +14,22 @@ param authManagedIdentityClientId string = ''
 param authManagedIdentityResourceId string = ''
 param tenantId string = subscription().tenantId
 
+// --- Entra External ID (customer tenant), dark until AUTH_LOGIN_PROVIDER says so --
+// A second Easy Auth provider, `externalid`, added next to the workforce
+// `azureActiveDirectory` one. It is CREDENTIAL-FREE on purpose: no clientCredential,
+// so Easy Auth runs the OIDC ID-token flow (response_type=id_token, form_post) and
+// validates the ID token itself. The site never needs access or refresh tokens.
+// Never add a secret here — see infra/EXTERNAL-ID.md.
+
+@description('Client id of the Entra External ID app registration (GitHub var AUTH_EXTERNAL_CLIENT_ID). Empty = the externalid provider is not configured.')
+param externalClientId string = ''
+
+@description('External tenant id (GitHub var EXTERNAL_TENANT_ID).')
+param externalTenantId string = ''
+
+@description('Authority host of the external tenant (GitHub var AUTH_EXTERNAL_AUTHORITY_HOST), e.g. <tenantId>.ciamlogin.com. Empty = <externalTenantId>.ciamlogin.com.')
+param externalAuthorityHost string = ''
+
 // --- Router proxy targets -------------------------------------------------------
 // The router resolves /api/* and /<tool>/api/* against these. They are part of the
 // template (not a post-deploy az CLI step) so a deployment never leaves the site
@@ -124,6 +140,19 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
   }
 }
 
+var externalProviderEnabled = !empty(externalClientId) && !empty(externalTenantId)
+var effectiveExternalAuthorityHost = !empty(externalAuthorityHost)
+  ? externalAuthorityHost
+  : '${externalTenantId}.ciamlogin.com'
+var effectiveAuthLoginProvider = empty(authLoginProvider) ? 'aad' : toLower(authLoginProvider)
+// The Easy Auth provider unauthenticated document requests are sent to. Follows
+// AUTH_LOGIN_PROVIDER like the router's /signin: aad -> the workforce provider,
+// externalid -> the custom OIDC provider of that name (only once it exists, so a
+// premature switch never points Easy Auth at a provider that isn't there).
+var redirectToProvider = effectiveAuthLoginProvider == 'externalid' && externalProviderEnabled
+  ? 'externalid'
+  : 'azureactivedirectory'
+
 resource authConfig 'Microsoft.Web/sites/config@2022-09-01' = if (!empty(authClientId)) {
   parent: webApp
   name: 'authsettingsV2'
@@ -131,7 +160,7 @@ resource authConfig 'Microsoft.Web/sites/config@2022-09-01' = if (!empty(authCli
     globalValidation: {
       requireAuthentication: true
       unauthenticatedClientAction: 'RedirectToLoginPage'
-      redirectToProvider: 'azureactivedirectory'
+      redirectToProvider: redirectToProvider
       excludedPaths: authExcludedPaths
     }
     identityProviders: {
@@ -150,6 +179,29 @@ resource authConfig 'Microsoft.Web/sites/config@2022-09-01' = if (!empty(authCli
           ]
         }
       }
+      // Entra External ID. Only when its client id is set; no clientCredential
+      // (credential-free ID-token flow, see the note on externalClientId).
+      customOpenIdConnectProviders: externalProviderEnabled
+        ? {
+            externalid: {
+              enabled: true
+              registration: {
+                clientId: externalClientId
+                openIdConnectConfiguration: {
+                  wellKnownOpenIdConfiguration: 'https://${effectiveExternalAuthorityHost}/${externalTenantId}/v2.0/.well-known/openid-configuration'
+                }
+              }
+              login: {
+                nameClaimType: 'name'
+                scopes: [
+                  'openid'
+                  'profile'
+                  'email'
+                ]
+              }
+            }
+          }
+        : {}
     }
     login: {
       tokenStore: {
@@ -182,7 +234,9 @@ resource siteAppSettings 'Microsoft.Web/sites/config@2022-09-01' = {
       PROXY_SHARED_SECRET_SCOREMODIFIER: proxySharedSecretScoremodifier
       PROXY_SHARED_SECRET_PROTOCOLGENERATOR: proxySharedSecretProtocolgenerator
       PROXY_SHARED_SECRET_GDPRTOOL: proxySharedSecretGdprtool
-      AUTH_LOGIN_PROVIDER: empty(authLoginProvider) ? 'aad' : authLoginProvider
+      AUTH_LOGIN_PROVIDER: effectiveAuthLoginProvider
+      // Booleans-only diagnostics input: whether the externalid provider exists.
+      AUTH_EXTERNAL_PROVIDER_CONFIGURED: externalProviderEnabled ? 'true' : 'false'
       ADMIN_EMAILS: adminEmails
       ALLOWED_TENANT_IDS: allowedTenantIds
       HOVTP_HEALTH_URL: hovtpHealthUrl

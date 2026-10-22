@@ -29,6 +29,12 @@
     "functionAppUrlProtocolgenerator": {
       "value": ""
     },
+    "functionAppUrlGdprtool": {
+      "value": ""
+    },
+    "authLoginProvider": {
+      "value": "aad"
+    },
     "proxySharedSecretJudgepapers": {
       "value": ""
     },
@@ -36,6 +42,24 @@
       "value": ""
     },
     "proxySharedSecretProtocolgenerator": {
+      "value": ""
+    },
+    "proxySharedSecretGdprtool": {
+      "value": ""
+    },
+    "adminEmails": {
+      "value": ""
+    },
+    "allowedTenantIds": {
+      "value": ""
+    },
+    "externalTenantId": {
+      "value": ""
+    },
+    "externalClientId": {
+      "value": ""
+    },
+    "externalAuthorityHost": {
       "value": ""
     },
     "toolFunctionPrincipalIds": {
@@ -48,8 +72,17 @@
     "hovtpEnabled": {
       "value": true
     },
+    "retentionPurgeEnabled": {
+      "value": true
+    },
     "hovtpEnvironment": {
       "value": "Test"
+    },
+    "hovtpTrustedProxyHops": {
+      "value": 3
+    },
+    "hovtpProxySharedSecret": {
+      "value": ""
     }
   }
 }

@@ -147,6 +147,13 @@ jobs:
           # to the router and the platform Function App. Unset = the deployment
           # tenant only.
           ALLOWED_TENANT_IDS: ${{ vars.ALLOWED_TENANT_IDS }}
+          # Entra External ID (customer tenant). Unset = no externalid Easy Auth
+          # provider and no extra allowed tenant. Vars only: the provider is
+          # credential-free (ID-token flow), so there is no secret to pass —
+          # never add one (infra/EXTERNAL-ID.md).
+          EXTERNAL_TENANT_ID: ${{ vars.EXTERNAL_TENANT_ID }}
+          AUTH_EXTERNAL_CLIENT_ID: ${{ vars.AUTH_EXTERNAL_CLIENT_ID }}
+          AUTH_EXTERNAL_AUTHORITY_HOST: ${{ vars.AUTH_EXTERNAL_AUTHORITY_HOST }}
         run: |
           set -euo pipefail
           ENV_NAME="${{ needs.set-environment.outputs.env_name }}"
