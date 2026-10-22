@@ -11,6 +11,7 @@
 //   /admin/                  → admin panel (SPA; plain 404 unless the user is an admin)
 //   /admin/api/diagnostics   → router-native diagnostics (admins only)
 //   /privacy/, /tietosuoja/  → public privacy notice, EN/FI (static, excluded from Easy Auth)
+//   /terms/, /kayttoehdot/   → public terms of use, EN/FI (static, excluded from Easy Auth)
 //   /fonts/*                 → self-hosted web fonts (static, excluded from Easy Auth)
 //   /health                  → liveness probe (excluded from Easy Auth)
 //   /judgepapers/download    → e-mailed judges'-papers link (excluded from Easy Auth)
@@ -72,8 +73,9 @@ const JUDGEPAPERS_DOWNLOAD_PATH = '/judgepapers/download';
 // session cookie (see hasSignedInSession).
 // LANDING_DOCUMENT_PATHS, SIGNIN_PATH and the landing files must all be listed
 // in the Easy Auth excludedPaths in infra/modules/webapp.bicep. So must the
-// public privacy notice (/privacy/, /tietosuoja/) and the self-hosted fonts
-// (/fonts/*): those need no router logic, serveStatic serves them to everyone.
+// public privacy notice (/privacy/, /tietosuoja/), the terms of use (/terms/,
+// /kayttoehdot/) and the self-hosted fonts (/fonts/*): those need no router
+// logic, serveStatic serves them to everyone.
 const LANDING_DIR = 'landing';
 const LANDING_DOCUMENT_PATHS = ['/', '/index.html'];
 

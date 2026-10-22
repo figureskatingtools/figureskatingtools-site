@@ -139,7 +139,8 @@ export function renderSignInView(appElement: HTMLElement, redirectPath = '/'): v
           </p>
           <a href="${logoutUrl()}" class="btn btn-primary">Sign out</a>
           <p class="unauth-privacy">
-            <a href="/privacy/">Privacy notice</a> · <a href="/tietosuoja/" lang="fi">Tietosuojaseloste</a>
+            <a href="/privacy/">Privacy notice</a> · <a href="/terms/">Terms of use</a><br>
+            <span lang="fi"><a href="/tietosuoja/">Tietosuojaseloste</a> · <a href="/kayttoehdot/">Käyttöehdot</a></span>
           </p>
         </div>
       </div>
@@ -164,7 +165,8 @@ export function renderSignInView(appElement: HTMLElement, redirectPath = '/'): v
         </p>
         <a href="${href}" class="btn btn-primary reveal reveal-4">Sign In to Continue</a>
         <p class="unauth-privacy reveal reveal-4">
-          <a href="/privacy/">Privacy notice</a> · <a href="/tietosuoja/" lang="fi">Tietosuojaseloste</a>
+          <a href="/privacy/">Privacy notice</a> · <a href="/terms/">Terms of use</a><br>
+          <span lang="fi"><a href="/tietosuoja/">Tietosuojaseloste</a> · <a href="/kayttoehdot/">Käyttöehdot</a></span>
         </p>
       </div>
     </div>
@@ -187,6 +189,7 @@ export function setupUserMenu(container: HTMLElement, user: UserInfo): void {
         </div>
         ${user.isAdmin ? '<a href="/admin/" class="dropdown-item">Admin panel</a>' : ''}
         <a href="/privacy/" class="dropdown-item">Privacy notice</a>
+        <a href="/terms/" class="dropdown-item">Terms of use</a>
         <a href="${logoutUrl()}" class="dropdown-item">Sign Out</a>
       </div>
     </div>

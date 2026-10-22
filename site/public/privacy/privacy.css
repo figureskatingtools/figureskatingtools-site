@@ -1,7 +1,8 @@
-/* Privacy notice (/privacy/ in English, /tietosuoja/ in Finnish). Static
- * documents like the landing page: they load /landing/landing.css for the
- * tokens, top bar, buttons and footer, and this file for the page header,
- * the prose column and the tables. Public (Easy Auth excluded paths). */
+/* Privacy notice (/privacy/ in English, /tietosuoja/ in Finnish) and terms of
+ * use (/terms/, /kayttoehdot/). Static documents like the landing page: they
+ * load /landing/landing.css for the tokens, top bar, buttons and footer, and
+ * this file for the page header, the prose column and the tables. Public
+ * (Easy Auth excluded paths). */
 
 .doc-hero { position: relative; background: var(--ink); color: #fff; }
 .doc-hero::after { content: ''; position: absolute; inset: auto 0 0 0; height: 3px; background: var(--brand-gradient); }

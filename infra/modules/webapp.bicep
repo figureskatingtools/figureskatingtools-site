@@ -66,7 +66,7 @@ param hovtpHealthUrl string = ''
 @description('Easy Auth provider segment the router\'s /signin redirects to (/.auth/login/<provider>). Written to the AUTH_LOGIN_PROVIDER app setting; empty means aad. Changes together with the authsettingsV2 identity provider (e.g. the move to Entra External ID).')
 param authLoginProvider string = 'aad'
 
-@description('Paths served without an Easy Auth login redirect. /health must stay open so Azure/uptime probes get a 200 instead of a 302; /judgepapers/download is the judges\'-papers link e-mailed to recipients without an account (the token is checked by the judgepapers backend); /, /index.html, /signin, /landing/* and the icons, robots.txt and llms.txt make up the public landing page, which the router serves at / unless the request carries an Easy Auth session (keep in sync with LANDING_DOCUMENT_PATHS and SIGNIN_PATH in server/server.js); /assets/* holds the Vite bundles (open-source code, no data), public so the home page served at / by session cookie can always load and fall back to its sign-in view when the session has expired; /privacy and /tietosuoja (+ /*) are the privacy notice in English and Finnish, which everyone must be able to read before signing in; /fonts/* holds the self-hosted web fonts every page uses, including the public ones.')
+@description('Paths served without an Easy Auth login redirect. /health must stay open so Azure/uptime probes get a 200 instead of a 302; /judgepapers/download is the judges\'-papers link e-mailed to recipients without an account (the token is checked by the judgepapers backend); /, /index.html, /signin, /landing/* and the icons, robots.txt and llms.txt make up the public landing page, which the router serves at / unless the request carries an Easy Auth session (keep in sync with LANDING_DOCUMENT_PATHS and SIGNIN_PATH in server/server.js); /assets/* holds the Vite bundles (open-source code, no data), public so the home page served at / by session cookie can always load and fall back to its sign-in view when the session has expired; /privacy and /tietosuoja (+ /*) are the privacy notice in English and Finnish, which everyone must be able to read before signing in; /terms and /kayttoehdot (+ /*) are the terms of use in English and Finnish, which the sign-up page links to; /fonts/* holds the self-hosted web fonts every page uses, including the public ones.')
 param authExcludedPaths array = [
   '/health'
   '/judgepapers/download'
@@ -83,6 +83,10 @@ param authExcludedPaths array = [
   '/privacy/*'
   '/tietosuoja'
   '/tietosuoja/*'
+  '/terms'
+  '/terms/*'
+  '/kayttoehdot'
+  '/kayttoehdot/*'
   '/fonts/*'
 ]
 

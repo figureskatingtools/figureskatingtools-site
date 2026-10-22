@@ -658,7 +658,7 @@ test('/ shows the home page when DEV_FAKE_USER is set, or when the build has no 
     }
 });
 
-// ── Public privacy notice + self-hosted fonts ────────────────────────────────
+// ── Public privacy notice, terms of use + self-hosted fonts ──────────────────
 
 function addPrivacyAndFonts(dir) {
     fs.mkdirSync(path.join(dir, 'privacy'));
@@ -667,19 +667,23 @@ function addPrivacyAndFonts(dir) {
     fs.writeFileSync(path.join(dir, 'privacy', 'index.html'), '<html>PRIVACY_EN</html>');
     fs.writeFileSync(path.join(dir, 'privacy', 'privacy.css'), 'main{}');
     fs.writeFileSync(path.join(dir, 'tietosuoja', 'index.html'), '<html>PRIVACY_FI</html>');
+    fs.mkdirSync(path.join(dir, 'terms'));
+    fs.mkdirSync(path.join(dir, 'kayttoehdot'));
+    fs.writeFileSync(path.join(dir, 'terms', 'index.html'), '<html>TERMS_EN</html>');
+    fs.writeFileSync(path.join(dir, 'kayttoehdot', 'index.html'), '<html>TERMS_FI</html>');
     fs.writeFileSync(path.join(dir, 'fonts', 'fonts.css'), '@font-face{}');
     fs.writeFileSync(path.join(dir, 'fonts', 'fraunces-latin-opsz-normal.v5-3-0.woff2'), Buffer.from('wOF2'));
 }
 
-test('the privacy notice and fonts are plain static files, served the same signed in or out', async () => {
+test('the privacy notice, terms of use and fonts are plain static files, served the same signed in or out', async () => {
     const publicDir = makePublicFixture();
     addLanding(publicDir);
     addPrivacyAndFonts(publicDir);
     const { server, port } = await startRouter({ publicDir });
     try {
-        // Easy Auth lists /privacy, /privacy/*, /tietosuoja, /tietosuoja/* and
-        // /fonts/* as excluded paths, so these requests arrive without any
-        // principal; the router must not need one.
+        // Easy Auth lists /privacy, /tietosuoja, /terms, /kayttoehdot (each
+        // also with /*) and /fonts/* as excluded paths, so these requests
+        // arrive without any principal; the router must not need one.
         const signedIn = { headers: { 'x-ms-client-principal': principalHeader(PRINCIPAL) } };
         for (const opts of [{}, signedIn, { headers: { cookie: 'AppServiceAuthSession=abc' } }]) {
             const en = await request(port, '/privacy/', opts);
@@ -692,6 +696,15 @@ test('the privacy notice and fonts are plain static files, served the same signe
             const fi = await request(port, '/tietosuoja/', opts);
             assert.equal(fi.status, 200);
             assert.match(fi.text, /PRIVACY_FI/);
+
+            for (const [page, marker] of [['/terms/', /TERMS_EN/], ['/kayttoehdot/', /TERMS_FI/]]) {
+                const terms = await request(port, page, opts);
+                assert.equal(terms.status, 200, page);
+                assert.match(terms.text, marker, page);
+                assert.match(terms.headers['content-type'], /text\/html/, page);
+                assert.equal(terms.headers['cache-control'], 'no-cache', page);
+                assert.equal(terms.headers['content-security-policy'], buildCsp(''), page);
+            }
         }
 
         // The bare paths redirect to the directory so relative URLs resolve.
@@ -699,6 +712,11 @@ test('the privacy notice and fonts are plain static files, served the same signe
         assert.equal(bare.status, 301);
         assert.equal(bare.headers.location, '/privacy/');
         assert.equal((await request(port, '/tietosuoja')).headers.location, '/tietosuoja/');
+        for (const page of ['/terms', '/kayttoehdot']) {
+            const res = await request(port, page);
+            assert.equal(res.status, 301, page);
+            assert.equal(res.headers.location, `${page}/`, page);
+        }
 
         const css = await request(port, '/privacy/privacy.css');
         assert.match(css.headers['content-type'], /text\/css/);
@@ -719,9 +737,9 @@ test('the privacy notice and fonts are plain static files, served the same signe
     }
 });
 
-test('the real privacy pages and fonts.css reference only this origin', () => {
+test('the real privacy and terms pages and fonts.css reference only this origin', () => {
     const publicRoot = path.join(__dirname, '..', 'site', 'public');
-    for (const page of ['privacy/index.html', 'tietosuoja/index.html', 'landing/index.html']) {
+    for (const page of ['privacy/index.html', 'tietosuoja/index.html', 'terms/index.html', 'kayttoehdot/index.html', 'landing/index.html']) {
         const html = fs.readFileSync(path.join(publicRoot, page), 'utf8');
         assert.doesNotMatch(html, /googleapis|gstatic/, page);
         assert.match(html, /<link rel="stylesheet" href="\/fonts\/fonts\.css">/, page);
@@ -732,6 +750,29 @@ test('the real privacy pages and fonts.css reference only this origin', () => {
     for (const url of urls) {
         assert.match(url, /^\.\/[a-z0-9-]+\.v[0-9-]+\.woff2$/, url);
         assert.ok(fs.existsSync(path.join(publicRoot, 'fonts', url)), url);
+    }
+});
+
+test('the privacy notice and terms of use are public and link to each other', () => {
+    const publicRoot = path.join(__dirname, '..', 'site', 'public');
+    const bicep = fs.readFileSync(path.join(__dirname, '..', 'infra', 'modules', 'webapp.bicep'), 'utf8');
+    const docs = { privacy: 'tietosuoja', terms: 'kayttoehdot' };
+    for (const [en, fi] of Object.entries(docs)) {
+        for (const dir of [en, fi]) {
+            assert.match(bicep, new RegExp(`^\\s*'/${dir}'$`, 'm'), `excluded path /${dir}`);
+            assert.match(bicep, new RegExp(`^\\s*'/${dir}/\\*'$`, 'm'), `excluded path /${dir}/*`);
+        }
+    }
+    // Each page links its other language and the other document in its own language.
+    const links = {
+        'privacy/index.html': ['/tietosuoja/', '/terms/'],
+        'tietosuoja/index.html': ['/privacy/', '/kayttoehdot/'],
+        'terms/index.html': ['/kayttoehdot/', '/privacy/'],
+        'kayttoehdot/index.html': ['/terms/', '/tietosuoja/'],
+    };
+    for (const [page, hrefs] of Object.entries(links)) {
+        const html = fs.readFileSync(path.join(publicRoot, page), 'utf8');
+        for (const href of hrefs) assert.ok(html.includes(`href="${href}"`), `${page} → ${href}`);
     }
 });
 
