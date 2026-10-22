@@ -9,20 +9,14 @@
 
   var CONTACT = 'markus@lintuala.fi';
   var SUBJECT = 'Access request to figureskatingtools.com';
-  var BODY = {
-    en: function (email) {
-      return 'Hello,\n\nI would like access to figureskatingtools.com.\n\n' +
-        'I signed in with: ' + email + '\n';
-    },
-    fi: function (email) {
-      return 'Hei,\n\npyydän käyttöoikeutta figureskatingtools.com-palveluun.\n\n' +
-        'Kirjauduin osoitteella: ' + email + '\n';
-    },
-  };
+  function body(email) {
+    return 'Hello,\n\nI would like access to figureskatingtools.com.\n\n' +
+      'I signed in with: ' + email + '\n';
+  }
 
-  function mailto(lang, email) {
+  function mailto(email) {
     var href = 'mailto:' + CONTACT + '?subject=' + encodeURIComponent(SUBJECT);
-    if (email) href += '&body=' + encodeURIComponent(BODY[lang](email));
+    if (email) href += '&body=' + encodeURIComponent(body(email));
     return href;
   }
 
@@ -37,7 +31,7 @@
       });
     }
     document.querySelectorAll('[data-mailto]').forEach(function (el) {
-      el.setAttribute('href', mailto(el.getAttribute('data-mailto'), email));
+      el.setAttribute('href', mailto(email));
     });
     document.documentElement.classList.add('is-denied');
   }
@@ -47,7 +41,9 @@
   }
 
   function run() {
-    fetch('/userinfo', { headers: { Accept: 'application/json' }, credentials: 'same-origin' })
+    // redirect: 'manual' — signed out, Easy Auth answers with a 302 to the
+    // sign-in page; following it would only trip the CSP. Opaque = generic.
+    fetch('/userinfo', { headers: { Accept: 'application/json' }, credentials: 'same-origin', redirect: 'manual' })
       .then(function (resp) {
         return resp.json().then(
           function (body) { return { status: resp.status, body: body }; },
