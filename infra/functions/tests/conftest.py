@@ -41,6 +41,11 @@ OTHER_TENANT_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 USER_ID = "0f0f0f0f-0000-4000-8000-000000000001"
 _DEFAULT = object()
 
+# Whom the stand-in router treats as an admin: it sends X-Forwarded-User-Admin: 1
+# for these e-mails (the real router does so for the Site.Admin app role; the
+# platform trusts only that header). Filled by the `admin` fixture.
+_ROUTER_ADMINS: set = set()
+
 
 def oid_for(email) -> str:
     """Each test e-mail is its own Entra object (a deterministic oid), so
@@ -160,21 +165,41 @@ def table(monkeypatch):
 
 
 @pytest.fixture
-def admin(monkeypatch, table):
-    """ADMIN_EMAILS configured (mixed case on purpose) on top of `table`.
-    Returns the admin's e-mail for `make_request(user_email=...)`."""
-    monkeypatch.setenv("ADMIN_EMAILS", f" Admin@Example.com , {OTHER_ADMIN_EMAIL}")
-    return ADMIN_EMAIL
+def admin(table):
+    """ADMIN_EMAIL and OTHER_ADMIN_EMAIL are admins on top of `table`: the
+    stand-in router sends them X-Forwarded-User-Admin: 1. Returns the admin's
+    e-mail for `make_request(user_email=...)`."""
+    with router_admins(ADMIN_EMAIL, OTHER_ADMIN_EMAIL):
+        yield ADMIN_EMAIL
+
+
+class router_admins:
+    """Context manager: these e-mails get the router's admin header."""
+
+    def __init__(self, *emails):
+        self.emails = {e.strip().lower() for e in emails}
+
+    def __enter__(self):
+        self.before = set(_ROUTER_ADMINS)
+        _ROUTER_ADMINS.update(self.emails)
+        return self
+
+    def __exit__(self, *exc):
+        _ROUTER_ADMINS.clear()
+        _ROUTER_ADMINS.update(self.before)
+        return False
 
 
 def make_request(method="GET", path="/api/competitions", *, body=None, raw_body=None,
                  params=None, route_params=None, headers=None, proxy_secret=PROXY_SECRET,
-                 user_email=USER_EMAIL, tid=TENANT_ID, oid=_DEFAULT, name=None):
+                 user_email=USER_EMAIL, tid=TENANT_ID, oid=_DEFAULT, name=None, admin=_DEFAULT):
     """Build the HttpRequest the router would have produced.
 
     The identity headers follow the router: tid + oid (by default the
     e-mail's own deterministic oid), the e-mail, and the percent-encoded
     name. Pass tid=None / oid=None to leave one out.
+    `admin`: whether the router's X-Forwarded-User-Admin: 1 is sent; by default
+    for the e-mails the `admin` fixture (or `router_admins`) made admins.
     `body` is JSON-encoded; `raw_body` is passed through as-is (file uploads).
     """
     if oid is _DEFAULT:
@@ -190,6 +215,10 @@ def make_request(method="GET", path="/api/competitions", *, body=None, raw_body=
         request_headers["x-forwarded-user-email"] = user_email
     if name is not None:
         request_headers["x-forwarded-user-name"] = quote(name, safe="")
+    if admin is _DEFAULT:
+        admin = (user_email or "").strip().lower() in _ROUTER_ADMINS
+    if admin:
+        request_headers["x-forwarded-user-admin"] = "1"
     request_headers.update(headers or {})
 
     payload_bytes = b""

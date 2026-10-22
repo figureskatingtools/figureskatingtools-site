@@ -150,8 +150,10 @@ HOVTP source JSON (one FSM sender, identified by its client IP):
 has passed reads back as expired so the UI re-prompts for it.
 
 Admin routes (the /admin/ panel), gated by `_require_admin` — fail closed: the
-proxy secret must be configured and match, and the e-mail in
-X-Forwarded-User-Email must be in ADMIN_EMAILS. Every mutation writes an AUDIT
+proxy secret must be configured and match, the forwarded tid/oid must be
+present with the tid allowed, and the router must have sent
+X-Forwarded-User-Admin: 1 (it does so only for the Site.Admin app role; the
+same trust the tool backends place in it). Every mutation writes an AUDIT
 row to the `adminlog` table (see "Admin log" below):
 
     GET    /api/manage/competitions?status=active|deleted|purged|all
@@ -608,7 +610,7 @@ def _require_user(req: func.HttpRequest):
         return _error("storage_unavailable", "Could not look up the signed-in user.", 500)
 
     return User(user_id=user_id, email=email, name=name,
-                is_admin=bool(email) and email in _admin_emails(), tid=tid, oid=oid)
+                is_admin=_forwarded_admin(req), tid=tid, oid=oid)
 
 
 # ── users ─────────────────────────────────────────────────────────────────────
@@ -3313,20 +3315,21 @@ def _sweep_registry(now: datetime, purge_enabled: bool) -> dict:
 
 # ── admin: gate ───────────────────────────────────────────────────────────────
 # The router already answers 403 on /api/manage/* for non-admins, but this
-# app's hostname is public, so the decision is made again here from its own
-# copy of the allow-list. Same fail-closed gate as _require_user (secret,
-# forwarded tid/oid, allowed tenant), then the forwarded e-mail must be in
-# ADMIN_EMAILS. It reads no table: the admin routes need no users row.
+# app's hostname is public, so the gate is checked again here. Same
+# fail-closed checks as _require_user (secret, forwarded tid/oid, allowed
+# tenant), then X-Forwarded-User-Admin: 1 — which the router sends only for
+# identities carrying the admin app role (Site.Admin) and strips from client
+# requests; the proxy secret is what makes that header trustworthy, exactly as
+# for the tool backends. It reads no table: the admin routes need no users row.
 
-def _admin_emails() -> frozenset:
-    """ADMIN_EMAILS (comma-separated) -> lowercased set. Empty = no admins.
-    Entries that are not printable ASCII are dropped (see _normalize_email)."""
-    raw = os.environ.get("ADMIN_EMAILS") or ""
-    return frozenset(email for email in map(_normalize_email, raw.split(",")) if email)
+def _forwarded_admin(req: func.HttpRequest) -> bool:
+    """The router's admin verdict. Only meaningful after the secret check."""
+    return _header(req, "X-Forwarded-User-Admin").strip() == "1"
 
 
 def _require_admin(req: func.HttpRequest):
-    """-> the admin's lowercased e-mail, or the 401/403 response to return."""
+    """-> the admin's audit name (lowercased e-mail, or `<tid>_<oid>` when the
+    identity has no usable e-mail), or the 401/403 response to return."""
     if not _proxy_secret_ok(req):
         logging.warning("Admin route: proxy shared secret unset, missing or mismatched")
         return _error("unauthorized", "Sign-in required.", 401)
@@ -3334,12 +3337,12 @@ def _require_admin(req: func.HttpRequest):
     identity = _forwarded_identity(req)
     if identity is None:
         return _error("unauthorized", "Sign-in required.", 401)
-    tid, _oid, email, _name = identity
+    tid, oid, email, _name = identity
     if tid not in _allowed_tenant_ids():
         return _error("tenant_not_allowed", "Accounts of your organisation cannot use this site.", 403)
-    if not email or email not in _admin_emails():
+    if not _forwarded_admin(req):
         return _error("admin_required", "Administrator access required.", 403)
-    return email
+    return email or _identity_row_key(tid, oid)
 
 
 # ── admin: log (audit trail + sweep runs) ─────────────────────────────────────

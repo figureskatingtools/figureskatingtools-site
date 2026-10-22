@@ -1,14 +1,14 @@
 """The admin gate (`_require_admin`) in front of every /api/manage/* route.
 
 The router already 403s non-admins, but this Function App's hostname is public,
-so the platform decides again from its own ADMIN_EMAILS. Like the user gate
-it fails CLOSED: an unset PROXY_SHARED_SECRET means nobody gets in, the router's
-X-Forwarded-User-Tid/-Oid must be present, and the admin e-mail is taken only
-from its X-Forwarded-User-Email. Every refusal must happen before any storage
-is touched.
+so the platform checks again. Like the user gate it fails CLOSED: an unset
+PROXY_SHARED_SECRET means nobody gets in, the router's X-Forwarded-User-Tid/-Oid
+must be present with an allowed tenant, and admin comes only from the router's
+X-Forwarded-User-Admin: 1 (sent for the Site.Admin app role) — no e-mail list.
+Every refusal must happen before any storage is touched.
 """
 import function_app as fa
-from conftest import ADMIN_EMAIL, OTHER_ADMIN_EMAIL, USER_EMAIL, make_request, payload
+from conftest import ADMIN_EMAIL, OTHER_TENANT_ID, TENANT_ID, USER_EMAIL, make_request, oid_for, payload
 
 ROUTES = [
     ("list", fa._admin_list_competitions, "GET", {}),
@@ -58,11 +58,37 @@ def test_a_request_without_an_identity_gets_403(admin, table):
     _assert_all_routes(table, 403, "admin_required", user_email=None)
 
 
-def test_an_empty_admin_list_means_nobody_is_an_admin(table, monkeypatch):
-    monkeypatch.delenv("ADMIN_EMAILS", raising=False)
-    _assert_all_routes(table, 403, "admin_required", user_email=ADMIN_EMAIL)
-    monkeypatch.setenv("ADMIN_EMAILS", " , ,")
-    _assert_all_routes(table, 403, "admin_required", user_email=ADMIN_EMAIL)
+def test_without_the_admin_header_nobody_is_an_admin(table):
+    """Not even the e-mail that used to be in ADMIN_EMAILS."""
+    _assert_all_routes(table, 403, "admin_required", user_email=ADMIN_EMAIL, admin=False)
+
+
+def test_the_admin_header_must_be_exactly_1(table):
+    for value in ("true", "yes", "0", "", "11"):
+        _assert_all_routes(table, 403, "admin_required", user_email=ADMIN_EMAIL, admin=False,
+                           headers={"x-forwarded-user-admin": value})
+
+
+def test_the_admin_header_with_a_missing_or_wrong_secret_is_401(table):
+    _assert_all_routes(table, 401, "unauthorized", user_email=ADMIN_EMAIL, admin=True, proxy_secret=None)
+    _assert_all_routes(table, 401, "unauthorized", user_email=ADMIN_EMAIL, admin=True,
+                       proxy_secret="not-the-secret")
+
+
+def test_the_admin_header_from_a_disallowed_tenant_is_403(table):
+    _assert_all_routes(table, 403, "tenant_not_allowed", user_email=ADMIN_EMAIL, admin=True,
+                       tid=OTHER_TENANT_ID)
+
+
+def test_the_admin_header_without_tid_or_oid_is_401(table):
+    _assert_all_routes(table, 401, "unauthorized", user_email=ADMIN_EMAIL, admin=True, tid=None)
+    _assert_all_routes(table, 401, "unauthorized", user_email=ADMIN_EMAIL, admin=True, oid=None)
+
+
+def test_the_admin_header_with_a_valid_identity_gets_in_whatever_the_email(table):
+    for email in (ADMIN_EMAIL, USER_EMAIL, None):
+        response = fa._admin_list_competitions(make_request("GET", user_email=email, admin=True))
+        assert response.status_code == 200, email
 
 
 def test_the_identity_comes_only_from_the_forwarded_header(admin, table):
@@ -76,19 +102,13 @@ def test_the_identity_comes_only_from_the_forwarded_header(admin, table):
     assert fa._admin_list_competitions(request).status_code == 403
 
 
-def test_the_admin_match_is_case_insensitive(admin, table):
-    for email in ("ADMIN@EXAMPLE.COM", "admin@example.com", "  Admin@Example.Com  "):
-        response = fa._admin_list_competitions(make_request("GET", user_email=email))
-        assert response.status_code == 200, email
+def test_the_gate_returns_the_lowercased_admin_email(table):
+    assert fa._require_admin(make_request("GET", user_email="ADMIN@example.COM", admin=True)) == ADMIN_EMAIL
 
 
-def test_every_listed_admin_gets_in(admin, table):
-    response = fa._admin_list_competitions(make_request("GET", user_email=OTHER_ADMIN_EMAIL))
-    assert response.status_code == 200
-
-
-def test_the_gate_returns_the_lowercased_admin_email(admin, table):
-    assert fa._require_admin(make_request("GET", user_email="ADMIN@example.COM")) == ADMIN_EMAIL
+def test_without_an_email_the_gate_returns_the_identity_key(table):
+    actor = fa._require_admin(make_request("GET", user_email=None, admin=True))
+    assert actor == f"{TENANT_ID}_{oid_for('anonymous')}"
 
 
 def test_the_secret_is_compared_in_constant_time(admin, table, monkeypatch):
