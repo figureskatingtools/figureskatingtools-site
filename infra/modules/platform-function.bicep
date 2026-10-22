@@ -9,6 +9,18 @@ param location string
 param functionAppName string
 param appServicePlanName string
 param appInsightsName string
+
+// Technical logs are kept 90 days (the privacy notice says so). A classic
+// component's retention follows the Log Analytics workspace it is linked to, so
+// both the workspace and the component say 90 explicitly. The workspace is per
+// environment; the HOVTP listener writes to the same component.
+@description('Log Analytics workspace behind ai-fs-platform (log-fs-platform-<env>).')
+param logAnalyticsWorkspaceName string
+
+@description('Days the technical logs are kept (workspace and App Insights). The privacy notice promises 90.')
+@minValue(30)
+@maxValue(90)
+param logRetentionDays int = 90
 param storageAccountName string
 param deploymentContainerUrl string
 
@@ -72,12 +84,29 @@ resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
   }
 }
 
+resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
+  name: logAnalyticsWorkspaceName
+  location: location
+  properties: {
+    sku: {
+      name: 'PerGB2018'
+    }
+    retentionInDays: logRetentionDays
+  }
+}
+
+// Workspace-based: linking it here replaces the default workspace the classic
+// component was auto-migrated to. Data already in that old workspace keeps its
+// retention until it ages out.
 resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
   name: appInsightsName
   location: location
   kind: 'web'
   properties: {
     Application_Type: 'web'
+    WorkspaceResourceId: logAnalytics.id
+    IngestionMode: 'LogAnalytics'
+    RetentionInDays: logRetentionDays
   }
 }
 

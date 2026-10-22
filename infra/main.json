@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.48.1.52935",
-      "templateHash": "13827867932007122024"
+      "templateHash": "15548820138164897440"
     }
   },
   "parameters": {
@@ -402,7 +402,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.48.1.52935",
-              "templateHash": "9012048873933194067"
+              "templateHash": "15279050544107427960"
             }
           },
           "parameters": {
@@ -659,6 +659,29 @@
               },
               "dependsOn": [
                 "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Web/sites/config",
+              "apiVersion": "2022-09-01",
+              "name": "[format('{0}/{1}', parameters('webAppName'), 'logs')]",
+              "properties": {
+                "httpLogs": {
+                  "fileSystem": {
+                    "enabled": true,
+                    "retentionInDays": 90,
+                    "retentionInMb": 35
+                  }
+                },
+                "detailedErrorMessages": {
+                  "enabled": false
+                },
+                "failedRequestsTracing": {
+                  "enabled": false
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
               ]
             },
             {
@@ -1096,6 +1119,9 @@
           "appInsightsName": {
             "value": "ai-fs-platform"
           },
+          "logAnalyticsWorkspaceName": {
+            "value": "[format('log-fs-platform-{0}', last(split(parameters('resourceGroupName'), '-')))]"
+          },
           "storageAccountName": {
             "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.storageAccountName.value]"
           },
@@ -1143,7 +1169,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.48.1.52935",
-              "templateHash": "7379536056923891783"
+              "templateHash": "12036322609162971322"
             }
           },
           "parameters": {
@@ -1158,6 +1184,21 @@
             },
             "appInsightsName": {
               "type": "string"
+            },
+            "logAnalyticsWorkspaceName": {
+              "type": "string",
+              "metadata": {
+                "description": "Log Analytics workspace behind ai-fs-platform (log-fs-platform-<env>)."
+              }
+            },
+            "logRetentionDays": {
+              "type": "int",
+              "defaultValue": 90,
+              "minValue": 30,
+              "maxValue": 90,
+              "metadata": {
+                "description": "Days the technical logs are kept (workspace and App Insights). The privacy notice promises 90."
+              }
             },
             "storageAccountName": {
               "type": "string"
@@ -1254,14 +1295,32 @@
               }
             },
             {
+              "type": "Microsoft.OperationalInsights/workspaces",
+              "apiVersion": "2023-09-01",
+              "name": "[parameters('logAnalyticsWorkspaceName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "sku": {
+                  "name": "PerGB2018"
+                },
+                "retentionInDays": "[parameters('logRetentionDays')]"
+              }
+            },
+            {
               "type": "Microsoft.Insights/components",
               "apiVersion": "2020-02-02",
               "name": "[parameters('appInsightsName')]",
               "location": "[parameters('location')]",
               "kind": "web",
               "properties": {
-                "Application_Type": "web"
-              }
+                "Application_Type": "web",
+                "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsWorkspaceName'))]",
+                "IngestionMode": "LogAnalytics",
+                "RetentionInDays": "[parameters('logRetentionDays')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsWorkspaceName'))]"
+              ]
             },
             {
               "type": "Microsoft.Web/sites",

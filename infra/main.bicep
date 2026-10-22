@@ -227,6 +227,8 @@ module platformFunction 'modules/platform-function.bicep' = {
     functionAppName: 'func-fs-platform-${uniqueString(rg.id)}'
     appServicePlanName: 'asp-fs-platform'
     appInsightsName: 'ai-fs-platform'
+    // rg-fs-site-<env> -> log-fs-platform-<env>
+    logAnalyticsWorkspaceName: 'log-fs-platform-${last(split(resourceGroupName, '-'))}'
     storageAccountName: platformStorage.outputs.storageAccountName
     deploymentContainerUrl: platformStorage.outputs.deploymentContainerUrl
     dataContainerName: platformStorage.outputs.dataContainerName

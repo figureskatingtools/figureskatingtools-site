@@ -160,6 +160,30 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
   }
 }
 
+// App Service logs: the router's console output (Linux "Application logging
+// (File System)", which App Service stores as the file-system HTTP logs config)
+// is kept at most 90 days and 35 MB, whichever comes first. The privacy notice
+// promises 90 days for technical logs; 0 would mean "never deleted".
+resource siteLogs 'Microsoft.Web/sites/config@2022-09-01' = {
+  parent: webApp
+  name: 'logs'
+  properties: {
+    httpLogs: {
+      fileSystem: {
+        enabled: true
+        retentionInDays: 90
+        retentionInMb: 35
+      }
+    }
+    detailedErrorMessages: {
+      enabled: false
+    }
+    failedRequestsTracing: {
+      enabled: false
+    }
+  }
+}
+
 // external only when it can work; the workflow refuses the deploy before
 // that, so this fallback is just a last line of defence.
 var externalMode = authTenantMode == 'external' && !empty(externalClientId) && !empty(externalTenantId)
