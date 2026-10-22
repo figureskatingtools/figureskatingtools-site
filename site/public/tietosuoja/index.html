@@ -85,7 +85,7 @@
             </tr>
             <tr>
               <th scope="row">Tuomaripaperiviestin vastaanottajat</th>
-              <td data-label="Tiedot">Sähköpostiosoite. Lähetyslokiin tallentuu, kuka paperit lähetti tai kopioi niiden linkin, kenelle, milloin, milloin linkki vanhenee ja montako kertaa sitä on käytetty.</td>
+              <td data-label="Tiedot">Sähköpostiosoite. Jokaisesta viestistä lähtee myös kopio (Cc) tulospalvelun omaan osoitteeseen, jonka työkalu täyttää valmiiksi lähettäjän osoitteella ja jota lähettäjä voi muuttaa, jotta tulospalvelulle jää kopio lähetetystä viestistä. Lähetyslokiin tallentuu, kuka paperit lähetti tai kopioi niiden linkin, kenelle (kopio mukaan lukien), milloin, milloin linkki vanhenee ja montako kertaa sitä on käytetty.</td>
               <td data-label="Lähde">Tulospalvelun tekijä syöttää</td>
               <td data-label="Säilytetään" class="basis">Kunnes kilpailun tiedot poistetaan; kukin linkki toimii enintään 5 päivää</td>
             </tr>
@@ -149,7 +149,7 @@
             </tr>
             <tr>
               <th scope="row">Kilpailutilastot</th>
-              <td data-label="Tiedot">Vain kilpailukohtaisesti: kilpailun nimi, tunnus, paikka, päivämäärät ja käyttömäärät, kuten tiedostojen, asiakirjojen, sähköpostien ja sarjojen määrä. Ei koskaan mitään käyttäjästä.</td>
+              <td data-label="Tiedot">Vain kilpailukohtaisesti: kilpailun nimi, tunnus, paikka, päivämäärät ja käyttömäärät, kuten tiedostojen, asiakirjojen, sähköpostien ja sarjojen määrä. Ei koskaan mitään käyttäjästä. Säilytetään ilman määräaikaa.</td>
               <td data-label="Miksi ja millä perusteella" class="basis">Palvelun kehittäminen. Ei sisällä henkilötietoja.</td>
             </tr>
           </tbody>
@@ -164,7 +164,7 @@
       <ul>
         <li><strong>Microsoft Azure</strong> ylläpitää palvelua, sen tiedostoja, tietokantoja ja teknisiä lokeja. Kaikki tallennetaan Microsoftin Sweden Central -alueelle Ruotsiin, EU:n sisälle. FS Managerin suoraan lähettämät tiedot kulkevat palveluun Microsoftin Azure Front Door- ja API Management -palveluiden kautta.</li>
         <li><strong>Microsoft Entra ID</strong> hoitaa kirjautumisen.</li>
-        <li><strong>Mailgun</strong> (Mailgun Technologies, Inc., osa Sinch-konsernia) lähettää tuomaripaperiviestit EU-alueensa kautta. Se saa vastaanottajien osoitteet ja viestin latauslinkkeineen. Viestien avausten ja linkkien klikkausten seuranta on poistettu käytöstä. Mailgun ei säilytä viestistä kopiota, ja se säilyttää toimitustapahtumien tiedot (vastaanottajan osoite, aika ja toimituksen tila) enintään 30 päivää.</li>
+        <li><strong>Mailgun</strong> (Mailgun Technologies, Inc., osa Sinch-konsernia) lähettää tuomaripaperiviestit EU-alueensa kautta. Se saa vastaanottajien osoitteet, myös tulospalvelun kopio-osoitteen, ja viestin latauslinkkeineen. Viestien avausten ja linkkien klikkausten seuranta on poistettu käytöstä. Mailgun ei säilytä viestistä kopiota, ja se säilyttää toimitustapahtumien tiedot (vastaanottajan osoite, aika ja toimituksen tila) enintään 30 päivää.</li>
       </ul>
       <p>Microsoft ja Mailgun ovat yhdysvaltalaisia yrityksiä, joten tietoihin voidaan rajatuissa tilanteissa päästä käsiksi Yhdysvalloista esimerkiksi tuen tai tietoturvan vuoksi. Molemmat yritykset ovat liittyneet EU:n ja Yhdysvaltojen väliseen tietosuojakehykseen (Data Privacy Framework, tarkistettu 13.10.2026). Jos kehys ei enää ole voimassa, sovelletaan niiden tietojenkäsittelyehtoihin sisältyviä EU:n vakiosopimuslausekkeita.</p>
       <p>Tietoja ei myydä eikä luovuteta markkinointiin. Mikään työkalujen sisältö ei ole julkista: kaikki vaatii kirjautumisen, paitsi sähköpostilla lähetetty tai jakamista varten kopioitu tuomaripapereiden latauslinkki, joka sisältää satunnaisen koodin ja toimii enintään 5 päivää. Kuka tahansa, jolla linkki on, voi ladata paperit, joten jaa se vain niille, jotka niitä tarvitsevat. Työkaluissa näkyvät latauslinkit vanhenevat 15 minuutissa.</p>
@@ -175,7 +175,7 @@
         <li>Microsoft: palvelun ylläpito (Microsoft Azure, Sweden Central) ja kirjautuminen (Microsoft Entra ID).</li>
         <li>Mailgun Technologies, Inc.: tuomaripaperiviestien toimittaminen (EU-alue).</li>
       </ul>
-      <p>Kerromme käyttäjille vähintään 30 päivää ennen kuin otamme käyttöön uuden alihankkijan tai vaihdamme alihankkijaa, sähköpostilla ja palvelussa. Asiakas, joka vastustaa muutosta, voi lopettaa palvelun käytön ja poistaa kilpailunsa ennen muutoksen voimaantuloa.</p>
+      <p>Kerromme käyttäjille sähköpostilla vähintään 30 päivää ennen kuin otamme käyttöön uuden alihankkijan tai vaihdamme alihankkijaa. Asiakas, joka vastustaa muutosta, voi lopettaa palvelun käytön ja poistaa kilpailunsa ennen muutoksen voimaantuloa.</p>
 
       <h3>Muiden käyttäjien hakeminen</h3>
       <p>Kilpailua jakaessaan kirjautunut käyttäjä voi hakea palveluun kirjautuneita käyttäjiä kahdella tavalla: kirjoittamalla vähintään 3 merkkiä heidän nimestään tai kirjoittamalla heidän sähköpostiosoitteensa tarkasti ja kokonaan. Sähköpostiosoitteen osalla ei löydy ketään. Nimihaku näyttää nimen ja vain peitetyn sähköpostiosoitteen, esimerkiksi a•••@club.fi. Koko sähköpostiosoite näytetään vain, kun se on kirjoitettu hakuun kokonaan, tai käyttäjälle, jolla on jo yhteinen kilpailu haetun käyttäjän kanssa (omistajana tai jaon kautta). Hakujen määrä on rajoitettu käyttäjäkohtaisesti, jotta hakemistoa ei voi kopioida.</p>
@@ -193,10 +193,11 @@
     <section id="retention" aria-labelledby="h-retention">
       <h2 id="h-retention"><span class="num">5</span>Kuinka kauan tietoja säilytetään</h2>
       <p>Kaikki kilpailusta tallennettu poistetaan kilpailun jälkeen: ladatut ja FS Managerin lähettämät tiedostot, joukkueiden kokoonpanot, kuvat, tuotetut tuomaripaperit ja pöytäkirjat, sähköpostien lähetysloki, FS Manager -lähettäjien tiedot sekä tieto siitä, kenelle kilpailu on jaettu. Jokaisella kilpailulla on yksi poistopäivä, joka koskee kaikkia sen tietoja kaikissa työkaluissa, <strong>60 päivän kuluttua kilpailun luomisesta</strong>. Tulospalvelun tekijä voi siirtää poistopäivää viikon kerrallaan myöhemmäksi, kun siihen on syy, esimerkiksi kun kilpailu pidetään myöhemmin, ja uusi päivä koskee kaikkia työkaluja samalla tavalla. Ylläpitäjä voi myös asettaa toisen poistopäivän, esimerkiksi tulospalvelun tekijän pyynnöstä. Tulospalvelun tekijä voi poistaa kilpailun aiemmin, jolloin sen tiedot poistetaan kaikista työkaluista seuraavana yönä.</p>
-      <p>Poiston jälkeen jäävät vain kohdassa 3 kuvatut kilpailukohtaiset tilastot: kilpailun nimi, päivämäärät ja käyttömäärät ilman henkilötietoja.</p>
+      <p>Poiston jälkeen jäävät vain kohdassa 3 kuvatut kilpailukohtaiset tilastot: kilpailun nimi, päivämäärät ja käyttömäärät ilman henkilötietoja. Niitä säilytetään ilman määräaikaa, ja ne ovat vain kilpailukohtaisia, eivät koskaan käyttäjäkohtaisia.</p>
+      <p>Kun kilpailu poistetaan, sen luoneen käyttäjän ja muiden sen parissa toimineiden käyttäjien sähköpostiosoitteet poistetaan kaikkien työkalujen tiedoista. Jos työkalun tieto ei liity mihinkään palvelun kilpailuun, siitä poistetaan sähköpostiosoitteet samalla tavalla, kun tieto on vanhempi kuin 60 päivän säilytysaika.</p>
       <ul>
         <li>Tuomaripapereiden latauslinkit: enintään 5 päivää, eivätkä koskaan pidempään kuin kilpailun tietoja säilytetään.</li>
-        <li>Tekniset lokit: enintään 90 päivää.</li>
+        <li>Tekniset lokit: 90 päivää.</li>
         <li>Ylläpitoloki: 1 vuosi.</li>
         <li>FS Managerin siirtoyhteyksien tiedot: poistetaan, kun yhteyttä ei ole käytetty 30 päivään.</li>
         <li>Mailgunin toimitustapahtumien tiedot: enintään 30 päivää.</li>
@@ -230,7 +231,7 @@
       <h2 id="h-updates"><span class="num">9</span>Selosteen muutokset</h2>
       <p>Selostetta päivitetään, kun käytännöt muuttuvat ja kun jokin työkalu alkaa käsitellä uudenlaisia tietoja. Päivitetty viimeksi 22.10.2026.</p>
       <ul>
-        <li>22.10.2026: Asiakas on nyt kilpailun tietojen rekisterinpitäjä ja me sen käsittelijä. Syntymäaikoja ei enää tallenneta. Lisätty alihankkijaluettelo, tieto hyväksytyistä käyttöehdoista, tietojen suojaaminen ja suomenkielinen käännös.</li>
+        <li>22.10.2026: Asiakas on nyt kilpailun tietojen rekisterinpitäjä ja me sen käsittelijä. Syntymäaikoja ei enää tallenneta. Lisätty alihankkijaluettelo, tieto hyväksytyistä käyttöehdoista, tietojen suojaaminen ja suomenkielinen käännös. Tekniset lokit säilytetään 90 päivää ja kilpailukohtaiset tilastot ilman määräaikaa. Käyttäjien sähköpostiosoitteet poistetaan kaikkien työkalujen tiedoista, kun kilpailu poistetaan. Alihankkijoiden muutoksista ilmoitetaan sähköpostilla. Kuvattu tuomaripaperiviestin kopio, joka lähtee tulospalvelulle.</li>
         <li>19.10.2026: Yksityiset, jaettavat kilpailut, käyttäjähakemisto ja 5 päivää toimivat kopioidut tuomaripaperilinkit.</li>
         <li>15.10.2026: Ylläpitäjän rooli ja ylläpitoloki.</li>
         <li>14.10.2026: Ensimmäinen versio.</li>

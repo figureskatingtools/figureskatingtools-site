@@ -86,7 +86,7 @@
             </tr>
             <tr>
               <th scope="row">Recipients of the judges' papers e-mail</th>
-              <td data-label="Data">E-mail address. A send log records who sent the papers or copied a link to them, to whom, when, when the link expires and how many times it has been used.</td>
+              <td data-label="Data">E-mail address. Every message is also copied (Cc) to the result service's own address, which the tool fills in with the sender's address and the sender can change, so that the result service keeps a copy of what was sent. A send log records who sent the papers or copied a link to them, to whom (the copy included), when, when the link expires and how many times it has been used.</td>
               <td data-label="Source">Entered by the operator</td>
               <td data-label="Kept until" class="basis">The competition's data is deleted; each link works for at most 5 days</td>
             </tr>
@@ -150,7 +150,7 @@
             </tr>
             <tr>
               <th scope="row">Competition statistics</th>
-              <td data-label="Data">Per competition only: its name, code, venue, dates and usage counts, such as the number of files, documents, e-mails and categories. Never anything about a user.</td>
+              <td data-label="Data">Per competition only: its name, code, venue, dates and usage counts, such as the number of files, documents, e-mails and categories. Never anything about a user. Kept indefinitely.</td>
               <td data-label="Why and on what basis" class="basis">Developing the service. Contains no personal data.</td>
             </tr>
           </tbody>
@@ -165,7 +165,7 @@
       <ul>
         <li><strong>Microsoft Azure</strong> hosts the service, its files, databases and technical logs. Everything is stored in the Sweden Central region in the EU. Data sent live from FS Manager reaches the service through Microsoft's Azure Front Door and API Management.</li>
         <li><strong>Microsoft Entra ID</strong> handles sign-in.</li>
-        <li><strong>Mailgun</strong> (Mailgun Technologies, Inc., part of Sinch) sends the judges' papers e-mail through its EU region. It receives the recipients' addresses and the message with its download link. Open and click tracking is turned off. Mailgun keeps no copy of the message and keeps delivery event data (recipient address, time and delivery status) for up to 30 days.</li>
+        <li><strong>Mailgun</strong> (Mailgun Technologies, Inc., part of Sinch) sends the judges' papers e-mail through its EU region. It receives the recipients' addresses, the result service's copy address included, and the message with its download link. Open and click tracking is turned off. Mailgun keeps no copy of the message and keeps delivery event data (recipient address, time and delivery status) for up to 30 days.</li>
       </ul>
       <p>Microsoft and Mailgun are US companies, so data may in limited cases be accessed from the United States, for example for support or security. Both companies are certified under the EU-U.S. Data Privacy Framework (checked on 13 October 2026). If that framework no longer applies, the EU standard contractual clauses in their data processing terms do.</p>
       <p>Data is not sold or shared for marketing. Nothing in the tools is public: everything requires sign-in, except a judges' papers download link sent by e-mail or copied to share, which contains a random code and works for at most 5 days. Anyone who has the link can download the papers, so share it only with the people who need them. Download links shown in the tools expire after 15 minutes.</p>
@@ -176,7 +176,7 @@
         <li>Microsoft: hosting (Microsoft Azure, Sweden Central) and sign-in (Microsoft Entra ID).</li>
         <li>Mailgun Technologies, Inc.: delivery of the judges' papers e-mail (EU region).</li>
       </ul>
-      <p>We tell users at least 30 days before we add or replace a sub-processor, by e-mail and in the service. A Customer that objects can stop using the service and delete its competitions before the change takes effect.</p>
+      <p>We tell users by e-mail at least 30 days before we add or replace a sub-processor. A Customer that objects can stop using the service and delete its competitions before the change takes effect.</p>
 
       <h3>Finding other users</h3>
       <p>When sharing, a signed-in user can find other users who have signed in to the service in two ways: by typing at least 3 characters of their name, or by typing their exact, full e-mail address. Part of an e-mail address finds nobody. A name search shows the name and only a masked e-mail address, for example a•••@club.fi. The full e-mail address is shown only when it was typed in full, or to a user who already has a competition in common with that person (as its owner or through sharing). Searches are limited per user so that the directory cannot be copied.</p>
@@ -194,10 +194,11 @@
     <section id="retention" aria-labelledby="h-retention">
       <h2 id="h-retention"><span class="num">5</span>How long data is kept</h2>
       <p>Everything stored about a competition is removed after the competition: the uploaded files and the files sent from FS Manager, rosters, photos, the generated judges' papers and protocols, the e-mail send log, the FS Manager sender records and the list of users it is shared with. Each competition has one deletion date that applies to all of its data in every tool, <strong>60 days after the competition is created</strong>. The operator may move the date one week later at a time when there is a reason to, for example when the competition takes place later than that, and the new date applies to every tool alike. An administrator may also set another deletion date, for example when an operator asks for it. The operator may delete the competition earlier, and its data is then removed from every tool the following night.</p>
-      <p>After deletion, only the per-competition statistics described in section 3 remain: the competition's name, dates and usage counts, without any personal data.</p>
+      <p>After deletion, only the per-competition statistics described in section 3 remain: the competition's name, dates and usage counts, without any personal data. They are kept indefinitely, and only per competition, never per user.</p>
+      <p>When a competition is deleted, the e-mail addresses of the user who created it and of the other users who worked on it are removed from the records of every tool. A tool's record that is not linked to any competition in the service loses those e-mail addresses in the same way once it is older than the 60-day retention period.</p>
       <ul>
         <li>Judges' papers download links: at most 5 days, and never longer than the competition's data is kept.</li>
-        <li>Technical logs: at most 90 days.</li>
+        <li>Technical logs: 90 days.</li>
         <li>Administrator log: 1 year.</li>
         <li>FS Manager transfer session records: deleted after 30 days without activity.</li>
         <li>Mailgun's delivery event data: up to 30 days.</li>
@@ -231,7 +232,7 @@
       <h2 id="h-updates"><span class="num">9</span>Changes to this notice</h2>
       <p>This notice is updated when practices change, and when a tool starts to process a new kind of data. Last updated 22 October 2026.</p>
       <ul>
-        <li>22 October 2026: The Customer is now the controller of competition data and we are its processor. Dates of birth are no longer stored. Added the sub-processor list, the record of accepted terms, how data is protected, and a Finnish translation.</li>
+        <li>22 October 2026: The Customer is now the controller of competition data and we are its processor. Dates of birth are no longer stored. Added the sub-processor list, the record of accepted terms, how data is protected, and a Finnish translation. Technical logs are kept 90 days and per-competition statistics indefinitely. Users' e-mail addresses are removed from every tool's records when a competition is deleted. Sub-processor changes are announced by e-mail. Described the copy of the judges' papers e-mail that goes to the result service.</li>
         <li>19 October 2026: Private competitions with sharing, the user directory and 5-day copied judges' papers links.</li>
         <li>15 October 2026: The administrator role and the administrator log.</li>
         <li>14 October 2026: First version.</li>
