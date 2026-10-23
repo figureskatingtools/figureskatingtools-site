@@ -252,9 +252,9 @@ User attributes collected at sign-up:
 
 - Display Name, Given Name, Surname.
 - Custom Boolean **`TermsAccepted`**, **required**, shown as a checkbox whose
-  label links the privacy notice (`https://figureskatingtools.com/privacy`,
-  Finnish `…/tietosuoja`). Language customisation: a Finnish (`fi`) override of
-  the page and the checkbox label. Conditional Access "Terms of use" isn't
+  label reads `I have read and agree to the [terms of use](https://figureskatingtools.com/terms/)
+  and the [privacy notice](https://figureskatingtools.com/privacy/)`. The user
+  flow is English only (no language overrides). Conditional Access "Terms of use" isn't
   available in external tenants, hence the checkbox. The claim is not versioned,
   so the platform records the version: the router forwards the claim as
   `X-Forwarded-User-Terms-Accepted: 1`, and the platform writes `TermsVersion`,
@@ -267,6 +267,26 @@ Token claims (ID token): `tid`, `oid`, `email`, `name`, and **`termsAccepted`**
 mapping of the `TermsAccepted` extension attribute (requires
 `acceptMappedClaims: true` in the app manifest). The platform will require the
 claim for external identities in phase C.
+
+## Branding (Company branding)
+
+The sign-in and sign-up pages wear the landing page's look: the greyscale
+judges'-papers photo under the ink-to-rink shade, a white card with the FSTools
+wordmark, a gold pill **Next** button, and links to the privacy notice, the
+Finnish notice and the terms. The kit is in [`branding/`](branding/): the images
+(each inside Microsoft's size limit), `custom.css` (colour and style only, none of
+the layout properties Microsoft is retiring) and `make_assets.py`, which rebuilds
+the images from `site/public`. [`branding/README.md`](branding/README.md) lists
+every value per Company branding tab (Basics, Layout, Header, Footer, Sign-in
+form, Text) plus Tenant properties › Name `figureskatingtools.com`. Applied
+2026-10-23. One tenant serves test and prod, so a change shows on both sign-in
+pages at once.
+
+- The personal Microsoft account button shows a generic blue circle: External ID
+  has no icon setting for custom OIDC providers. Its display name is kept short,
+  `Microsoft account`, because a longer one wraps onto two lines.
+- The sign-in page can't load the site's web fonts; `custom.css` falls back to
+  Georgia and the system UI font.
 
 ## Conditional Access
 
