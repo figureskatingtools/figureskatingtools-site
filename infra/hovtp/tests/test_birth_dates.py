@@ -108,6 +108,34 @@ def test_not_xml_raises():
         fa.strip_birth_dates(b"not xml")
 
 
+# A DTD could keep a birth date out of the strip's reach: the date of
+# `BirthDate="&dob;"` stays in the entity declaration once the attribute is gone.
+DTD_BIRTHDATE_BODY = (
+    '<?xml version="1.0" encoding="utf-8"?>\n'
+    '<!DOCTYPE OdfBody [<!ENTITY dob "2012-03-04">]>\n'
+    f'<OdfBody CompetitionCode="{fixtures.COMPETITION_CODE_RAW}" DocumentType="DT_PARTIC">'
+    '<Competition><Participant Code="1" BirthDate="&dob;"/></Competition></OdfBody>\n'
+).encode("utf-8")
+
+
+@pytest.mark.parametrize("body", [
+    DTD_BIRTHDATE_BODY,
+    # No birth date in sight: a DTD alone is enough to refuse the file.
+    b'<!DOCTYPE OdfBody><OdfBody DocumentType="DT_PARTIC"><P Code="1"/></OdfBody>',
+    b'<!DOCTYPE OdfBody SYSTEM "odf.dtd"><OdfBody DocumentType="DT_PARTIC"/>',
+    # Nor can the entity carry the element itself.
+    b'<!DOCTYPE OdfBody [<!ENTITY e "<BirthDate>2012</BirthDate>">]><OdfBody>&e;</OdfBody>',
+])
+def test_a_file_with_a_dtd_is_refused(body):
+    with pytest.raises(fa.BirthDateError, match="DTD"):
+        fa.strip_birth_dates(body)
+
+
+def test_a_file_without_a_dtd_still_parses_as_before():
+    assert fa.strip_birth_dates(b'<OdfBody><P Code="&amp;"/></OdfBody>') == \
+        b'<OdfBody><P Code="&amp;"/></OdfBody>'
+
+
 # ── through the listener ──────────────────────────────────────────────────────
 
 @pytest.mark.parametrize("body, expected", [
@@ -141,6 +169,27 @@ def test_a_participant_file_that_cannot_be_cleaned_is_refused_and_not_stored(tab
 
     assert response.status_code == 451
     assert head(response, "X-HOVTP-Error-Reason") == "birth dates could not be removed"
+    assert blobs.blobs == {}
+
+
+def test_a_pushed_participant_file_with_a_dtd_is_refused_and_not_stored(table, blobs):
+    response = _post(DTD_BIRTHDATE_BODY)
+
+    assert response.status_code == 451
+    assert head(response, "X-HOVTP-Error-Reason") == "birth dates could not be removed"
+    assert blobs.blobs == {}
+
+
+@pytest.mark.parametrize("body", [
+    fixtures.DT_PARTIC_BODY.replace(b"<OdfBody ", b"<OdfBody Note=\"a & b\" "),
+    fixtures.DT_PARTIC_BODY.replace(b"<OdfBody ", b"<OdfBody BROKEN "),
+    b"\n" + fixtures.DT_PARTIC_BODY,
+])
+def test_a_push_whose_header_does_not_parse_is_refused_and_not_stored(table, blobs, body):
+    """The listener reads the type from the root tag, so it never stores one it cannot read."""
+    response = _post(body)
+
+    assert response.status_code == 400
     assert blobs.blobs == {}
 
 

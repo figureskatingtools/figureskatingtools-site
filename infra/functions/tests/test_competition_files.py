@@ -6,6 +6,8 @@ filename: it becomes a blob path, so a name that escaped the competition's own
 prefix would be a cross-competition write. Everything else here pins the wire
 shape the tools read.
 """
+import pytest
+
 import function_app as fa
 from conftest import PROXY_SECRET, make_request, payload
 
@@ -566,3 +568,95 @@ def test_a_broken_participant_file_is_refused_rather_than_stored(table, blobs):
 
     assert response.status_code == 422
     assert blobs.blobs == {}
+
+
+def _refused(response, blobs):
+    assert response.status_code == 422
+    assert payload(response)["error"] == "birth_dates_not_removed"
+    assert blobs.blobs == {}
+
+
+def test_a_participant_file_with_a_dtd_is_refused(table, blobs):
+    """An entity keeps the date in its declaration once the attribute is gone."""
+    competition = create_competition()
+    with_entity = PARTIC_WITH_BIRTHDATES.replace(
+        b'?>\n', b'?>\n<!DOCTYPE OdfBody [<!ENTITY dob "2012-03-04">]>\n', 1
+    ).replace(b'BirthDate="2012-03-04"', b'BirthDate="&dob;"')
+
+    _refused(upload(competition["id"], filename="DT_PARTIC.xml", data=with_entity), blobs)
+
+
+# Each breaks the root tag, which is where the type is read from: the file
+# could be a participant file and nothing can tell, so it is not stored.
+@pytest.mark.parametrize("broken", [
+    PARTIC_WITH_BIRTHDATES.replace(b"<OdfBody ", b'<OdfBody Note="a & b" '),
+    PARTIC_WITH_BIRTHDATES.replace(b"<OdfBody ", b"<OdfBody BROKEN "),
+    b"\n" + PARTIC_WITH_BIRTHDATES,
+    # Not even a participant type to go by.
+    PARTIC_WITH_BIRTHDATES.replace(b"DT_PARTIC ", b"DT_SCHEDULE").replace(
+        b"<OdfBody ", b"<OdfBody BROKEN "),
+])
+def test_an_xml_file_whose_root_tag_does_not_parse_is_refused(table, blobs, broken):
+    competition = create_competition()
+
+    _refused(upload(competition["id"], filename="DT_PARTIC.xml", data=broken), blobs)
+
+
+@pytest.mark.parametrize("prefix", [b" \r\n\t", b"\xef\xbb\xbf\n"])
+def test_a_bom_or_whitespace_does_not_hide_an_xml_file(table, blobs, prefix):
+    """Still XML-like, and whitespace before the declaration does not parse."""
+    competition = create_competition()
+
+    _refused(upload(competition["id"], filename="DT_PARTIC.xml",
+                    data=prefix + PARTIC_WITH_BIRTHDATES), blobs)
+
+
+def test_a_participant_file_with_a_bom_is_cleaned(table, blobs):
+    competition = create_competition()
+
+    upload(competition["id"], filename="DT_PARTIC.xml",
+           data=b"\xef\xbb\xbf" + PARTIC_WITH_BIRTHDATES)
+
+    assert _stored(blobs).data == b"\xef\xbb\xbf" + PARTIC_STRIPPED
+
+
+def test_a_utf16_file_whose_root_tag_does_not_parse_is_refused(table, blobs):
+    competition = create_competition()
+    broken = ('<?xml version="1.0" encoding="utf-16"?>'
+              '<OdfBody BROKEN DocumentType="DT_PARTIC"><P BirthDate="2012-03-04"/>'
+              '</OdfBody>').encode("utf-16")
+
+    _refused(upload(competition["id"], filename="DT_PARTIC.xml", data=broken), blobs)
+
+
+def test_a_file_that_is_neither_xml_nor_pdf_but_names_a_birth_date_is_refused(table, blobs):
+    competition = create_competition()
+
+    _refused(upload(competition["id"], filename="DT_PARTIC.xml",
+                    data=b'x<OdfBody><P BIRTHDATE="2012-03-04"/></OdfBody>'), blobs)
+    _refused(upload(competition["id"], filename="photo.jpg",
+                    data=b"\xff\xd8\xff\xe0" + "birthDate".encode("utf-16-le")), blobs)
+
+
+def test_well_formed_xml_pdfs_and_images_are_still_stored_as_they_are(table, blobs):
+    competition = create_competition()
+    schedule = ('<?xml version="1.0" encoding="utf-8"?>\n'
+                '<!DOCTYPE OdfBody>\n'
+                '<OdfBody DocumentType="DT_SCHEDULE"><Unit Code="1"/></OdfBody>\n').encode()
+    utf16 = ('<?xml version="1.0" encoding="utf-16"?>'
+             '<OdfBody DocumentType="DT_SCHEDULE"><Unit Code="1"/></OdfBody>').encode("utf-16")
+    files = {
+        "schedule.xml": b"\xef\xbb\xbf" + schedule,
+        "untyped.xml": b"\r\n <Root/>",
+        "schedule16.xml": utf16,
+        "other.xml": b'<?xml version="1.0"?><Root><P Note="birthdate"/></Root>',
+        "list.pdf": b"%PDF-1.7\n/Title (BirthDate list)\n%%EOF",
+        "photo.jpg": b"\xff\xd8\xff\xe0\x00\x10JFIF\x00",
+        "photo.png": b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR",
+    }
+
+    for name, data in files.items():
+        assert upload(competition["id"], filename=name, data=data).status_code == 201, name
+
+    stored = {name.rsplit("/", 1)[-1]: blob.data for name, blob in blobs.blobs.items()}
+    assert stored == files

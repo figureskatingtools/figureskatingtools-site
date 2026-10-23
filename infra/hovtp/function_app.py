@@ -1007,6 +1007,25 @@ class BirthDateError(ValueError):
     """A participant file whose birth dates could not be removed safely."""
 
 
+class _NoDtdTreeBuilder(ET.TreeBuilder):
+    """ET's tree builder, except that a DOCTYPE stops the parse. An entity
+    declared in a DTD keeps its value in the declaration — `BirthDate="&dob;"`
+    with `<!ENTITY dob "2012-03-04">` would leave the date there once the
+    attribute is gone — and FS Manager never sends one, so a participant file
+    with a DTD (internal subset or external) is refused outright. That also
+    keeps entity expansion out of the files we store."""
+
+    def doctype(self, name, pubid, system):
+        raise BirthDateError("the file declares a DTD")
+
+
+def _parse_xml(data: bytes):
+    """ET.fromstring, but BirthDateError for a document with a DTD."""
+    parser = ET.XMLParser(target=_NoDtdTreeBuilder())
+    parser.feed(data)
+    return parser.close()
+
+
 def _is_birth_date_name(name) -> bool:
     """`BirthDate` in any case, with or without a namespace (`{uri}` or `prefix:`)."""
     if isinstance(name, bytes):
@@ -1075,11 +1094,12 @@ def strip_birth_dates(data: bytes) -> bytes:
     """
     `data` without its birth dates. A file without any comes back as the very
     same bytes. Raises BirthDateError — and the caller must then store nothing —
-    when `data` is not XML, or when the result would not parse, would still hold
-    a birth date, or would differ from the original in anything else.
+    when `data` is not XML or declares a DTD, or when the result would not
+    parse, would still hold a birth date, or would differ from the original in
+    anything else.
     """
     try:
-        original = ET.fromstring(data)
+        original = _parse_xml(data)
     except ET.ParseError:
         raise BirthDateError("not valid XML")
     if not _has_birth_date(original):
@@ -1087,7 +1107,7 @@ def strip_birth_dates(data: bytes) -> bytes:
 
     stripped = _remove_birth_date_markup(data)
     try:
-        result = ET.fromstring(stripped)
+        result = _parse_xml(stripped)
     except ET.ParseError:
         raise BirthDateError("the stripped file is not valid XML")
     if _has_birth_date(result):

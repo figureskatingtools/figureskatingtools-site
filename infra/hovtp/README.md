@@ -173,8 +173,9 @@ surfaces in the UI for the operator to accept.
   Participant files (`DT_PARTIC`, `DT_PARTIC_TEAMS` and their `_UPDATE`s) are
   the exception to "raw": their `BirthDate` attributes and elements are cut out
   first (`strip_birth_dates`, byte-for-byte otherwise, shared with the platform's
-  upload route), and one that cannot be cleaned safely is `451 birth dates could
-  not be removed` with nothing stored.
+  upload route), and one that cannot be cleaned safely — or declares a DTD, whose
+  entities could carry a date past the strip — is `451 birth dates could not be
+  removed` with nothing stored.
 
 Every name goes through the platform's `sanitize_pool_filename`; a name that
 survives it as nothing usable is `451`.

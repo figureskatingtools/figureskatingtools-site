@@ -88,9 +88,11 @@ def test_the_birth_date_removal_is_byte_identical():
     platform = _platform_module()
 
     for name in ("strip_birth_dates", "_remove_birth_date_markup", "_is_birth_date_name",
-                 "_has_birth_date", "_birth_date_free_shape"):
+                 "_has_birth_date", "_birth_date_free_shape", "_parse_xml"):
         assert inspect.getsource(getattr(fa, name)) == \
                inspect.getsource(getattr(platform, name)), name
+    assert inspect.getsource(fa._NoDtdTreeBuilder.doctype) == \
+           inspect.getsource(platform._NoDtdTreeBuilder.doctype)
     assert fa.PARTICIPANT_DOCUMENT_TYPES == platform.PARTICIPANT_DOCUMENT_TYPES
     assert fa._XML_MARKUP_RE.pattern == platform._XML_MARKUP_RE.pattern
     assert fa._XML_MARKUP_RE.flags == platform._XML_MARKUP_RE.flags
