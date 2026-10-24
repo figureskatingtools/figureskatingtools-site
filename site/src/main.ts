@@ -153,27 +153,33 @@ let knownCompetitions: PlatformCompetition[] | null = null;
 /** Last failed panel action, shown inline until the next one succeeds */
 let panelError: string | null = null;
 
+/** Why the competition list could not be loaded, null when it loaded */
+let listError: string | null = null;
+
 async function loadCompetitionPanel(): Promise<void> {
   // Drops a competition that has been deleted and picks up renames
   await refreshActiveCompetition();
   try {
     knownCompetitions = await listCompetitions();
-  } catch (_e) {
+    listError = null;
+  } catch (err) {
+    // Still render the panel: "New competition…" must stay reachable
     knownCompetitions = null;
+    listError = err instanceof CompetitionApiError && err.status !== 0 && err.code
+      ? err.message
+      : 'Could not load your competitions. Reload the page to try again.';
   }
   renderCompetitionPanel(knownCompetitions);
   syncHovtpPolling(getActiveCompetition());
 }
 
-function renderCompetitionPanel(competitions: PlatformCompetition[] | null): void {
+function renderCompetitionPanel(loaded: PlatformCompetition[] | null): void {
   const container = document.getElementById('competition-panel');
   if (!container) return;
 
-  if (competitions === null) {
-    container.innerHTML = welcomeCardHtml();
-    return;
-  }
-
+  // A failed load renders as an empty list (plus listError), never without
+  // the create button
+  const competitions = loaded ?? [];
   const active = getActiveCompetition();
   const recent = competitions
     .filter((c) => !active || c.id !== active.id)
@@ -185,8 +191,9 @@ function renderCompetitionPanel(competitions: PlatformCompetition[] | null): voi
     ${active
       // The stored selection lacks createdUtc; the list entry has it
       ? activeCompetitionHtml({ ...(competitions.find((c) => c.id === active.id) ?? {}), ...active })
-      : noCompetitionHtml()}
-    <div class="comp-recent">
+      : noCompetitionHtml(competitions.length > 0)}
+    ${listError ? `<p class="comp-error" role="alert">${escapeHtml(listError)}</p>` : ''}
+    ${competitions.length === 0 ? '' : `<div class="comp-recent">
       <h3 class="comp-recent-title">Recent competitions</h3>
       ${recent.length > 0
         ? `<ul class="comp-recent-list">${recent.map((c) => `
@@ -201,10 +208,10 @@ function renderCompetitionPanel(competitions: PlatformCompetition[] | null): voi
               ${canManageCompetition(c) ? `<button type="button" class="comp-delete" data-delete-competition-id="${escapeHtml(c.id)}">×</button>` : ''}
             </li>`).join('')}</ul>`
         : '<p class="text-secondary comp-recent-empty">Nothing else yet.</p>'}
-    </div>
+    </div>`}
     ${panelError ? `<p class="comp-error" role="alert">${escapeHtml(panelError)}</p>` : ''}
     <div class="comp-actions">
-      <button type="button" class="btn btn-secondary btn-sm" id="comp-create">New competition…</button>
+      <button type="button" class="btn ${competitions.length === 0 ? 'btn-primary' : 'btn-secondary'} btn-sm" id="comp-create">New competition…</button>
       ${active
         ? `<span class="comp-actions-right">
              ${activeAccess === 'owner'
@@ -287,6 +294,7 @@ function renderCompetitionPanel(competitions: PlatformCompetition[] | null): voi
     void openCreateCompetitionDialog().then((created) => {
       if (!created) return;
       panelError = null;
+      listError = null;
       knownCompetitions = [created, ...(knownCompetitions ?? [])];
       setActiveCompetition(created);
     });
@@ -881,31 +889,22 @@ function activeCompetitionHtml(active: PlatformCompetition): string {
   `;
 }
 
-function noCompetitionHtml(): string {
+function noCompetitionHtml(hasCompetitions: boolean): string {
+  if (!hasCompetitions) {
+    return `
+      <h2>No competitions yet</h2>
+      <p>
+        Create your first competition with <strong>New competition…</strong> below
+        or in the navigation bar — every tool then prefills from it. Competitions
+        others share with you show up here too.
+      </p>
+    `;
+  }
   return `
     <h2>No competition selected</h2>
     <p>
       Pick a competition from the selector in the navigation bar — every tool
       then prefills from it. You can always keep working without one.
-    </p>
-  `;
-}
-
-/** The pre-registry welcome card, still used when the platform API is absent */
-function welcomeCardHtml(): string {
-  return `
-    <span class="micro-label">Welcome</span>
-    <h2>Welcome to figureskatingtools.com</h2>
-    <p>
-      Please use the tools nicely and do not harm anyone.
-    </p>
-    <p>
-      All bugs and feature requests should be reported to
-      <a href="https://github.com/figureskatingtools" target="_blank" rel="noopener noreferrer">GitHub</a>.
-    </p>
-    <p>
-      In case of inquiries, contact
-      <a href="mailto:markus@lintuala.fi">markus@lintuala.fi</a>.
     </p>
   `;
 }

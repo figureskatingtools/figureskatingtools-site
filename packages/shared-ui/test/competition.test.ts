@@ -16,8 +16,10 @@ import {
   CompetitionApiError,
   deleteCompetition,
   extendCompetition,
+  createCompetition,
   extractCompetitionList,
   getActiveCompetition,
+  listCompetitions,
   isPlatformCompetition,
   normalizeCompetitionCode,
   isGoneCompetitionError,
@@ -335,6 +337,43 @@ describe('deleteCompetition', () => {
     const error = await deleteCompetition(COMP.id).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(CompetitionApiError);
     expect((error as CompetitionApiError).status).toBe(0);
+  });
+});
+
+describe('listCompetitions / createCompetition errors', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const pending = { error: 'migration_pending', message: 'Sign-in with this account is not available yet.' };
+
+  it('list keeps the registry code and message', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response(503, pending)));
+
+    await expect(listCompetitions()).rejects.toMatchObject({
+      name: 'CompetitionApiError',
+      status: 503,
+      code: 'migration_pending',
+      message: pending.message,
+    });
+  });
+
+  it('create shows the registry message, not the bare code', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response(503, pending)));
+
+    await expect(
+      createCompetition({ name: 'Cup', code: 'CUP', date: '2026-11-01', venue: '' })
+    ).rejects.toMatchObject({ status: 503, code: 'migration_pending', message: pending.message });
+  });
+
+  it('list falls back to the bare status when the error body is not JSON', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => response(500)));
+
+    await expect(listCompetitions()).rejects.toMatchObject({
+      status: 500,
+      code: '',
+      message: 'Competitions API returned an error (500)',
+    });
   });
 });
 
