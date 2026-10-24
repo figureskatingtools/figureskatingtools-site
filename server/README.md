@@ -29,10 +29,10 @@ site root/
 | 4f | `/admin`, `/admin/*` | The admin panel document (`public/admin/index.html`, deep links fall back to it, `Vary: Cookie`) for admins; a plain `404` for everyone else, so the page does not advertise itself. Matched on the decoded, normalised path (`/%61dmin/`, `//admin/` are gated too). Base CSP: `admin` is a document prefix, not a tool. |
 | 5 | `/<tool>/api/*` | A non-`GET`/`HEAD` request must be same-origin ([CSRF](#csrf)), else `403 {"error":"cross_site"}`, never proxied. Identity required ([Identity](#identity)): `401 {"error":"unauthorized"}` without one, `403 {"error":"tenant_not_allowed"}` for a foreign tenant, never proxied. Then proxied to that tool's Function App with the `/<tool>` prefix **stripped**: `/judgepapers/api/upload_file` → `$FUNCTION_APP_URL_JUDGEPAPERS/api/upload_file`. Backends keep their default `/api` route prefix — zero backend route changes. |
 | 5b | `/tools/gdpr/api/*` | Same-origin check and identity required, like 5. Proxied to the GDPR removal tool's Function App (`fs-gdpr-tool`) with `/tools/gdpr` **stripped** (`SMALL_TOOL_APIS` in `server.js`). The page itself, `/tools/gdpr/`, is a plain static document. |
-| 6a | `/api/manage/*` | Admin-only platform routes. Non-admins get `403 {"error":"admin_required"}` without any proxying. Admins are proxied like 6 (same-origin check included). Matched case-insensitively on the decoded, normalised path, like the Functions host routes. The platform checks the admin again with its own `ADMIN_EMAILS`. |
+| 6a | `/api/manage/*` | Admin-only platform routes. Non-admins get `403 {"error":"admin_required"}` without any proxying. Admins are proxied like 6 (same-origin check included). Matched case-insensitively on the decoded, normalised path, like the Functions host routes. The platform checks again: secret, identity, tenant and `x-forwarded-user-admin: 1`. |
 | 6 | `/api/*` | Same-origin check and identity required, like 5. Proxied to the platform Function App (competitions registry). |
 | 7 | `/<tool>` | `301` → `/<tool>/` (query string preserved). |
-| 8 | anything else | Static file from `public/`, else a **per-prefix** SPA fallback. This is also how the public privacy notice (`/privacy/`, `/tietosuoja/`) and the self-hosted fonts (`/fonts/*`) are served: plain static files, the same for everyone, reachable signed out because `/privacy`, `/privacy/*`, `/tietosuoja`, `/tietosuoja/*` and `/fonts/*` are Easy Auth `excludedPaths`. |
+| 8 | anything else | Static file from `public/`, else a **per-prefix** SPA fallback. This is also how the public privacy notice (`/privacy/`, Finnish translation `/tietosuoja/`), the terms of use (`/terms/`, English only) and the self-hosted fonts (`/fonts/*`) are served: plain static files, the same for everyone, reachable signed out because `/privacy`, `/privacy/*`, `/tietosuoja`, `/tietosuoja/*`, `/terms`, `/terms/*` and `/fonts/*` are Easy Auth `excludedPaths`. |
 
 `<tool>` ∈ `judgepapers`, `scoremodifier`, `protocolgenerator`.
 
@@ -69,10 +69,15 @@ site root/
     `email` claim). Display and audit only. Left out when it is not printable
     ASCII — tested **before** lowercasing, since `toLowerCase()` folds some
     non-ASCII letters into ASCII (U+212A KELVIN SIGN → `k`). A non-ASCII
-    e-mail is no e-mail at all: it is never forwarded and never an admin.
+    e-mail is no e-mail at all: it is never forwarded. For an identity of an
+    `EXTERNAL_TENANT_IDS` tenant it comes only from the `email` claim.
   - `x-forwarded-user-name` — the `name` claim, `encodeURIComponent`-encoded
     (names are often non-ASCII); left out when there is none.
-  - `x-forwarded-user-admin: 1` — only when `isAdminRequest` is true.
+  - `x-forwarded-user-admin: 1` — only when `isAdminRequest` is true (the
+    `ADMIN_ROLE` app role). The platform's admin routes trust it like the tools do.
+  - `x-forwarded-user-terms-accepted: 1` — only when the principal carries the
+    External ID sign-up's `termsAccepted` claim as `true`. The platform records
+    the terms version it stands for on the `users` row; the tools ignore it.
   The raw Easy Auth principal header is *not* forwarded. `/judgepapers/download`
   (public, no principal) gets the secret but none of the identity headers.
 - Hop-by-hop response headers (`connection`, `transfer-encoding`, …) are
@@ -112,12 +117,15 @@ answer).
 
 ### Admins
 
-- `ADMIN_EMAILS` (comma-separated, trimmed, compared lowercased) lists the
-  admins; an entry that is not printable ASCII is dropped. Empty means nobody.
+- Admin = the **`ADMIN_ROLE`** app role (default `Site.Admin`), from the
+  principal's `roles` claim (or `…/claims/role`), in both tenant modes. There
+  is no e-mail list: the e-mail plays no part. The role implies the External ID
+  access role (`EXTERNAL_ACCESS_ROLE`).
 - `isAdminRequest` needs the same identity the APIs need (oid + tid, an allowed
-  tenant — or `DEV_FAKE_USER`, off under `NODE_ENV=production`) and then its
-  lowercased e-mail in `ADMIN_EMAILS`. A bare `X-MS-CLIENT-PRINCIPAL-NAME`, or
-  the admin's address from a foreign tenant, is never an admin.
+  tenant, access granted — or `DEV_FAKE_USER` with `DEV_FAKE_ROLES`, both off
+  under `NODE_ENV=production`) and then the role. A bare
+  `X-MS-CLIENT-PRINCIPAL-NAME`, or the role from a foreign tenant, is never an
+  admin.
 - That one decision drives `isAdmin` in `/userinfo` (the "Admin panel" link in
   the user menu), the `/admin/*` documents, the `/api/manage/*` gate and the
   `x-forwarded-user-admin` header.
@@ -129,8 +137,9 @@ answer).
   "router": {"commit": "abc1234", "startedUtc": "…Z", "uptimeSeconds": 123, "node": "v22.x",
              "nodeEnv": "production", "changelog": {"entries": [{"branch": "main", "ageSeconds": 12, "stale": false}]}},
   "config": {"targets": {"judgepapers": {"url": true, "secret": true}, "…": {}},
-             "hovtpHealthUrl": true, "adminCount": 1, "allowedTenantCount": 1,
-             "loginProvider": "aad", "devFakeUser": false},
+             "hovtpHealthUrl": true, "adminRole": "Site.Admin", "allowedTenantCount": 1,
+             "loginProvider": "aad", "authTenantMode": "workforce", "externalTenantCount": 0,
+             "devFakeUser": false},
   "backends": [{"name": "platform", "status": "ok", "httpStatus": 200, "latencyMs": 42}, "…"]
 }
 ```
@@ -190,12 +199,16 @@ the config object (tests override them).
 | `PROXY_SHARED_SECRET_PROTOCOLGENERATOR` | prod | — | Sent as `x-proxy-secret` to protocolgenerator. |
 | `PROXY_SHARED_SECRET_GDPRTOOL` | prod | — | Sent as `x-proxy-secret` to the GDPR removal tool. |
 | `PROXY_SHARED_SECRET_PLATFORM` | prod | — | Sent as `x-proxy-secret` to the platform API. |
-| `NODE_ENV` | prod | — | `production` hard-disables `DEV_FAKE_USER` (and with it the dev admin). Set by `webapp.bicep`. Reported in the admin diagnostics. |
-| `ADMIN_EMAILS` | for the admin panel | — | Comma-separated admin e-mails (case-insensitive). Empty = no admins: `/admin/*` is `404` and `/api/manage/*` `403` for everyone. Bicep-owned, from the GitHub environment variable `ADMIN_EMAILS`; the platform app gets the same list. |
+| `NODE_ENV` | prod | — | `production` hard-disables `DEV_FAKE_USER` and `DEV_FAKE_ROLES` (and with them the dev admin). Set by `webapp.bicep`. Reported in the admin diagnostics. |
+| `ADMIN_ROLE` | no | `Site.Admin` | App role that makes an identity an admin (`/admin/*`, `/api/manage/*`, `x-forwarded-user-admin: 1`). Bicep-owned, optional GitHub environment variable `ADMIN_ROLE`. |
+| `EXTERNAL_TENANT_IDS` | no | — | Entra External ID tenant ids: their e-mail only from the `email` claim, and they need `EXTERNAL_ACCESS_ROLE` (else `/no-access/`). Bicep-owned, from `EXTERNAL_TENANT_ID`. |
+| `EXTERNAL_ACCESS_ROLE` | no | `Site.Access` | App role an External ID identity needs to use the site. Bicep-owned, optional GitHub variable. |
+| `AUTH_TENANT_MODE` | no | `workforce` | Which tenant Easy Auth signs in with (`workforce`/`external`); diagnostics only. Bicep-owned. |
 | `ALLOWED_TENANT_IDS` | yes | — | Comma-separated Entra tenant ids (case-insensitive) whose principals may use `/userinfo` and the APIs; anyone else gets `403 tenant_not_allowed`. Empty = nobody. Bicep-owned: the deployment tenant, or the GitHub environment variable `ALLOWED_TENANT_IDS`; the platform app gets the same list. |
 | `HOVTP_HEALTH_URL` | no | — | The HOVTP listener's health URL for the admin diagnostics (a bare base URL gets `/api/health` appended). Unset = `not_configured`. Bicep-owned. |
 | `AUTH_LOGIN_PROVIDER` | no | `aad` | Easy Auth provider segment `/signin` redirects to (`/.auth/login/<provider>`). Bicep-owned: set the GitHub environment variable `AUTH_LOGIN_PROVIDER`, never the app setting by hand (infra deploys replace all app settings). |
 | `DEV_FAKE_USER` | no | — | **Non-production only.** Email returned by `/userinfo` (and forwarded to backends, with a synthetic tid/oid — see [Identity](#identity)) when no Easy Auth headers are present. |
+| `DEV_FAKE_ROLES` | no | — | **Non-production only.** Comma-separated app roles the `DEV_FAKE_USER` carries, e.g. `Site.Admin` for the admin panel. |
 
 Trailing slashes on the `FUNCTION_APP_URL_*` values are ignored. A secret left
 unset means no `x-proxy-secret` header — and the backends **fail closed**, so
@@ -269,8 +282,8 @@ sends, and the platform `ALLOWED_TENANT_IDS=00000000-0000-0000-0000-000000000001
 Frontend-only work can use `vite dev` (multi-entry: `/judgepapers/` is served
 natively), but it has **no** API proxies: `/userinfo` and every API call fail,
 so the apps show their sign-in view. For anything signed in, build and run the
-router as above. Add `ADMIN_EMAILS=you@example.com` (the same address as
-`DEV_FAKE_USER`) to see the admin panel at `/admin/`.
+router as above. Add `DEV_FAKE_ROLES=Site.Admin` to see the admin panel at
+`/admin/` (the router then sends the platform `x-forwarded-user-admin: 1`).
 
 ## Tests
 
@@ -289,7 +302,7 @@ incl. the GDPR tool getting the headers, none on `/judgepapers/download`); prefi
 stripping and per-tool header injection; a 6 MiB upload / 4 MiB download
 streamed through the proxy and hash-compared; root statics vs per-prefix SPA
 fallback; per-prefix CSP; the `/<tool>` → `/<tool>/` redirect; the `502`
-for an unconfigured backend; admins (`ADMIN_EMAILS` parsing, `isAdmin`, the
+for an unconfigured backend; admins (the `Site.Admin` role, either claim form, `ADMIN_ROLE`, `isAdmin`, the
 `NODE_ENV=production` dev-user guard, `/admin/` 404 vs document vs deep link,
 the `/api/manage/*` gate and its cross-site check, diagnostics shape and no
 secret/URL leakage); and `/changelog-live` (mapping/sorting/slice, `#nowhatsnew` filtering,

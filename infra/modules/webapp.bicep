@@ -14,6 +14,38 @@ param authManagedIdentityClientId string = ''
 param authManagedIdentityResourceId string = ''
 param tenantId string = subscription().tenantId
 
+// --- Entra External ID (customer tenant) ---------------------------------------
+// AUTH_TENANT_MODE picks which tenant the ONE Easy Auth provider
+// (azureActiveDirectory, segment `aad`) signs users in with:
+//   workforce — the workforce tenant, MI federated credential (as before);
+//   external  — the External ID tenant, CREDENTIAL-FREE: no clientSecretSettingName,
+//               so Easy Auth runs the ID-token flow (response_type=id_token,
+//               form_post) and validates the ID token itself. The site never
+//               needs access or refresh tokens. Never add a secret here — see
+//               infra/EXTERNAL-ID.md (also for why there is no custom OIDC provider).
+
+@description('workforce (default) or external. external needs externalTenantId and externalClientId; without them the deployment stays workforce.')
+@allowed([
+  'workforce'
+  'external'
+])
+param authTenantMode string = 'workforce'
+
+@description('Client id of the Entra External ID app registration (GitHub var AUTH_EXTERNAL_CLIENT_ID).')
+param externalClientId string = ''
+
+@description('External tenant id (GitHub var EXTERNAL_TENANT_ID).')
+param externalTenantId string = ''
+
+@description('Authority host of the external tenant (GitHub var AUTH_EXTERNAL_AUTHORITY_HOST), e.g. <tenantId>.ciamlogin.com. Empty = <externalTenantId>.ciamlogin.com.')
+param externalAuthorityHost string = ''
+
+@description('Comma-separated External ID tenant ids (EXTERNAL_TENANT_IDS) for the router, which reads the e-mail of those identities only from their email claim and requires externalAccessRole of them.')
+param externalTenantIds string = ''
+
+@description('App role (EXTERNAL_ACCESS_ROLE) an External ID identity needs to use the site; without it the router sends them to /no-access/. Empty = Site.Access.')
+param externalAccessRole string = 'Site.Access'
+
 // --- Router proxy targets -------------------------------------------------------
 // The router resolves /api/* and /<tool>/api/* against these. They are part of the
 // template (not a post-deploy az CLI step) so a deployment never leaves the site
@@ -54,8 +86,8 @@ param proxySharedSecretProtocolgenerator string = ''
 @secure()
 param proxySharedSecretGdprtool string = ''
 
-@description('Comma-separated admin e-mail addresses (ADMIN_EMAILS). The router serves /admin/ and proxies /api/manage/* only for these; the platform Function App checks its own copy. Empty = nobody is admin.')
-param adminEmails string = ''
+@description('App role that makes a user an admin (ADMIN_ROLE). The router serves /admin/ and proxies /api/manage/* only for identities carrying it, and tells the backends with X-Forwarded-User-Admin: 1. Empty = Site.Admin.')
+param adminRole string = 'Site.Admin'
 
 @description('Comma-separated Entra tenant ids whose principals may use the APIs (ALLOWED_TENANT_IDS). Defaults to the deployment tenant; any other tenant gets 403 tenant_not_allowed from the router. Empty = nobody (fail closed).')
 param allowedTenantIds string = tenant().tenantId
@@ -66,7 +98,7 @@ param hovtpHealthUrl string = ''
 @description('Easy Auth provider segment the router\'s /signin redirects to (/.auth/login/<provider>). Written to the AUTH_LOGIN_PROVIDER app setting; empty means aad. Changes together with the authsettingsV2 identity provider (e.g. the move to Entra External ID).')
 param authLoginProvider string = 'aad'
 
-@description('Paths served without an Easy Auth login redirect. /health must stay open so Azure/uptime probes get a 200 instead of a 302; /judgepapers/download is the judges\'-papers link e-mailed to recipients without an account (the token is checked by the judgepapers backend); /, /index.html, /signin, /landing/* and the icons, robots.txt and llms.txt make up the public landing page, which the router serves at / unless the request carries an Easy Auth session (keep in sync with LANDING_DOCUMENT_PATHS and SIGNIN_PATH in server/server.js); /assets/* holds the Vite bundles (open-source code, no data), public so the home page served at / by session cookie can always load and fall back to its sign-in view when the session has expired; /privacy and /tietosuoja (+ /*) are the privacy notice in English and Finnish, which everyone must be able to read before signing in; /fonts/* holds the self-hosted web fonts every page uses, including the public ones.')
+@description('Paths served without an Easy Auth login redirect. /health must stay open so Azure/uptime probes get a 200 instead of a 302; /judgepapers/download is the judges\'-papers link e-mailed to recipients without an account (the token is checked by the judgepapers backend); /, /index.html, /signin, /landing/* and the icons, robots.txt and llms.txt make up the public landing page, which the router serves at / unless the request carries an Easy Auth session (keep in sync with LANDING_DOCUMENT_PATHS and SIGNIN_PATH in server/server.js); /assets/* holds the Vite bundles (open-source code, no data), public so the home page served at / by session cookie can always load and fall back to its sign-in view when the session has expired; /privacy (+ /*) is the privacy notice and /tietosuoja (+ /*) its Finnish translation, which everyone must be able to read before signing in; /terms (+ /*) are the terms of use, which the sign-up page links to; /fonts/* holds the self-hosted web fonts every page uses, including the public ones; /no-access and /no-access/* are the page an External ID user without the access app role is sent to (keep in sync with NO_ACCESS_PATH and PUBLIC_PATH_PREFIXES in server/server.js).')
 param authExcludedPaths array = [
   '/health'
   '/judgepapers/download'
@@ -83,7 +115,11 @@ param authExcludedPaths array = [
   '/privacy/*'
   '/tietosuoja'
   '/tietosuoja/*'
+  '/terms'
+  '/terms/*'
   '/fonts/*'
+  '/no-access'
+  '/no-access/*'
 ]
 
 resource appServicePlan 'Microsoft.Web/serverfarms@2023-12-01' = {
@@ -124,6 +160,54 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
   }
 }
 
+// App Service logs: the router's console output (Linux "Application logging
+// (File System)", which App Service stores as the file-system HTTP logs config)
+// is kept at most 90 days and 35 MB, whichever comes first. The privacy notice
+// promises 90 days for technical logs; 0 would mean "never deleted".
+resource siteLogs 'Microsoft.Web/sites/config@2022-09-01' = {
+  parent: webApp
+  name: 'logs'
+  properties: {
+    httpLogs: {
+      fileSystem: {
+        enabled: true
+        retentionInDays: 90
+        retentionInMb: 35
+      }
+    }
+    detailedErrorMessages: {
+      enabled: false
+    }
+    failedRequestsTracing: {
+      enabled: false
+    }
+  }
+}
+
+// external only when it can work; the workflow refuses the deploy before
+// that, so this fallback is just a last line of defence.
+var externalMode = authTenantMode == 'external' && !empty(externalClientId) && !empty(externalTenantId)
+var effectiveAuthTenantMode = externalMode ? 'external' : 'workforce'
+var effectiveExternalAuthorityHost = !empty(externalAuthorityHost)
+  ? externalAuthorityHost
+  : '${externalTenantId}.ciamlogin.com'
+var easyAuthClientId = externalMode ? externalClientId : authClientId
+
+// workforce: the MI federated credential stands in for a client secret.
+// external: no credential at all (ID-token flow).
+var aadRegistration = externalMode
+  ? {
+      clientId: externalClientId
+      openIdIssuer: 'https://${effectiveExternalAuthorityHost}/${externalTenantId}/v2.0'
+    }
+  : {
+      clientId: authClientId
+      // Sentinel value: Easy Auth uses the federated managed identity named
+      // by the app setting of this name instead of a client secret.
+      clientSecretSettingName: 'OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID'
+      openIdIssuer: '${environment().authentication.loginEndpoint}${tenantId}/v2.0'
+    }
+
 resource authConfig 'Microsoft.Web/sites/config@2022-09-01' = if (!empty(authClientId)) {
   parent: webApp
   name: 'authsettingsV2'
@@ -137,18 +221,20 @@ resource authConfig 'Microsoft.Web/sites/config@2022-09-01' = if (!empty(authCli
     identityProviders: {
       azureActiveDirectory: {
         enabled: true
-        registration: {
-          clientId: authClientId
-          // Sentinel value: Easy Auth uses the federated managed identity named
-          // by the app setting of this name instead of a client secret.
-          clientSecretSettingName: 'OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID'
-          openIdIssuer: '${environment().authentication.loginEndpoint}${tenantId}/v2.0'
-        }
+        registration: aadRegistration
         validation: {
           allowedAudiences: [
-            authClientId
+            easyAuthClientId
           ]
         }
+        // The External ID ID token carries `email` only when it is asked for.
+        login: externalMode
+          ? {
+              loginParameters: [
+                'scope=openid profile email'
+              ]
+            }
+          : {}
       }
     }
     login: {
@@ -183,17 +269,24 @@ resource siteAppSettings 'Microsoft.Web/sites/config@2022-09-01' = {
       PROXY_SHARED_SECRET_PROTOCOLGENERATOR: proxySharedSecretProtocolgenerator
       PROXY_SHARED_SECRET_GDPRTOOL: proxySharedSecretGdprtool
       AUTH_LOGIN_PROVIDER: empty(authLoginProvider) ? 'aad' : authLoginProvider
-      ADMIN_EMAILS: adminEmails
+      // Which tenant Easy Auth signs in with (diagnostics only).
+      AUTH_TENANT_MODE: effectiveAuthTenantMode
+      // External ID tenants: the router takes those identities' e-mail only
+      // from their email claim.
+      EXTERNAL_TENANT_IDS: externalTenantIds
+      // The app role those identities need (else /no-access/).
+      EXTERNAL_ACCESS_ROLE: empty(trim(externalAccessRole)) ? 'Site.Access' : trim(externalAccessRole)
+      ADMIN_ROLE: empty(trim(adminRole)) ? 'Site.Admin' : trim(adminRole)
       ALLOWED_TENANT_IDS: allowedTenantIds
       HOVTP_HEALTH_URL: hovtpHealthUrl
-      // Hard-disables DEV_FAKE_USER in the router, which the admin check relies on.
+      // Hard-disables DEV_FAKE_USER and DEV_FAKE_ROLES in the router, which the admin check relies on.
       NODE_ENV: 'production'
       // The zip already contains the built dist; Oryx must not try to build it.
       SCM_DO_BUILD_DURING_DEPLOYMENT: 'false'
     },
     // Sentinel read by the authsettingsV2 clientSecretSettingName above; only
-    // meaningful when Easy Auth is configured.
-    empty(authClientId)
+    // meaningful when Easy Auth is configured in workforce mode.
+    empty(authClientId) || externalMode
       ? {}
       : {
           OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID: authManagedIdentityClientId
@@ -214,3 +307,4 @@ output customDomainVerificationId string = webApp.properties.customDomainVerific
 #disable-next-line BCP053
 output inboundIpAddress string = split(webApp.properties.inboundIpAddress, ',')[0]
 output appServicePlanId string = appServicePlan.id
+output authTenantMode string = effectiveAuthTenantMode

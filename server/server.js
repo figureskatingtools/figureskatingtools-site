@@ -10,7 +10,9 @@
 //   /tools/<name>/           → small in-site tools (static pages)
 //   /admin/                  → admin panel (SPA; plain 404 unless the user is an admin)
 //   /admin/api/diagnostics   → router-native diagnostics (admins only)
-//   /privacy/, /tietosuoja/  → public privacy notice, EN/FI (static, excluded from Easy Auth)
+//   /privacy/, /tietosuoja/  → public privacy notice, English and Finnish (static, excluded from Easy Auth)
+//   /terms/                  → public terms of use, English only (static, excluded from Easy Auth)
+//   /no-access/              → public "no access yet" page for External ID users without the app role
 //   /fonts/*                 → self-hosted web fonts (static, excluded from Easy Auth)
 //   /health                  → liveness probe (excluded from Easy Auth)
 //   /judgepapers/download    → e-mailed judges'-papers link (excluded from Easy Auth)
@@ -72,15 +74,34 @@ const JUDGEPAPERS_DOWNLOAD_PATH = '/judgepapers/download';
 // session cookie (see hasSignedInSession).
 // LANDING_DOCUMENT_PATHS, SIGNIN_PATH and the landing files must all be listed
 // in the Easy Auth excludedPaths in infra/modules/webapp.bicep. So must the
-// public privacy notice (/privacy/, /tietosuoja/) and the self-hosted fonts
-// (/fonts/*): those need no router logic, serveStatic serves them to everyone.
+// public privacy notice (/privacy/ and its Finnish translation /tietosuoja/),
+// the terms of use (/terms/) and the self-hosted fonts (/fonts/*): those need
+// no router logic, serveStatic serves them to everyone.
 const LANDING_DIR = 'landing';
 const LANDING_DOCUMENT_PATHS = ['/', '/index.html'];
 
 // Every sign-in link goes through /signin, so a change of identity provider
 // (e.g. Entra External ID) is one app setting instead of a frontend change.
 const SIGNIN_PATH = '/signin';
+
 const DEFAULT_LOGIN_PROVIDER = 'aad';
+
+// Entra External ID access gate: an identity of an EXTERNAL_TENANT_IDS tenant
+// must carry this app role (EXTERNAL_ACCESS_ROLE) or it gets the public
+// "no access yet" page instead of the site. /no-access/ is a static document
+// like the privacy notice, so it must be in the Easy Auth excludedPaths too
+// (/no-access, /no-access/*), and in PUBLIC_PATH_PREFIXES below.
+const DEFAULT_EXTERNAL_ACCESS_ROLE = 'Site.Access';
+// Admins are whoever carries this app role (ADMIN_ROLE); nothing else makes one.
+const DEFAULT_ADMIN_ROLE = 'Site.Admin';
+const NO_ACCESS_PATH = '/no-access/';
+
+// Mirror of the static part of authExcludedPaths in webapp.bicep: what a
+// signed-in user without access may still load (the no-access page itself,
+// its styles, fonts and icons, the privacy notice in both languages and the
+// terms).
+const PUBLIC_PATH_PREFIXES = ['/no-access', '/privacy', '/terms', '/tietosuoja', '/landing', '/assets', '/fonts'];
+const PUBLIC_FILES = ['/favicon.png', '/apple-touch-icon.png', '/robots.txt', '/llms.txt'];
 
 const MIME_TYPES = {
     '.html': 'text/html; charset=utf-8',
@@ -136,7 +157,7 @@ function parseTenantIds(raw) {
 // An e-mail as the router compares and forwards it: printable ASCII only,
 // tested BEFORE lowercasing — toLowerCase() folds some non-ASCII letters into
 // ASCII ones (U+212A KELVIN SIGN becomes 'k'), which would let a look-alike
-// address match an admin's. Anything else is no e-mail at all ('').
+// address match someone else's. Anything else is no e-mail at all ('').
 const PRINTABLE_ASCII = /^[\x21-\x7e]+$/;
 
 function normalizeEmail(value) {
@@ -144,14 +165,12 @@ function normalizeEmail(value) {
     return PRINTABLE_ASCII.test(text) ? text.toLowerCase() : '';
 }
 
-// ADMIN_EMAILS: comma-separated, compared case-insensitively (ASCII only).
-function parseAdminEmails(raw) {
-    return new Set(
-        String(raw || '')
-            .split(',')
-            .map(normalizeEmail)
-            .filter(Boolean)
-    );
+// DEV_FAKE_ROLES: comma-separated app roles for the DEV_FAKE_USER stand-in.
+function parseList(raw) {
+    return String(raw || '')
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean);
 }
 
 function loadConfig(env = process.env) {
@@ -175,11 +194,23 @@ function loadConfig(env = process.env) {
         // Local dev only: pretend a user is signed in when Easy Auth headers are
         // absent. Hard-disabled in production so it can never leak into a real env.
         devFakeUser: isProduction ? '' : (env.DEV_FAKE_USER || '').trim(),
+        // Local dev only: the app roles DEV_FAKE_USER carries (e.g. Site.Admin
+        // for the admin panel). Blanked in production like DEV_FAKE_USER.
+        devFakeRoles: isProduction ? [] : parseList(env.DEV_FAKE_ROLES),
         // Easy Auth provider segment of /.auth/login/<provider> used by /signin.
         loginProvider: (env.AUTH_LOGIN_PROVIDER || '').trim() || DEFAULT_LOGIN_PROVIDER,
+        // Which tenant Easy Auth signs in with (webapp.bicep). Diagnostics only;
+        // Easy Auth itself decides.
+        authTenantMode: (env.AUTH_TENANT_MODE || '').trim().toLowerCase() === 'external' ? 'external' : 'workforce',
+        // Entra External ID tenants: their identities' e-mail comes only from
+        // the `email` claim.
+        externalTenantIds: parseTenantIds(env.EXTERNAL_TENANT_IDS),
+        // The app role an External ID identity needs to use the site.
+        externalAccessRole: (env.EXTERNAL_ACCESS_ROLE || '').trim() || DEFAULT_EXTERNAL_ACCESS_ROLE,
         nodeEnv: (env.NODE_ENV || '').trim(),
-        // Who gets the admin panel and /api/manage/*. Empty = nobody.
-        adminEmails: parseAdminEmails(env.ADMIN_EMAILS),
+        // The app role that makes an identity an admin (the admin panel and
+        // /api/manage/*), in both tenant modes. Implies access.
+        adminRole: (env.ADMIN_ROLE || '').trim() || DEFAULT_ADMIN_ROLE,
         // Entra tenants whose principals may use the site's APIs. Empty =
         // none (fail closed); webapp.bicep sets the deployment tenant.
         allowedTenantIds: parseTenantIds(env.ALLOWED_TENANT_IDS),
@@ -303,6 +334,12 @@ function findClaim(parsed, types) {
 }
 
 const NAME_CLAIMS = ['name', 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name'];
+// Entra External ID identities arrive through the same `aad` Easy Auth provider
+// (AUTH_TENANT_MODE=external) and are told apart by their tid being in
+// EXTERNAL_TENANT_IDS. Their e-mail comes from the `email` claim and nothing
+// else: preferred_username / the principal name need not be an e-mail there.
+// App Service may hand `email` on under its long schema name.
+const EXTERNAL_EMAIL_CLAIMS = ['email', 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress'];
 const EMAIL_CLAIMS = [
     'preferred_username',
     'email',
@@ -313,8 +350,16 @@ const EMAIL_CLAIMS = [
 // The two claims that identify a user for authorisation: the Entra object id
 // (stable, never reassigned) and the tenant it belongs to. The e-mail is
 // mutable and only ever forwarded for display and audit.
+// App roles: Easy Auth emits one claim per role, short or long form.
+const ROLE_CLAIMS = ['roles', 'http://schemas.microsoft.com/ws/2008/06/identity/claims/role'];
 const OID_CLAIMS = ['http://schemas.microsoft.com/identity/claims/objectidentifier', 'oid'];
 const TID_CLAIMS = ['http://schemas.microsoft.com/identity/claims/tenantid', 'tid'];
+// The External ID sign-up's required "I accept the terms of use" checkbox
+// (infra/EXTERNAL-ID.md), a Boolean claim. Forwarded as
+// x-forwarded-user-terms-accepted: 1 so the platform can record which terms
+// version was current; nothing is ever refused without it (workforce sign-ins
+// never carry it).
+const TERMS_ACCEPTED_CLAIMS = ['termsAccepted'];
 const GUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 // DEV_FAKE_USER's synthetic identity (never in production): a fixed tenant
@@ -328,13 +373,40 @@ function devObjectId(email) {
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
+// True for an identity of an Entra External ID tenant (EXTERNAL_TENANT_IDS).
+function isExternalTenant(tid, config) {
+    return Boolean(tid) && Boolean(config.externalTenantIds) && config.externalTenantIds.has(tid);
+}
+
+// The raw (not yet normalised) e-mail of a principal. Workforce: userDetails,
+// then the e-mail claims, then the principal-name header. External ID tenant:
+// only the `email` claim.
+function principalEmail(parsed, req, external) {
+    if (external) return findClaim(parsed, EXTERNAL_EMAIL_CLAIMS);
+    return parsed.userDetails || findClaim(parsed, EMAIL_CLAIMS) || req.headers['x-ms-client-principal-name'] || '';
+}
+
+function claimValues(parsed, types) {
+    const claims = (parsed && parsed.claims) || [];
+    if (!Array.isArray(claims)) return [];
+    return claims.filter((c) => c && types.includes(c.typ) && typeof c.val === 'string').map((c) => c.val.trim());
+}
+
+// True only for a claim value of boolean true or the string "true" (any case).
+function termsAcceptedClaim(parsed) {
+    const claims = (parsed && parsed.claims) || [];
+    if (!Array.isArray(claims)) return false;
+    return claims.some((c) => c && TERMS_ACCEPTED_CLAIMS.includes(c.typ)
+        && (c.val === true || (typeof c.val === 'string' && c.val.trim().toLowerCase() === 'true')));
+}
+
 function guidClaim(parsed, types) {
     const value = String(findClaim(parsed, types) || '').trim().toLowerCase();
     return GUID_PATTERN.test(value) ? value : '';
 }
 
 // The signed-in user as the backends get to see them:
-// {tid, oid, email (lowercased), name, dev} — or null when there is no usable
+// {tid, oid, email (lowercased), name, roles, termsAccepted, dev} — or null when there is no usable
 // identity. Only a decodable Easy Auth principal that carries both oid and tid
 // counts (a bare X-MS-CLIENT-PRINCIPAL-NAME never does), or DEV_FAKE_USER
 // locally when no principal header is present at all.
@@ -344,19 +416,20 @@ function requestIdentity(req, config) {
         const tid = guidClaim(parsed, TID_CLAIMS);
         const oid = guidClaim(parsed, OID_CLAIMS);
         if (!tid || !oid) return null;
-        const email =
-            parsed.userDetails || findClaim(parsed, EMAIL_CLAIMS) || req.headers['x-ms-client-principal-name'] || '';
         return {
             tid,
             oid,
-            email: normalizeEmail(email),
+            email: normalizeEmail(principalEmail(parsed, req, isExternalTenant(tid, config))),
             name: String(findClaim(parsed, NAME_CLAIMS) || '').trim(),
+            roles: claimValues(parsed, ROLE_CLAIMS),
+            termsAccepted: termsAcceptedClaim(parsed),
             dev: false,
         };
     }
     if (config.devFakeUser && !req.headers['x-ms-client-principal-name']) {
         const email = normalizeEmail(config.devFakeUser);
-        return { tid: DEV_TENANT_ID, oid: devObjectId(email), email, name: config.devFakeUser, dev: true };
+        const roles = Array.isArray(config.devFakeRoles) ? [...config.devFakeRoles] : [];
+        return { tid: DEV_TENANT_ID, oid: devObjectId(email), email, name: config.devFakeUser, roles, termsAccepted: false, dev: true };
     }
     return null;
 }
@@ -368,8 +441,37 @@ function tenantAllowed(identity, config) {
     return Boolean(config.allowedTenantIds) && config.allowedTenantIds.has(identity.tid);
 }
 
+// The External ID access gate: identities of an EXTERNAL_TENANT_IDS tenant need
+// the EXTERNAL_ACCESS_ROLE app role. Workforce identities (and the dev stand-in)
+// are unaffected. No admin exception: the role is the single source of truth.
+function accessGranted(identity, config) {
+    if (identity.dev || !isExternalTenant(identity.tid, config)) return true;
+    // The admin role implies access.
+    return hasRole(identity, config.externalAccessRole) || hasRole(identity, config.adminRole);
+}
+
+function hasRole(identity, role) {
+    return Boolean(role) && Array.isArray(identity.roles) && identity.roles.includes(role);
+}
+
+// True for a signed-in identity of an allowed tenant that lacks the access
+// role: what gets /no-access/ and 403 access_not_granted.
+function accessDenied(req, config) {
+    const identity = requestIdentity(req, config);
+    return Boolean(identity) && tenantAllowed(identity, config) && !accessGranted(identity, config);
+}
+
+function sendAccessNotGranted(res) {
+    sendJson(res, 403, { error: 'access_not_granted' });
+}
+
+function isPublicPath(pathname) {
+    return PUBLIC_FILES.includes(pathname) || PUBLIC_PATH_PREFIXES.some((prefix) => isUnder(pathname, prefix));
+}
+
 // Gate for every proxied API and /userinfo: the identity, or null after a
-// 401 (no usable identity) / 403 tenant_not_allowed has been sent.
+// 401 (no usable identity) / 403 tenant_not_allowed / 403 access_not_granted
+// has been sent.
 function requireIdentity(req, res, config) {
     const identity = requestIdentity(req, config);
     if (!identity) {
@@ -381,6 +483,10 @@ function requireIdentity(req, res, config) {
             error: 'tenant_not_allowed',
             message: 'Accounts of your organisation cannot use this site.',
         });
+        return null;
+    }
+    if (!accessGranted(identity, config)) {
+        sendAccessNotGranted(res);
         return null;
     }
     return identity;
@@ -396,6 +502,14 @@ function handleUserInfo(req, res, config) {
     // No principal, or one without oid/tid: signed out as far as the APIs go.
     if (!requestIdentity(req, config)) {
         json({ authenticated: false });
+        return;
+    }
+    // Signed in but without the access role: the no-access page shows who
+    // they are signed in as — the display name and the validated e-mail only,
+    // never tid or oid.
+    if (accessDenied(req, config)) {
+        const denied = requestIdentity(req, config);
+        sendJson(res, 403, { error: 'access_not_granted', name: denied.name, email: denied.email });
         return;
     }
     const identity = requireIdentity(req, res, config);
@@ -416,8 +530,9 @@ function handleUserInfo(req, res, config) {
     const parsed = decodePrincipal(req);
     const principalName = req.headers['x-ms-client-principal-name'];
     // Prefer email, then name, then userDetails, then the principal-name header.
+    // External ID tenant: its `email` claim only (preferred_username need not be an e-mail).
     const displayName =
-        findClaim(parsed, EMAIL_CLAIMS) ||
+        findClaim(parsed, isExternalTenant(identity.tid, config) ? EXTERNAL_EMAIL_CLAIMS : EMAIL_CLAIMS) ||
         findClaim(parsed, NAME_CLAIMS) ||
         parsed.userDetails ||
         principalName ||
@@ -478,17 +593,16 @@ function handleSignIn(req, res, config, search) {
     res.end();
 }
 
-// Whether the request comes from an admin: the identity's (lowercased) e-mail
-// in ADMIN_EMAILS, from an allowed tenant. Needs the same identity the APIs
-// need — a decodable Easy Auth principal with oid and tid, or DEV_FAKE_USER
-// locally (it is '' under NODE_ENV=production); a bare
-// X-MS-CLIENT-PRINCIPAL-NAME is never enough. Phase 2 (Entra External ID
-// group membership) changes only this.
+// Whether the request comes from an admin: the identity carries the ADMIN_ROLE
+// app role (`roles` claim, either form) and is from an allowed tenant — in both
+// tenant modes; the e-mail plays no part. Needs the same identity the APIs need
+// — a decodable Easy Auth principal with oid and tid, or DEV_FAKE_USER with
+// DEV_FAKE_ROLES locally (both blank under NODE_ENV=production); a bare
+// X-MS-CLIENT-PRINCIPAL-NAME is never enough.
 function isAdminRequest(req, config) {
-    if (!config.adminEmails || config.adminEmails.size === 0) return false;
     const identity = requestIdentity(req, config);
-    if (!identity || !tenantAllowed(identity, config)) return false;
-    return identity.email !== '' && config.adminEmails.has(identity.email);
+    if (!identity || !tenantAllowed(identity, config) || !accessGranted(identity, config)) return false;
+    return hasRole(identity, config.adminRole);
 }
 
 // CSRF guard for every state-changing API call on top of the session cookie:
@@ -630,6 +744,7 @@ function proxy(req, res, config, tool, targetPath, identity) {
         // Names are non-ASCII more often than not; headers must be ASCII.
         if (identity.name) outHeaders['x-forwarded-user-name'] = encodeURIComponent(identity.name);
         if (isAdminRequest(req, config)) outHeaders['x-forwarded-user-admin'] = '1';
+        if (identity.termsAccepted) outHeaders['x-forwarded-user-terms-accepted'] = '1';
     }
 
     const proxyReq = transport.request(
@@ -986,9 +1101,11 @@ async function handleDiagnostics(res, config, runtime) {
         config: {
             targets,
             hovtpHealthUrl: Boolean(config.hovtpHealthUrl),
-            adminCount: config.adminEmails.size,
+            adminRole: config.adminRole,
             allowedTenantCount: config.allowedTenantIds.size,
             loginProvider: config.loginProvider,
+            authTenantMode: config.authTenantMode || 'workforce',
+            externalTenantCount: config.externalTenantIds ? config.externalTenantIds.size : 0,
             devFakeUser: Boolean(config.devFakeUser),
         },
         backends,
@@ -1200,6 +1317,27 @@ function createRequestHandler(config) {
             return;
         }
 
+        // A signed-in External ID user without the access role: documents
+        // send them to the public no-access page; /admin/* and every API
+        // below answer 403 access_not_granted (never proxied). The public
+        // paths (the no-access page itself, privacy notice, assets) stay open.
+        const noAccess = !isPublicPath(pathname) && accessDenied(req, config);
+        const lowerPath = pathname.toLowerCase();
+        const isApiPath =
+            isUnder(lowerPath, '/api') ||
+            isUnder(lowerPath, '/' + ADMIN_PREFIX) ||
+            /^\/[^/]+\/api(?:\/|$)/.test(pathname) ||
+            Object.values(SMALL_TOOL_APIS).some((prefix) => isUnder(pathname, prefix + '/api'));
+        if (noAccess) {
+            if (isApiPath) {
+                sendAccessNotGranted(res);
+            } else {
+                res.writeHead(302, { Location: NO_ACCESS_PATH, 'Cache-Control': 'no-store' });
+                res.end();
+            }
+            return;
+        }
+
         // 4d. The root document: home page or public landing page.
         if (LANDING_DOCUMENT_PATHS.includes(pathname)) {
             serveRootDocument(req, res, config, wirePath, search);
@@ -1312,7 +1450,8 @@ if (require.main === module) {
         console.log(`Static root: ${config.publicDir}`);
         console.log(`Proxy targets configured: ${configured.join(', ') || '(none)'}`);
         if (config.devFakeUser) console.log(`DEV_FAKE_USER active: ${config.devFakeUser}`);
-        console.log(`Admins configured: ${config.adminEmails.size}`);
+        console.log(`Admin role: ${config.adminRole}`);
+        if (config.devFakeRoles.length) console.log(`DEV_FAKE_ROLES active: ${config.devFakeRoles.join(', ')}`);
         if (config.allowedTenantIds.size === 0) {
             console.warn('ALLOWED_TENANT_IDS is empty: every signed-in API call is refused (403 tenant_not_allowed).');
         }

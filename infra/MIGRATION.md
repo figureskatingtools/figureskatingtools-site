@@ -48,7 +48,18 @@ after teardown (step 7).
 | `SKIP_CUSTOM_DOMAIN` | `true` during step 3, unset/empty afterwards | **new** |
 | `HOVTP_ENABLED` | `false` to kill the HOVTP listener, unset/empty for the environment default | **new**, optional (test defaults on, prod off) |
 | `RETENTION_PURGE_ENABLED` | `false` = kill switch: the platform `retention_sweep` only logs what it would purge; unset/anything else = it deletes expired competitions | **new**, optional (on by default in both environments) |
-| `ALLOWED_TENANT_IDS` | comma-separated Entra tenant ids whose users may use the site; unset = the deployment tenant only | **new**, optional. Router (403 `tenant_not_allowed`) and platform API both enforce it; add the External ID tenant here when that migration happens |
+| `ALLOWED_TENANT_IDS` | comma-separated Entra tenant ids whose users may use the site; unset = the deployment tenant only | **new**, optional. Router (403 `tenant_not_allowed`) and platform API both enforce it. The External ID tenant is added automatically from `EXTERNAL_TENANT_ID` — don't list it here |
+| `AUTH_TENANT_MODE` | `workforce` (default) or `external` | **new**, optional. Which tenant Easy Auth's one `aad` provider signs in with; `external` = the External ID tenant with **no credential** (needs the two vars below, or the deploy fails). test runs `external`; prod stays `workforce` until phase C go-live, and switching back is the rollback. See `infra/EXTERNAL-ID.md` |
+| `EXTERNAL_TENANT_ID` | Entra External ID tenant id (`380073b3-804e-4cc7-bfcc-843637630d04`) | **new**, optional. Appended to the allowed tenants (both modes) and written to the router and the platform as `EXTERNAL_TENANT_IDS` (router: e-mail only from the `email` claim; platform: new identities get 503 `migration_pending` unless `EXTERNAL_NEW_USERS_ENABLED`) |
+| `EXTERNAL_NEW_USERS_ENABLED` | `true`/`false` | **new**, optional. May a new External ID identity become a new platform user? Unset = test `true`, prod `false` (set `true` once phase C has linked the existing users) |
+| `AUTH_EXTERNAL_CLIENT_ID` | client id of this environment's External ID app registration (test `16c69665-…`, prod `177abce3-…`); its redirect URI is `https://<host>/.auth/login/aad/callback` | **new**, optional; used in `external` mode |
+| `ADMIN_ROLE` | app role that makes a user an admin (default `Site.Admin`) | **new**, optional. Replaces the old `ADMIN_EMAILS` list, which is gone: assign `Site.Admin` in **both** tenants before deploying to prod, and delete the `ADMIN_EMAILS` GitHub vars only after the prod deploy. See `infra/EXTERNAL-ID.md` → Admins |
+| `EXTERNAL_ACCESS_ROLE` | app role External ID users need (default `Site.Access`) | **new**, optional. Without it the router sends them to `/no-access/` and answers APIs 403 `access_not_granted`. See `infra/EXTERNAL-ID.md` → Access gate (role first, deploy, then Assignment required = No) |
+| `AUTH_EXTERNAL_AUTHORITY_HOST` | `380073b3-804e-4cc7-bfcc-843637630d04.ciamlogin.com` (later the custom URL domain) | **new**, optional; empty = `<EXTERNAL_TENANT_ID>.ciamlogin.com` |
+| `AUTH_LOGIN_PROVIDER` | `aad` (default) | optional. The router's `/signin` provider segment; stays `aad` in both tenant modes |
+
+There is **no** External ID secret, in GitHub or anywhere else: external mode is
+credential-free by design (`infra/EXTERNAL-ID.md`).
 
 The URLs and principal ids come from each tool repo's own deployment:
 

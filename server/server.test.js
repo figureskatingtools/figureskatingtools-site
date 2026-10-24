@@ -658,47 +658,48 @@ test('/ shows the home page when DEV_FAKE_USER is set, or when the build has no 
     }
 });
 
-// ── Public privacy notice + self-hosted fonts ────────────────────────────────
+// ── Public privacy notice, terms of use + self-hosted fonts ──────────────────
 
 function addPrivacyAndFonts(dir) {
     fs.mkdirSync(path.join(dir, 'privacy'));
     fs.mkdirSync(path.join(dir, 'tietosuoja'));
+    fs.mkdirSync(path.join(dir, 'terms'));
     fs.mkdirSync(path.join(dir, 'fonts'));
     fs.writeFileSync(path.join(dir, 'privacy', 'index.html'), '<html>PRIVACY_EN</html>');
+    fs.writeFileSync(path.join(dir, 'tietosuoja', 'index.html'), '<html lang="fi">PRIVACY_FI</html>');
     fs.writeFileSync(path.join(dir, 'privacy', 'privacy.css'), 'main{}');
-    fs.writeFileSync(path.join(dir, 'tietosuoja', 'index.html'), '<html>PRIVACY_FI</html>');
+    fs.writeFileSync(path.join(dir, 'terms', 'index.html'), '<html>TERMS_EN</html>');
     fs.writeFileSync(path.join(dir, 'fonts', 'fonts.css'), '@font-face{}');
     fs.writeFileSync(path.join(dir, 'fonts', 'fraunces-latin-opsz-normal.v5-3-0.woff2'), Buffer.from('wOF2'));
 }
 
-test('the privacy notice and fonts are plain static files, served the same signed in or out', async () => {
+test('the privacy notice, terms of use and fonts are plain static files, served the same signed in or out', async () => {
     const publicDir = makePublicFixture();
     addLanding(publicDir);
     addPrivacyAndFonts(publicDir);
     const { server, port } = await startRouter({ publicDir });
     try {
-        // Easy Auth lists /privacy, /privacy/*, /tietosuoja, /tietosuoja/* and
-        // /fonts/* as excluded paths, so these requests arrive without any
-        // principal; the router must not need one.
+        // Easy Auth lists /privacy, /terms (each also with /*) and /fonts/* as
+        // excluded paths, so these requests arrive without any principal; the
+        // router must not need one.
         const signedIn = { headers: { 'x-ms-client-principal': principalHeader(PRINCIPAL) } };
         for (const opts of [{}, signedIn, { headers: { cookie: 'AppServiceAuthSession=abc' } }]) {
-            const en = await request(port, '/privacy/', opts);
-            assert.equal(en.status, 200);
-            assert.match(en.text, /PRIVACY_EN/);
-            assert.match(en.headers['content-type'], /text\/html/);
-            assert.equal(en.headers['cache-control'], 'no-cache');
-            assert.equal(en.headers['content-security-policy'], buildCsp(''));
-
-            const fi = await request(port, '/tietosuoja/', opts);
-            assert.equal(fi.status, 200);
-            assert.match(fi.text, /PRIVACY_FI/);
+            for (const [page, marker] of [['/privacy/', /PRIVACY_EN/], ['/tietosuoja/', /PRIVACY_FI/], ['/terms/', /TERMS_EN/]]) {
+                const res = await request(port, page, opts);
+                assert.equal(res.status, 200, page);
+                assert.match(res.text, marker, page);
+                assert.match(res.headers['content-type'], /text\/html/, page);
+                assert.equal(res.headers['cache-control'], 'no-cache', page);
+                assert.equal(res.headers['content-security-policy'], buildCsp(''), page);
+            }
         }
 
         // The bare paths redirect to the directory so relative URLs resolve.
-        const bare = await request(port, '/privacy');
-        assert.equal(bare.status, 301);
-        assert.equal(bare.headers.location, '/privacy/');
-        assert.equal((await request(port, '/tietosuoja')).headers.location, '/tietosuoja/');
+        for (const page of ['/privacy', '/tietosuoja', '/terms']) {
+            const res = await request(port, page);
+            assert.equal(res.status, 301, page);
+            assert.equal(res.headers.location, `${page}/`, page);
+        }
 
         const css = await request(port, '/privacy/privacy.css');
         assert.match(css.headers['content-type'], /text\/css/);
@@ -719,9 +720,33 @@ test('the privacy notice and fonts are plain static files, served the same signe
     }
 });
 
-test('the real privacy pages and fonts.css reference only this origin', () => {
+test('the Finnish privacy notice is served as it is, never redirected; the terms have no Finnish page', async () => {
+    const publicDir = makePublicFixture();
+    addPrivacyAndFonts(publicDir);
+    const { server, port } = await startRouter({ publicDir });
+    try {
+        const signedIn = { headers: { 'x-ms-client-principal': principalHeader(PRINCIPAL) } };
+        for (const opts of [{}, signedIn]) {
+            for (const page of ['/tietosuoja/', '/tietosuoja/index.html', '/tietosuoja/?x=1']) {
+                const res = await request(port, page, opts);
+                assert.equal(res.status, 200, page);
+                assert.match(res.text, /PRIVACY_FI/, page);
+                assert.equal(res.headers.location, undefined, page);
+            }
+        }
+        // /kayttoehdot was never published: no redirect and no terms page.
+        const fiTerms = await request(port, '/kayttoehdot/');
+        assert.notEqual(fiTerms.status, 301);
+        assert.doesNotMatch(fiTerms.text, /TERMS/);
+    } finally {
+        await close(server);
+        fs.rmSync(publicDir, { recursive: true, force: true });
+    }
+});
+
+test('the real privacy and terms pages and fonts.css reference only this origin', () => {
     const publicRoot = path.join(__dirname, '..', 'site', 'public');
-    for (const page of ['privacy/index.html', 'tietosuoja/index.html', 'landing/index.html']) {
+    for (const page of ['privacy/index.html', 'tietosuoja/index.html', 'terms/index.html', 'landing/index.html']) {
         const html = fs.readFileSync(path.join(publicRoot, page), 'utf8');
         assert.doesNotMatch(html, /googleapis|gstatic/, page);
         assert.match(html, /<link rel="stylesheet" href="\/fonts\/fonts\.css">/, page);
@@ -733,6 +758,30 @@ test('the real privacy pages and fonts.css reference only this origin', () => {
         assert.match(url, /^\.\/[a-z0-9-]+\.v[0-9-]+\.woff2$/, url);
         assert.ok(fs.existsSync(path.join(publicRoot, 'fonts', url)), url);
     }
+});
+
+test('the privacy notice (English and Finnish) and the terms of use (English only) are public and link to each other', () => {
+    const repoRoot = path.join(__dirname, '..');
+    const publicRoot = path.join(repoRoot, 'site', 'public');
+    const bicep = fs.readFileSync(path.join(repoRoot, 'infra', 'modules', 'webapp.bicep'), 'utf8');
+    const excluded = (p) => new RegExp(`^\\s*'${p.replace(/[*]/g, '\\*')}'$`, 'm');
+    for (const dir of ['/privacy', '/terms', '/tietosuoja']) {
+        assert.match(bicep, excluded(dir), `excluded path ${dir}`);
+        assert.match(bicep, excluded(`${dir}/*`), `excluded path ${dir}/*`);
+    }
+    assert.doesNotMatch(bicep, /'\/kayttoehdot/);
+    assert.ok(!fs.existsSync(path.join(publicRoot, 'kayttoehdot')), 'no Finnish terms');
+
+    const links = {
+        'privacy/index.html': ['/terms/', '/tietosuoja/'],
+        'tietosuoja/index.html': ['/terms/', '/privacy/'],
+        'terms/index.html': ['/privacy/'],
+    };
+    for (const [page, hrefs] of Object.entries(links)) {
+        const html = fs.readFileSync(path.join(publicRoot, page), 'utf8');
+        for (const href of hrefs) assert.ok(html.includes(`href="${href}"`), `${page} → ${href}`);
+    }
+    assert.match(fs.readFileSync(path.join(publicRoot, 'tietosuoja', 'index.html'), 'utf8'), /<html lang="fi">/);
 });
 
 test('GET /signin redirects to the Easy Auth login with a same-origin return path', async () => {
@@ -1196,55 +1245,68 @@ test('/changelog-live 502s when the sources file is missing', async () => {
 
 const ADMIN_EMAIL = 'admin@example.com';
 
-function principalFor(email, { tid = TENANT_ID, oid = OID, name = '' } = {}) {
+function principalFor(email, { tid = TENANT_ID, oid = OID, name = '', roles = [], roleClaim = 'roles' } = {}) {
     const claims = [{ typ: 'preferred_username', val: email }];
     if (name) claims.push({ typ: 'name', val: name });
+    for (const val of roles) claims.push({ typ: roleClaim, val });
     if (oid) claims.push({ typ: 'oid', val: oid });
     if (tid) claims.push({ typ: 'tid', val: tid });
     return principalHeader({ ...PRINCIPAL, userDetails: email, claims });
 }
 
-// Two admins, listed with stray case and whitespace.
+// An admin is whoever carries the Site.Admin app role — never an e-mail.
+function adminPrincipalFor(email = ADMIN_EMAIL, opts = {}) {
+    return principalFor(email, { ...opts, roles: ['Site.Admin'] });
+}
+
 function adminConfig(extra = {}) {
-    const { adminEmails } = loadConfig({ ADMIN_EMAILS: ' Admin@Example.com , other-admin@example.com ' });
-    return { adminEmails, ...extra };
+    return { adminRole: loadConfig({}).adminRole, ...extra };
 }
 
 function fakeReq(headers = {}) {
     return { headers };
 }
 
-test('ADMIN_EMAILS is parsed into a trimmed, lowercased set', () => {
-    assert.deepEqual([...loadConfig({ ADMIN_EMAILS: ' A@Example.com,,b@example.com ' }).adminEmails], [
-        'a@example.com',
-        'b@example.com',
-    ]);
-    assert.equal(loadConfig({}).adminEmails.size, 0);
+test('ADMIN_ROLE defaults to Site.Admin; DEV_FAKE_ROLES is a trimmed list, blank in production', () => {
+    assert.equal(loadConfig({}).adminRole, 'Site.Admin');
+    assert.equal(loadConfig({ ADMIN_ROLE: ' Fst.Admins ' }).adminRole, 'Fst.Admins');
+    assert.deepEqual(loadConfig({}).devFakeRoles, []);
+    assert.deepEqual(loadConfig({ DEV_FAKE_ROLES: ' Site.Admin ,, Site.Access ' }).devFakeRoles, ['Site.Admin', 'Site.Access']);
+    assert.deepEqual(loadConfig({ DEV_FAKE_ROLES: 'Site.Admin', NODE_ENV: 'production' }).devFakeRoles, []);
 });
 
-test('isAdminRequest: listed e-mail in any case, nobody else, never a bare principal-name header', () => {
-    const config = { ...loadConfig({ ALLOWED_TENANT_IDS: TENANT_ID }), ...adminConfig() };
-    assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor('ADMIN@example.COM') }), config), true);
-    assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor('skater@example.com') }), config), false);
+test('isAdminRequest: the Site.Admin app role (either claim form) from an allowed tenant, never an e-mail', () => {
+    const config = loadConfig({ ALLOWED_TENANT_IDS: TENANT_ID });
+    const admin = (opts) => isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor('anyone@example.com', opts) }), config);
+    assert.equal(admin({ roles: ['Site.Admin'] }), true);
+    assert.equal(admin({ roles: ['Site.Admin'], roleClaim: 'http://schemas.microsoft.com/ws/2008/06/identity/claims/role' }), true);
+    assert.equal(admin({ roles: ['Site.Access', 'Site.Admin'] }), true);
+    // No role, another role, or another case is nobody — whatever the e-mail.
+    assert.equal(admin({}), false);
+    assert.equal(admin({ roles: ['Site.Access'] }), false);
+    assert.equal(admin({ roles: ['site.admin'] }), false);
+    assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor(ADMIN_EMAIL) }), config), false);
     assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal-name': ADMIN_EMAIL }), config), false);
     assert.equal(isAdminRequest(fakeReq({}), config), false);
-    // The admin's e-mail from another tenant, or without oid/tid, is nobody.
+    // The role from another tenant, or without oid/tid, is nobody.
+    assert.equal(admin({ roles: ['Site.Admin'], tid: OTHER_TENANT_ID }), false);
+    assert.equal(admin({ roles: ['Site.Admin'], oid: '' }), false);
+    // ADMIN_ROLE renames the role.
+    const renamed = { ...config, adminRole: 'Fst.Admins' };
+    assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal': adminPrincipalFor() }), renamed), false);
     assert.equal(
-        isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor(ADMIN_EMAIL, { tid: OTHER_TENANT_ID }) }), config),
-        false
+        isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor('a@example.com', { roles: ['Fst.Admins'] }) }), renamed),
+        true
     );
-    assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor(ADMIN_EMAIL, { oid: '' }) }), config), false);
-    // An empty list means nobody, whatever the identity.
-    const nobody = loadConfig({});
-    assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal': principalFor(ADMIN_EMAIL) }), nobody), false);
 });
 
-test('isAdminRequest honours DEV_FAKE_USER locally but never under NODE_ENV=production', () => {
-    const dev = loadConfig({ ADMIN_EMAILS: ADMIN_EMAIL, DEV_FAKE_USER: ADMIN_EMAIL });
+test('isAdminRequest honours DEV_FAKE_USER + DEV_FAKE_ROLES locally but never under NODE_ENV=production', () => {
+    const dev = loadConfig({ DEV_FAKE_USER: ADMIN_EMAIL, DEV_FAKE_ROLES: 'Site.Admin' });
     assert.equal(isAdminRequest(fakeReq({}), dev), true);
+    assert.equal(isAdminRequest(fakeReq({}), loadConfig({ DEV_FAKE_USER: ADMIN_EMAIL })), false);
     // The dev stand-in does not lend admin to a principal-name header.
     assert.equal(isAdminRequest(fakeReq({ 'x-ms-client-principal-name': 'skater@example.com' }), dev), false);
-    const prod = loadConfig({ ADMIN_EMAILS: ADMIN_EMAIL, DEV_FAKE_USER: ADMIN_EMAIL, NODE_ENV: 'production' });
+    const prod = loadConfig({ DEV_FAKE_USER: ADMIN_EMAIL, DEV_FAKE_ROLES: 'Site.Admin', NODE_ENV: 'production' });
     assert.equal(isAdminRequest(fakeReq({}), prod), false);
 });
 
@@ -1252,17 +1314,20 @@ test('GET /userinfo reports isAdmin for admins only', async () => {
     const { server, port } = await startRouter(adminConfig());
     try {
         const admin = await request(port, '/userinfo', {
-            headers: { 'x-ms-client-principal': principalFor('ADMIN@EXAMPLE.COM') },
+            headers: { 'x-ms-client-principal': adminPrincipalFor('ADMIN@EXAMPLE.COM') },
         });
         assert.equal(json(admin).isAdmin, true);
         const user = await request(port, '/userinfo', {
             headers: { 'x-ms-client-principal': principalHeader(PRINCIPAL) },
         });
         assert.equal(json(user).isAdmin, false);
+        // The admin's e-mail without the role is not an admin.
+        const byEmail = await request(port, '/userinfo', { headers: { 'x-ms-client-principal': principalFor(ADMIN_EMAIL) } });
+        assert.equal(json(byEmail).isAdmin, false);
     } finally {
         await close(server);
     }
-    const dev = await startRouter(adminConfig({ devFakeUser: ADMIN_EMAIL }));
+    const dev = await startRouter(adminConfig({ devFakeUser: ADMIN_EMAIL, devFakeRoles: ['Site.Admin'] }));
     try {
         assert.equal(json(await request(dev.port, '/userinfo')).isAdmin, true);
     } finally {
@@ -1275,7 +1340,7 @@ test('/admin/ is a plain 404 for non-admins and the admin document (with deep li
     fs.mkdirSync(path.join(publicDir, 'admin'));
     fs.writeFileSync(path.join(publicDir, 'admin', 'index.html'), '<html>ADMIN_INDEX</html>');
     const { server, port } = await startRouter(adminConfig({ publicDir }));
-    const adminHeaders = { 'x-ms-client-principal': principalFor(ADMIN_EMAIL) };
+    const adminHeaders = { 'x-ms-client-principal': adminPrincipalFor(ADMIN_EMAIL) };
     const userHeaders = { 'x-ms-client-principal': principalHeader(PRINCIPAL) };
     try {
         // Encoded and non-normalised spellings are gated like the plain one.
@@ -1350,7 +1415,7 @@ test('/api/manage/* proxies admins, and rejects cross-site state changes', async
     const { server, port } = await startRouter(
         adminConfig({ targets: targets({ platform: { url: upstream.url, secret: 'platform-secret' } }) })
     );
-    const admin = { 'x-ms-client-principal': principalFor(ADMIN_EMAIL) };
+    const admin = { 'x-ms-client-principal': adminPrincipalFor(ADMIN_EMAIL) };
     try {
         const list = await request(port, '/api/manage/competitions?status=all', { headers: admin });
         assert.equal(list.status, 200);
@@ -1439,7 +1504,7 @@ test('GET /admin/api/diagnostics: admins only, booleans for config, health of ev
         assert.equal(json(denied).error, 'admin_required');
 
         const res = await request(port, '/admin/api/diagnostics', {
-            headers: { 'x-ms-client-principal': principalFor(ADMIN_EMAIL) },
+            headers: { 'x-ms-client-principal': adminPrincipalFor(ADMIN_EMAIL) },
         });
         assert.equal(res.status, 200);
         assert.equal(res.headers['cache-control'], 'no-store');
@@ -1456,8 +1521,10 @@ test('GET /admin/api/diagnostics: admins only, booleans for config, health of ev
         assert.deepEqual(body.config.targets.protocolgenerator, { url: true, secret: false });
         assert.deepEqual(body.config.targets.gdprtool, { url: false, secret: false });
         assert.equal(body.config.hovtpHealthUrl, true);
-        assert.equal(body.config.adminCount, 2);
+        assert.equal(body.config.adminRole, 'Site.Admin');
         assert.equal(body.config.loginProvider, 'aad');
+        assert.equal(body.config.authTenantMode, 'workforce');
+        assert.equal(body.config.externalTenantCount, 0);
         assert.equal(body.config.devFakeUser, false);
 
         const byName = Object.fromEntries(body.backends.map((b) => [b.name, b]));
@@ -1505,7 +1572,7 @@ test('diagnostics report a null commit without build info', async () => {
     );
     try {
         const res = await request(port, '/admin/api/diagnostics', {
-            headers: { 'x-ms-client-principal': principalFor(ADMIN_EMAIL) },
+            headers: { 'x-ms-client-principal': adminPrincipalFor(ADMIN_EMAIL) },
         });
         assert.equal(res.status, 200);
         assert.equal(json(res).router.commit, null);
@@ -1522,6 +1589,7 @@ const IDENTITY_HEADERS = [
     'x-forwarded-user-email',
     'x-forwarded-user-name',
     'x-forwarded-user-admin',
+    'x-forwarded-user-terms-accepted',
 ];
 
 // Everything a malicious browser could try to smuggle to a backend.
@@ -1531,6 +1599,7 @@ const SPOOFED = {
     'x-forwarded-user-email': 'victim@example.com',
     'x-forwarded-user-name': 'Victim',
     'x-forwarded-user-admin': '1',
+    'x-forwarded-user-terms-accepted': '1',
     'x-ms-client-principal-name': 'victim@example.com',
     'x-proxy-secret': 'guess',
     authorization: 'Bearer a.b.c',
@@ -1539,7 +1608,7 @@ const SPOOFED = {
 test('requestIdentity reads oid/tid from the long and the short claim types, lowercased', () => {
     const config = loadConfig({});
     const long = requestIdentity(fakeReq(AUTH), config);
-    assert.deepEqual(long, { tid: TENANT_ID, oid: OID, email: 'skater@example.com', name: 'Skater Person', dev: false });
+    assert.deepEqual(long, { tid: TENANT_ID, oid: OID, email: 'skater@example.com', name: 'Skater Person', roles: [], termsAccepted: false, dev: false });
 
     const short = requestIdentity(
         fakeReq({ 'x-ms-client-principal': principalFor('Coach@Example.COM', { oid: OID.toUpperCase(), tid: TENANT_ID.toUpperCase() }) }),
@@ -1598,6 +1667,8 @@ test('every backend gets tid/oid/email/name from the principal; client copies ar
             assert.equal(seen.headers['x-forwarded-user-email'], 'arra.ohman@example.com', seen.url);
             assert.equal(decodeURIComponent(seen.headers['x-forwarded-user-name']), 'Ärrä Öhman 张伟', seen.url);
             assert.equal(seen.headers['x-forwarded-user-admin'], undefined, seen.url);
+            // A workforce principal has no termsAccepted claim; the client copy is dropped.
+            assert.equal(seen.headers['x-forwarded-user-terms-accepted'], undefined, seen.url);
             assert.notEqual(seen.headers['x-proxy-secret'], 'guess', seen.url);
             assert.equal(seen.headers['x-ms-client-principal-name'], undefined, seen.url);
             assert.equal(seen.headers['x-ms-client-principal'], undefined, seen.url);
@@ -1643,7 +1714,7 @@ test('x-forwarded-user-admin: 1 reaches the backends for admins only', async () 
             }),
         })
     );
-    const admin = { 'x-ms-client-principal': principalFor(ADMIN_EMAIL) };
+    const admin = { 'x-ms-client-principal': adminPrincipalFor(ADMIN_EMAIL) };
     try {
         await request(port, '/api/competitions', { headers: admin });
         await request(port, '/judgepapers/api/list', { headers: admin });
@@ -1697,7 +1768,7 @@ test('a principal of a tenant outside ALLOWED_TENANT_IDS gets 403 tenant_not_all
         })
     );
     const foreign = { 'x-ms-client-principal': principalFor('skater@example.com', { tid: OTHER_TENANT_ID }) };
-    const foreignAdmin = { 'x-ms-client-principal': principalFor(ADMIN_EMAIL, { tid: OTHER_TENANT_ID }) };
+    const foreignAdmin = { 'x-ms-client-principal': adminPrincipalFor(ADMIN_EMAIL, { tid: OTHER_TENANT_ID }) };
     try {
         for (const p of ['/api/competitions', '/scoremodifier/api/generate', '/tools/gdpr/api/scan']) {
             const res = await request(port, p, { headers: foreign });
@@ -1903,7 +1974,7 @@ test('paths with dot segments, encoded separators or backslashes are a 400 befor
     const { server, port } = await startRouter(
         adminConfig({ publicDir, targets: targets({ judgepapers: all, platform: all, gdprtool: all }) })
     );
-    const admin = { 'x-ms-client-principal': principalFor(ADMIN_EMAIL), ...SAME_ORIGIN };
+    const admin = { 'x-ms-client-principal': adminPrincipalFor(ADMIN_EMAIL), ...SAME_ORIGIN };
     const bad = [
         '/landing/../api/manage/x',
         '/api/manage/%2e%2e/competitions',
@@ -1975,33 +2046,393 @@ test('the backends get the canonical path, re-encoded, never the raw one', async
 
 // ── E-mail: printable ASCII is checked before lowercasing ────────────────────
 
-test('a non-ASCII e-mail is no e-mail: the Kelvin sign cannot become an admin "k"', async () => {
-    const config = {
-        ...loadConfig({ ALLOWED_TENANT_IDS: TENANT_ID, ADMIN_EMAILS: 'kim@example.com, Kate@example.com' }),
-    };
-    // The look-alike entry in ADMIN_EMAILS is dropped, the real one kept.
-    assert.deepEqual([...config.adminEmails], ['kim@example.com']);
-    assert.equal('Kim@example.com'.toLowerCase(), 'kim@example.com'); // the trick itself
+test('a non-ASCII e-mail is no e-mail: the Kelvin sign cannot pose as an ASCII address', async () => {
+    const config = loadConfig({ ALLOWED_TENANT_IDS: TENANT_ID });
+    assert.equal('\u212Aim@example.com'.toLowerCase(), 'kim@example.com'); // the trick itself
 
     const lookalike = fakeReq({ 'x-ms-client-principal': principalFor('KIM@example.com') });
     assert.equal(requestIdentity(lookalike, config).email, '');
-    assert.equal(isAdminRequest(lookalike, config), false);
     const real = fakeReq({ 'x-ms-client-principal': principalFor('KIM@example.com') });
     assert.equal(requestIdentity(real, config).email, 'kim@example.com');
-    assert.equal(isAdminRequest(real, config), true);
 
-    // Not forwarded either, and not let through the /api/manage gate.
+    // Not forwarded either.
     const upstream = await startUpstream((req, res) => res.end('{}'));
     const { server, port } = await startRouter({ ...config, targets: targets({ platform: { url: upstream.url, secret: 's' } }) });
     try {
         await request(port, '/api/competitions', { headers: lookalike.headers });
         assert.equal(upstream.received[0].headers['x-forwarded-user-email'], undefined);
         assert.equal(upstream.received[0].headers['x-forwarded-user-admin'], undefined);
-        const manage = await request(port, '/api/manage/competitions', { headers: lookalike.headers });
-        assert.equal(manage.status, 403);
-        assert.equal(upstream.received.length, 1);
-        const info = json(await request(port, '/userinfo', { headers: lookalike.headers }));
-        assert.equal(info.isAdmin, false);
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+// ── Entra External ID (AUTH_TENANT_MODE=external, same `aad` provider) ──────
+
+const EXTERNAL_TENANT_ID = '380073b3-804e-4cc7-bfcc-843637630d04';
+const EXTERNAL_OID = '9f8e7d6c-5b4a-4392-8170-6f5e4d3c2b1a';
+const EMAIL_URI_CLAIM = 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/emailaddress';
+
+// What Easy Auth's `aad` provider hands on for an External ID sign-in: the same
+// auth_typ as a workforce one, the display name as userDetails / principal
+// name, a preferred_username that need not be an e-mail, and the `email` claim.
+function externalPrincipal({
+    email = 'Skater@Gmail.com',
+    emailClaim = 'email',
+    name = 'Sanna Skater',
+    tid = EXTERNAL_TENANT_ID,
+    oid = EXTERNAL_OID,
+    roles = ['Site.Access'],
+    roleClaim = 'roles',
+} = {}) {
+    const claims = [
+        ...roles.map((val) => ({ typ: roleClaim, val })),
+        { typ: 'name', val: name },
+        { typ: 'preferred_username', val: 'not-an-email-handle' },
+        { typ: OID_CLAIM, val: oid },
+        { typ: TID_CLAIM, val: tid },
+        { typ: 'termsAccepted', val: 'true' },
+    ];
+    if (email) claims.push({ typ: emailClaim, val: email });
+    return principalHeader({ auth_typ: 'aad', identityProvider: 'aad', userDetails: name, claims });
+}
+
+function externalHeaders(opts = {}) {
+    return { 'x-ms-client-principal': externalPrincipal(opts), 'x-ms-client-principal-name': opts.name || 'Sanna Skater' };
+}
+
+// Both tenants allowed, the external one named in EXTERNAL_TENANT_IDS — what
+// main.bicep deploys once EXTERNAL_TENANT_ID is set.
+function externalConfig(extra = {}) {
+    const env = loadConfig({
+        ALLOWED_TENANT_IDS: `${TENANT_ID},${EXTERNAL_TENANT_ID}`,
+        EXTERNAL_TENANT_IDS: ` ${EXTERNAL_TENANT_ID.toUpperCase()} `,
+    });
+    return {
+        allowedTenantIds: env.allowedTenantIds,
+        externalTenantIds: env.externalTenantIds,
+        externalAccessRole: env.externalAccessRole,
+        ...extra,
+    };
+}
+
+test('External ID tenant: the e-mail comes from the email claim, never the display-name userDetails', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter(
+        externalConfig({ targets: targets({ platform: { url: upstream.url, secret: 'pf' } }) })
+    );
+    try {
+        const info = await request(port, '/userinfo', { headers: externalHeaders() });
+        assert.equal(info.status, 200);
+        const body = json(info);
+        assert.equal(body.authenticated, true);
+        assert.equal(body.userDetails, 'Skater@Gmail.com');
+        assert.equal(body.name, 'Sanna Skater');
+
+        // The long schema name of the claim counts too.
+        for (const emailClaim of ['email', EMAIL_URI_CLAIM]) {
+            const res = await request(port, '/api/competitions', { headers: externalHeaders({ emailClaim }) });
+            assert.equal(res.status, 200);
+        }
+        for (const seen of upstream.received) {
+            assert.equal(seen.headers['x-forwarded-user-tid'], EXTERNAL_TENANT_ID);
+            assert.equal(seen.headers['x-forwarded-user-oid'], EXTERNAL_OID);
+            assert.equal(seen.headers['x-forwarded-user-email'], 'skater@gmail.com');
+            assert.equal(decodeURIComponent(seen.headers['x-forwarded-user-name']), 'Sanna Skater');
+        }
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('the sign-up termsAccepted claim is forwarded as x-forwarded-user-terms-accepted: 1 to every backend', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter(
+        externalConfig({
+            targets: targets({
+                judgepapers: { url: upstream.url, secret: 'jp' },
+                protocolgenerator: { url: upstream.url, secret: 'pg' },
+                platform: { url: upstream.url, secret: 'pf' },
+            }),
+        })
+    );
+    try {
+        for (const p of ['/api/competitions', '/judgepapers/api/x', '/protocolgenerator/api/x']) {
+            const res = await request(port, p, { headers: externalHeaders() });
+            assert.equal(res.status, 200, p);
+        }
+        for (const seen of upstream.received) {
+            assert.equal(seen.headers['x-forwarded-user-terms-accepted'], '1', seen.url);
+        }
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('termsAccepted counts only as boolean true or the string "true"; anything else forwards nothing', () => {
+    const config = externalConfig();
+    const withClaim = (val) => {
+        const claims = [
+            { typ: 'roles', val: 'Site.Access' },
+            { typ: OID_CLAIM, val: EXTERNAL_OID },
+            { typ: TID_CLAIM, val: EXTERNAL_TENANT_ID },
+            { typ: 'email', val: 'skater@gmail.com' },
+        ];
+        if (val !== undefined) claims.push({ typ: 'termsAccepted', val });
+        return fakeReq({ 'x-ms-client-principal': principalHeader({ auth_typ: 'aad', claims }) });
+    };
+    for (const val of ['true', 'True', ' TRUE ', true]) {
+        assert.equal(requestIdentity(withClaim(val), config).termsAccepted, true, String(val));
+    }
+    for (const val of [undefined, 'false', '', '1', 'yes', false, 1]) {
+        assert.equal(requestIdentity(withClaim(val), config).termsAccepted, false, String(val));
+    }
+    // The dev stand-in never claims an acceptance.
+    const dev = requestIdentity(fakeReq({}), { devFakeUser: 'dev@example.com' });
+    assert.equal(dev.termsAccepted, false);
+});
+
+test('External ID tenant without an email claim forwards no e-mail (userDetails / preferred_username are never used)', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter(
+        externalConfig({ targets: targets({ platform: { url: upstream.url, secret: 'pf' } }) })
+    );
+    try {
+        // A display name that looks like an e-mail still is not one.
+        const headers = externalHeaders({ email: '', name: 'admin@example.com' });
+        const res = await request(port, '/api/competitions', { headers });
+        assert.equal(res.status, 200);
+        assert.equal(upstream.received[0].headers['x-forwarded-user-email'], undefined);
+        assert.equal(upstream.received[0].headers['x-forwarded-user-oid'], EXTERNAL_OID);
+        // No e-mail makes an admin, from any claim; only the Site.Admin role does.
+        const config = externalConfig(adminConfig());
+        assert.equal(isAdminRequest(fakeReq(headers), config), false);
+        assert.equal(isAdminRequest(fakeReq(externalHeaders({ email: 'ADMIN@example.com' })), config), false);
+        assert.equal(isAdminRequest(fakeReq(externalHeaders({ roles: ['Site.Admin'] })), config), true);
+        assert.equal(isAdminRequest(fakeReq(externalHeaders({ email: 'admin@examplK.com' })), config), false);
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('a workforce tid is unaffected by EXTERNAL_TENANT_IDS: userDetails / preferred_username still count', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter(
+        externalConfig({ targets: targets({ platform: { url: upstream.url, secret: 'pf' } }) })
+    );
+    try {
+        const res = await request(port, '/api/competitions', { headers: AUTH });
+        assert.equal(res.status, 200);
+        assert.equal(upstream.received[0].headers['x-forwarded-user-tid'], TENANT_ID);
+        assert.equal(upstream.received[0].headers['x-forwarded-user-email'], 'skater@example.com');
+        // The very principal that forwards no e-mail from the external tenant
+        // (previous test) still yields its userDetails from a workforce tid.
+        const workforce = externalHeaders({ email: '', tid: TENANT_ID, name: 'Wanda@Contoso.com' });
+        await request(port, '/api/competitions', { headers: workforce });
+        assert.equal(upstream.received[1].headers['x-forwarded-user-email'], 'wanda@contoso.com');
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('External ID tenant outside ALLOWED_TENANT_IDS gets 403 tenant_not_allowed', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter({
+        externalTenantIds: new Set([EXTERNAL_TENANT_ID]),
+        targets: targets({ platform: { url: upstream.url, secret: 'pf' } }),
+    });
+    try {
+        const res = await request(port, '/api/competitions', { headers: externalHeaders() });
+        assert.equal(res.status, 403);
+        assert.equal(json(res).error, 'tenant_not_allowed');
+        const info = await request(port, '/userinfo', { headers: externalHeaders() });
+        assert.equal(info.status, 403);
+        assert.equal(upstream.received.length, 0);
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('AUTH_TENANT_MODE and EXTERNAL_TENANT_IDS are parsed for the diagnostics', () => {
+    assert.equal(loadConfig({}).authTenantMode, 'workforce');
+    assert.equal(loadConfig({ AUTH_TENANT_MODE: 'bogus' }).authTenantMode, 'workforce');
+    assert.equal(loadConfig({ AUTH_TENANT_MODE: ' External ' }).authTenantMode, 'external');
+    assert.deepEqual([...loadConfig({}).externalTenantIds], []);
+    assert.deepEqual([...loadConfig({ EXTERNAL_TENANT_IDS: ` ${EXTERNAL_TENANT_ID.toUpperCase()} ,` }).externalTenantIds], [
+        EXTERNAL_TENANT_ID,
+    ]);
+});
+
+// ── External ID access gate (app role EXTERNAL_ACCESS_ROLE) ──────────────────
+
+function noAccessFixture() {
+    const dir = makePublicFixture();
+    fs.mkdirSync(path.join(dir, 'no-access'));
+    fs.writeFileSync(path.join(dir, 'no-access', 'index.html'), '<html>NO_ACCESS</html>');
+    fs.writeFileSync(path.join(dir, 'no-access', 'no-access.js'), 'void 0');
+    fs.mkdirSync(path.join(dir, 'admin'));
+    fs.writeFileSync(path.join(dir, 'admin', 'index.html'), '<html>ADMIN_INDEX</html>');
+    return dir;
+}
+
+test('EXTERNAL_ACCESS_ROLE defaults to Site.Access', () => {
+    assert.equal(loadConfig({}).externalAccessRole, 'Site.Access');
+    assert.equal(loadConfig({ EXTERNAL_ACCESS_ROLE: ' Fst.Users ' }).externalAccessRole, 'Fst.Users');
+});
+
+test('External ID user WITH the access role uses the site normally (short and long role claim)', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter(
+        externalConfig({ publicDir: noAccessFixture(), targets: targets({ platform: { url: upstream.url, secret: 'pf' } }) })
+    );
+    try {
+        for (const roleClaim of ['roles', 'http://schemas.microsoft.com/ws/2008/06/identity/claims/role']) {
+            const headers = externalHeaders({ roleClaim, roles: ['Other.Role', 'Site.Access'] });
+            assert.equal((await request(port, '/userinfo', { headers })).status, 200, roleClaim);
+            assert.equal((await request(port, '/api/competitions', { headers })).status, 200, roleClaim);
+            const doc = await request(port, '/judgepapers/', { headers });
+            assert.equal(doc.status, 200, roleClaim);
+            assert.match(doc.text, /JUDGEPAPERS_INDEX/);
+        }
+        assert.equal(upstream.received.length, 2);
+    } finally {
+        await close(server);
+        await close(upstream.server);
+    }
+});
+
+test('External ID user WITHOUT the access role: documents 302 to /no-access/, APIs and /admin 403, nothing proxied', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter(
+        externalConfig({
+            ...adminConfig(),
+            publicDir: noAccessFixture(),
+            targets: targets({
+                platform: { url: upstream.url, secret: 'pf' },
+                judgepapers: { url: upstream.url, secret: 'jp' },
+                gdprtool: { url: upstream.url, secret: 'gd' },
+            }),
+        })
+    );
+    // An admin's e-mail gets no exception: the role is the only source of truth.
+    for (const headers of [
+        externalHeaders({ roles: [] }),
+        externalHeaders({ roles: ['Site.Reader', 'site.access'] }),
+        externalHeaders({ roles: [], email: ADMIN_EMAIL }),
+    ]) {
+        try {
+            for (const p of ['/judgepapers/', '/scoremodifier/', '/tools/banner/', '/logo.png', '/judgepapers']) {
+                const res = await request(port, p, { headers });
+                assert.equal(res.status, 302, p);
+                assert.equal(res.headers.location, '/no-access/', p);
+            }
+            for (const [p, method] of [
+                ['/api/competitions', 'GET'],
+                ['/api/manage/competitions', 'GET'],
+                ['/API/manage/competitions', 'GET'],
+                ['/judgepapers/api/x', 'POST'],
+                ['/tools/gdpr/api/scan', 'GET'],
+                ['/admin/', 'GET'],
+                ['/admin/api/diagnostics', 'GET'],
+            ]) {
+                const res = await request(port, p, { method, headers: { ...headers, ...SAME_ORIGIN } });
+                assert.equal(res.status, 403, p);
+                assert.deepEqual(json(res), { error: 'access_not_granted' }, p);
+            }
+            assert.equal(isAdminRequest(fakeReq(headers), externalConfig(adminConfig())), false);
+            assert.equal(upstream.received.length, 0);
+        } catch (e) {
+            await close(server);
+            await close(upstream.server);
+            throw e;
+        }
+    }
+    await close(server);
+    await close(upstream.server);
+});
+
+test('GET /userinfo without the access role is 403 access_not_granted with only the name and the validated e-mail', async () => {
+    const { server, port } = await startRouter(externalConfig());
+    try {
+        const res = await request(port, '/userinfo', { headers: externalHeaders({ roles: [] }) });
+        assert.equal(res.status, 403);
+        assert.equal(res.headers['cache-control'], 'no-store');
+        assert.deepEqual(json(res), { error: 'access_not_granted', name: 'Sanna Skater', email: 'skater@gmail.com' });
+        assert.doesNotMatch(res.text, new RegExp(`${EXTERNAL_TENANT_ID}|${EXTERNAL_OID}`));
+
+        // A non-ASCII e-mail is no e-mail here either.
+        const kelvin = await request(port, '/userinfo', {
+            headers: externalHeaders({ roles: [], email: 'admin@examplK.com' }),
+        });
+        assert.deepEqual(json(kelvin), { error: 'access_not_granted', name: 'Sanna Skater', email: '' });
+    } finally {
+        await close(server);
+    }
+});
+
+test('a workforce tid needs no role; the gate is off without EXTERNAL_TENANT_IDS', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter(
+        externalConfig({ publicDir: noAccessFixture(), targets: targets({ platform: { url: upstream.url, secret: 'pf' } }) })
+    );
+    const noGate = await startRouter({
+        allowedTenantIds: new Set([TENANT_ID, EXTERNAL_TENANT_ID]),
+        publicDir: noAccessFixture(),
+        targets: targets({ platform: { url: upstream.url, secret: 'pf' } }),
+    });
+    try {
+        assert.equal((await request(port, '/userinfo', { headers: AUTH })).status, 200);
+        assert.equal((await request(port, '/api/competitions', { headers: AUTH })).status, 200);
+        assert.equal((await request(port, '/judgepapers/', { headers: AUTH })).status, 200);
+        const roleless = externalHeaders({ roles: [] });
+        assert.equal((await request(noGate.port, '/api/competitions', { headers: roleless })).status, 200);
+    } finally {
+        await close(server);
+        await close(noGate.server);
+        await close(upstream.server);
+    }
+});
+
+test('/no-access/ and the other public paths are served to everyone, with or without the role', async () => {
+    const { server, port } = await startRouter(externalConfig({ publicDir: noAccessFixture() }));
+    try {
+        for (const headers of [{}, AUTH, externalHeaders(), externalHeaders({ roles: [] })]) {
+            const page = await request(port, '/no-access/', { headers });
+            assert.equal(page.status, 200);
+            assert.match(page.text, /NO_ACCESS/);
+            assert.equal((await request(port, '/no-access/no-access.js', { headers })).status, 200);
+            const bare = await request(port, '/no-access', { headers });
+            assert.equal(bare.status, 301);
+            assert.equal(bare.headers.location, '/no-access/');
+            assert.equal((await request(port, '/assets/app-abc123.js', { headers })).status, 200);
+            assert.equal((await request(port, '/health', { headers })).status, 200);
+            const signin = await request(port, '/signin?return=/judgepapers/', { headers });
+            assert.equal(signin.status, 302);
+            assert.match(signin.headers.location, /^\/\.auth\/login\/aad/);
+        }
+    } finally {
+        await close(server);
+    }
+});
+
+test('Site.Admin implies access: an External ID admin without Site.Access passes the gate and is an admin', async () => {
+    const upstream = await startUpstream((req, res) => res.end('{}'));
+    const { server, port } = await startRouter(
+        externalConfig({ ...adminConfig(), publicDir: noAccessFixture(), targets: targets({ platform: { url: upstream.url, secret: 'pf' } }) })
+    );
+    try {
+        const headers = externalHeaders({ roles: ['Site.Admin'] });
+        assert.equal((await request(port, '/judgepapers/', { headers })).status, 200);
+        assert.equal(json(await request(port, '/userinfo', { headers })).isAdmin, true);
+        assert.equal((await request(port, '/api/manage/competitions', { headers })).status, 200);
+        assert.equal(upstream.received[0].headers['x-forwarded-user-admin'], '1');
+        assert.equal((await request(port, '/admin/', { headers })).status, 200);
     } finally {
         await close(server);
         await close(upstream.server);

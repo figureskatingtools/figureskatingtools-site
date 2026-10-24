@@ -5,8 +5,8 @@
  * the list of competitions from the platform registry, a "New competition…"
  * dialog and a clear item.
  *
- * **Degrades to rendering nothing** when `/api/competitions` is unavailable, so
- * the frontend can ship before the platform API exists.
+ * Always rendered, even with no competitions or when the list cannot be
+ * loaded: "New competition…" must stay reachable for a first-time user.
  */
 
 import {
@@ -39,6 +39,13 @@ function esc(value: string): string {
     .replace(/'/g, '&#39;');
 }
 
+/** Shown in the menu when the competition list could not be loaded */
+function loadErrorMessage(err: unknown): string {
+  return err instanceof CompetitionApiError && err.status !== 0 && err.code
+    ? err.message
+    : 'Could not load your competitions.';
+}
+
 /** How many competitions the dropdown lists before it starts scrolling */
 const MENU_MAX_ITEMS = 25;
 
@@ -55,17 +62,17 @@ const CHEVRON_SVG =
  * Render the competition selector into `container` (normally
  * `#fst-nav-competition`).
  *
- * Resolves once the first competition list has loaded. If the API is not
- * reachable the container is left empty and no listeners are attached.
+ * Resolves once the first competition list has loaded (or failed to). A
+ * failed load still renders the selector, with an empty list and a note, so
+ * "New competition…" stays reachable; opening the menu retries.
  */
 export async function initCompetitionSelector(container: HTMLElement): Promise<void> {
-  let competitions: PlatformCompetition[];
+  let competitions: PlatformCompetition[] = [];
+  let loadError: string | null = null;
   try {
     competitions = await listCompetitions();
-  } catch (_e) {
-    // Platform API not deployed / unreachable — render nothing at all.
-    container.innerHTML = '';
-    return;
+  } catch (err) {
+    loadError = loadErrorMessage(err);
   }
 
   // Refresh the snapshot each time the menu opens, so competitions created
@@ -79,6 +86,7 @@ export async function initCompetitionSelector(container: HTMLElement): Promise<v
     try {
       const fresh = await listCompetitions();
       competitions.splice(0, competitions.length, ...fresh);
+      loadError = null;
       render();
       container.querySelector('[data-fst-comp-toggle]')?.setAttribute('aria-expanded', 'true');
       container.querySelector('[data-fst-comp-menu]')?.classList.add('fst-comp-menu--open');
@@ -90,7 +98,7 @@ export async function initCompetitionSelector(container: HTMLElement): Promise<v
   };
 
   const render = (): void => {
-    container.innerHTML = buildSelectorHtml(competitions, getActiveCompetition());
+    container.innerHTML = buildSelectorHtml(competitions, getActiveCompetition(), loadError);
     wire(container, competitions, render, () => void refresh());
   };
 
@@ -129,7 +137,8 @@ function accessBadgeHtml(c: PlatformCompetition): string {
 
 function buildSelectorHtml(
   competitions: PlatformCompetition[],
-  active: PlatformCompetition | null
+  active: PlatformCompetition | null,
+  loadError: string | null = null
 ): string {
   const label = active ? competitionLabel(active) : 'Select competition…';
   const activeClass = active ? ' fst-comp-btn--active' : '';
@@ -148,9 +157,11 @@ function buildSelectorHtml(
     </button>`;
   }).join('');
 
-  const emptyState = competitions.length === 0
-    ? '<p class="fst-comp-empty">No competitions yet.</p>'
-    : '';
+  const emptyState = competitions.length > 0
+    ? ''
+    : loadError
+      ? `<p class="fst-comp-empty fst-comp-empty--error" role="status">${esc(loadError)}</p>`
+      : '<p class="fst-comp-empty">No competitions yet — create one below.</p>';
 
   const clearItem = active
     ? `<button type="button" class="fst-comp-action" data-fst-comp-clear>Clear selection</button>`

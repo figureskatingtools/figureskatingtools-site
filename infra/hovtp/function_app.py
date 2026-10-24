@@ -59,6 +59,9 @@ Only `DT_PDF`, `DT_PARTIC`, `DT_PARTIC_TEAMS`, `DT_SCHEDULE` and
 `DT_SCHEDULE_UPDATE` are stored (override with HOVTP_ALLOWED_DOCUMENT_TYPES).
 Anything else — `DT_RESULT` above all, which FSM re-sends after every skater —
 is answered 200 and dropped, so FSM keeps streaming without filling the pool.
+Participant files (`DT_PARTIC`, `DT_PARTIC_TEAMS` and their `_UPDATE`s) are
+stored without their `BirthDate` attributes and elements (`strip_birth_dates`);
+one that cannot be cleaned safely is refused `451` and nothing is stored.
 
 See README.md for the operator-facing contract and the FSM settings to enter.
 """
@@ -970,6 +973,150 @@ def upsert_source(table_client, competition_id: str, ip: str, hdr: HovtpHeaders,
     logging.error(f"Could not write the HOVTP source row '{row_key}'")
 
 
+# ── birth dates out of participant files ──────────────────────────────────────
+# KEEP IN SYNC: everything from here to the end of the section is byte-identical
+# in infra/functions/function_app.py and infra/hovtp/function_app.py (pinned by
+# infra/hovtp/tests/test_parity.py). FS Manager's participant files carry each
+# skater's date of birth (`BirthDate`); nothing on the site uses it, so it is cut
+# out before a file is stored. Only the birth-date attributes and elements go:
+# every other byte stays as it arrived, because the tools parse these files.
+
+PARTICIPANT_DOCUMENT_TYPES = frozenset({
+    "DT_PARTIC",
+    "DT_PARTIC_TEAMS",
+    "DT_PARTIC_UPDATE",
+    "DT_PARTIC_TEAMS_UPDATE",
+})
+
+# One token of well-formed XML markup. Text between tokens is copied untouched.
+# Attribute values may hold '>' but never '<', which is what keeps this exact.
+_XML_MARKUP_RE = re.compile(
+    rb"<!--.*?-->"
+    rb"|<!\[CDATA\[.*?\]\]>"
+    rb"|<\?.*?\?>"
+    rb"|<!DOCTYPE(?:[^\[>]|\[.*?\])*>"
+    rb"|</(?P<end>[^\s>]+)\s*>"
+    rb"|<(?P<start>[^\s/>!?]+)"
+    rb"(?P<attrs>(?:\s+[^\s=/>]+\s*=\s*(?:\"[^\"]*\"|'[^']*'))*)\s*(?P<empty>/?)>",
+    re.S,
+)
+_XML_ATTRIBUTE_RE = re.compile(rb"\s+(?P<name>[^\s=/>]+)\s*=\s*(?:\"[^\"]*\"|'[^']*')")
+
+
+class BirthDateError(ValueError):
+    """A participant file whose birth dates could not be removed safely."""
+
+
+class _NoDtdTreeBuilder(ET.TreeBuilder):
+    """ET's tree builder, except that a DOCTYPE stops the parse. An entity
+    declared in a DTD keeps its value in the declaration — `BirthDate="&dob;"`
+    with `<!ENTITY dob "2012-03-04">` would leave the date there once the
+    attribute is gone — and FS Manager never sends one, so a participant file
+    with a DTD (internal subset or external) is refused outright. That also
+    keeps entity expansion out of the files we store."""
+
+    def doctype(self, name, pubid, system):
+        raise BirthDateError("the file declares a DTD")
+
+
+def _parse_xml(data: bytes):
+    """ET.fromstring, but BirthDateError for a document with a DTD."""
+    parser = ET.XMLParser(target=_NoDtdTreeBuilder())
+    parser.feed(data)
+    return parser.close()
+
+
+def _is_birth_date_name(name) -> bool:
+    """`BirthDate` in any case, with or without a namespace (`{uri}` or `prefix:`)."""
+    if isinstance(name, bytes):
+        name = name.decode("latin-1")
+    if not isinstance(name, str) or name == "xmlns" or name.startswith("xmlns:"):
+        return False
+    return name.rsplit("}", 1)[-1].rsplit(":", 1)[-1].lower() == "birthdate"
+
+
+def _has_birth_date(root) -> bool:
+    return any(
+        _is_birth_date_name(element.tag) or any(_is_birth_date_name(k) for k in element.attrib)
+        for element in root.iter()
+    )
+
+
+def _birth_date_free_shape(element):
+    """The parsed tree as nested lists, minus every birth date: what must survive."""
+    text = element.text or ""
+    children = []
+    for child in element:
+        if _is_birth_date_name(child.tag):
+            # A removed element's tail joins the text before it.
+            if children:
+                children[-1][1] += child.tail or ""
+            else:
+                text += child.tail or ""
+            continue
+        children.append([_birth_date_free_shape(child), child.tail or ""])
+    attrs = sorted((k, v) for k, v in element.attrib.items() if not _is_birth_date_name(k))
+    return [element.tag, attrs, text, children]
+
+
+def _remove_birth_date_markup(data: bytes) -> bytes:
+    """Drop `BirthDate` attributes and elements from the raw bytes, nothing else."""
+    out = []
+    pos = 0
+    skip_depth = 0      # > 0 while inside a removed <BirthDate> element
+    for match in _XML_MARKUP_RE.finditer(data):
+        start = match.group("start")
+        if skip_depth:
+            if start is not None and not match.group("empty"):
+                skip_depth += 1
+            elif match.group("end") is not None:
+                skip_depth -= 1
+            pos = match.end()
+            continue
+
+        out.append(data[pos:match.start()])
+        pos = match.end()
+        if start is None:
+            out.append(match.group(0))
+        elif _is_birth_date_name(start):
+            skip_depth = 0 if match.group("empty") else 1
+        else:
+            attrs = match.group("attrs")
+            kept = _XML_ATTRIBUTE_RE.sub(
+                lambda m: b"" if _is_birth_date_name(m.group("name")) else m.group(0), attrs)
+            out.append(data[match.start():match.start("attrs")] + kept
+                       + data[match.end("attrs"):match.end()])
+    out.append(data[pos:])
+    return b"".join(out)
+
+
+def strip_birth_dates(data: bytes) -> bytes:
+    """
+    `data` without its birth dates. A file without any comes back as the very
+    same bytes. Raises BirthDateError — and the caller must then store nothing —
+    when `data` is not XML or declares a DTD, or when the result would not
+    parse, would still hold a birth date, or would differ from the original in
+    anything else.
+    """
+    try:
+        original = _parse_xml(data)
+    except ET.ParseError:
+        raise BirthDateError("not valid XML")
+    if not _has_birth_date(original):
+        return data
+
+    stripped = _remove_birth_date_markup(data)
+    try:
+        result = _parse_xml(stripped)
+    except ET.ParseError:
+        raise BirthDateError("the stripped file is not valid XML")
+    if _has_birth_date(result):
+        raise BirthDateError("a birth date could not be removed")
+    if _birth_date_free_shape(result) != _birth_date_free_shape(original):
+        raise BirthDateError("removing the birth dates changed something else")
+    return stripped
+
+
 # ── file derivation ───────────────────────────────────────────────────────────
 
 def _compact(value: str) -> str:
@@ -993,7 +1140,8 @@ def derive_files(message: OdfMessage, hdr: HovtpHeaders, body: bytes,
     """
     What actually lands in the pool. For DT_PDF that is the decoded PDF only —
     the ODF envelope is a transport detail nobody wants in the file list.
-    Everything else is stored as the raw XML it arrived as.
+    Everything else is stored as the raw XML it arrived as, except that a
+    participant file (PARTICIPANT_DOCUMENT_TYPES) loses its birth dates first.
     """
     if message.document_type == DT_PDF:
         if not message.pdf_b64:
@@ -1030,7 +1178,17 @@ def derive_files(message: OdfMessage, hdr: HovtpHeaders, body: bytes,
         raw_name = f"{raw_name}_{stamp or serial or ''}".rstrip("_")
     raw_name += ".xml"
 
-    return [DerivedFile(_checked_name(raw_name), bytes(body), "application/xml")]
+    data = bytes(body)
+    if message.document_type in PARTICIPANT_DOCUMENT_TYPES:
+        # Never the original as a fallback: a file whose birth dates cannot be
+        # cut out cleanly is refused, like an unusable PDF payload.
+        try:
+            data = strip_birth_dates(data)
+        except BirthDateError as e:
+            logging.warning(f"HOVTP {message.document_type} not stored: {e}")
+            raise HovtpError(451, "birth dates could not be removed")
+
+    return [DerivedFile(_checked_name(raw_name), data, "application/xml")]
 
 
 def _checked_name(raw_name: str) -> str:

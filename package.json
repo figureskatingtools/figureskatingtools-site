@@ -1,6 +1,7 @@
 {
   "name": "figureskatingtools-site",
   "private": true,
+  "license": "AGPL-3.0-only",
   "workspaces": [
     "packages/*",
     "site"

@@ -9,6 +9,8 @@ which owns the Entra login and forwards every `/api/*` request here with
     X-Forwarded-User-Email:  their e-mail, lowercased (display and audit only)
     X-Forwarded-User-Name:   their display name, percent-encoded
     X-Forwarded-User-Admin:  "1" for the router's admins (informational here)
+    X-Forwarded-User-Terms-Accepted: "1" when the sign-in carries the sign-up's
+                             termsAccepted claim (recorded once, never required)
 
 The browser never reaches this app directly, but its hostname is public, so
 the gate (`_require_user`) FAILS CLOSED: PROXY_SHARED_SECRET must be set and
@@ -23,7 +25,9 @@ Users and access — the platform owns an internal user id (GUID), decoupled
 from the identity provider, and every grant references only that id:
 
     users              PK "USER",     RK <userId>        Email, DisplayName,
-                                                          FirstSeenUtc, LastSeenUtc
+                                                          FirstSeenUtc, LastSeenUtc,
+                                                          TermsVersion, PrivacyVersion,
+                                                          TermsAcceptedUtc (optional)
                                                           (PII: this app only)
                        PK "SEARCHRATE", RK <userId>      MinuteStart/Count,
                                                           DayStart/Count
@@ -87,6 +91,10 @@ competition with, else null with only the masked hint ("a•••@club.fi").
     GET    /api/competitions/{id}/files          -> 200 {"files": [FileInfo, ...]}
     POST   /api/competitions/{id}/files          -> 201 FileInfo
                                                     ?filename=&sourceTool=, raw body
+                                                    a participant file is stored
+                                                    without birth dates; 422
+                                                    birth_dates_not_removed if
+                                                    that cannot be done safely
     GET    /api/competitions/{id}/files/{name}   -> 200 bytes  (?source=upload|fsm)
     DELETE /api/competitions/{id}/files/{name}   -> 200 {"status": "deleted", ...}
 
@@ -150,8 +158,10 @@ HOVTP source JSON (one FSM sender, identified by its client IP):
 has passed reads back as expired so the UI re-prompts for it.
 
 Admin routes (the /admin/ panel), gated by `_require_admin` — fail closed: the
-proxy secret must be configured and match, and the e-mail in
-X-Forwarded-User-Email must be in ADMIN_EMAILS. Every mutation writes an AUDIT
+proxy secret must be configured and match, the forwarded tid/oid must be
+present with the tid allowed, and the router must have sent
+X-Forwarded-User-Admin: 1 (it does so only for the Site.Admin app role; the
+same trust the tool backends place in it). Every mutation writes an AUDIT
 row to the `adminlog` table (see "Admin log" below):
 
     GET    /api/manage/competitions?status=active|deleted|purged|all
@@ -258,6 +268,7 @@ import os
 import re
 import time
 import unicodedata
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -342,6 +353,10 @@ COMPETITION_ACCESS_TABLE_DEFAULT = "competitionaccess"
 PK_USER = "USER"
 PK_IDENTITY = "IDENTITY"
 IDENTITY_PROVIDER_ENTRA = "entra"
+# `Provider` of an Entra External ID identity row: a new user created while
+# EXTERNAL_NEW_USERS_ENABLED is on, or a row the phase C linking writes to an
+# existing userId (see _resolve_user and MigrationPending).
+IDENTITY_PROVIDER_ENTRA_EXTERNAL = "entra-external"
 ROLE_OWNER = "owner"
 ROLE_WRITE = "write"
 ROLE_READ = "read"
@@ -362,6 +377,13 @@ PK_SEARCH_RATE = "SEARCHRATE"
 RECENT_SHARE_USERS = 10
 # A users row unseen this long, owning no live competition, is removed nightly.
 INACTIVE_USER_DAYS = 365
+# The current terms of use and privacy notice, as the dates of their "Last
+# updated" lines. KEEP IN SYNC with site/public/terms/, site/public/privacy/
+# and site/public/tietosuoja/ (pinned by tests/test_legal_versions.py): bump
+# both here and in the pages whenever a document changes in substance.
+TERMS_VERSION = "2026-10-23"
+PRIVACY_VERSION = "2026-10-22"
+_LEGAL_VERSION_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 # The legacy e-mail claim (_claim_legacy_competitions) only ever considers
 # competitions created before this instant: the rollout of the access model.
 # MUST be <= the moment the access model reaches prod — anything created
@@ -517,6 +539,29 @@ def _allowed_tenant_ids() -> frozenset:
     return frozenset(part.strip().lower() for part in raw.split(",") if part.strip())
 
 
+def _external_tenant_ids() -> frozenset:
+    """EXTERNAL_TENANT_IDS (comma-separated) -> lowercased set: the Entra
+    External ID tenant(s). Empty = none configured."""
+    raw = os.environ.get("EXTERNAL_TENANT_IDS") or ""
+    return frozenset(part.strip().lower() for part in raw.split(",") if part.strip())
+
+
+def _external_new_users_enabled() -> bool:
+    """EXTERNAL_NEW_USERS_ENABLED (app setting, Bicep-owned): whether a new
+    External ID identity may become a new user. On in test, so new testers
+    get in as they will in production; off in prod until the phase C linking
+    of the existing users is done."""
+    return (os.environ.get("EXTERNAL_NEW_USERS_ENABLED") or "").strip().lower() in ("1", "true", "yes")
+
+
+class MigrationPending(Exception):
+    """An Entra External ID identity with no useridentities row yet while
+    EXTERNAL_NEW_USERS_ENABLED is off. Until the existing users are linked
+    (phase C), such an identity must not become a new user — it would be an
+    orphan to merge later — so the request is refused with 503
+    migration_pending instead."""
+
+
 _PRINTABLE_ASCII_RE = re.compile(r"[\x21-\x7e]+")
 
 
@@ -578,7 +623,12 @@ def _require_user(req: func.HttpRequest):
         return _error("tenant_not_allowed", "Accounts of your organisation cannot use this site.", 403)
 
     try:
-        user_id = _resolve_user(tid, oid, email, name)
+        user_id = _resolve_user(tid, oid, email, name,
+                                terms_accepted=_forwarded_terms_accepted(req))
+    except MigrationPending:
+        logging.warning(f"External identity '{tid}_{oid}' has no platform user yet; migration pending")
+        return _error("migration_pending",
+                      "Sign-in with this account is not available yet.", 503)
     except Exception as e:
         logging.error(f"Could not resolve the user of identity '{tid}_{oid}': {e}")
         user_id = None
@@ -586,7 +636,7 @@ def _require_user(req: func.HttpRequest):
         return _error("storage_unavailable", "Could not look up the signed-in user.", 500)
 
     return User(user_id=user_id, email=email, name=name,
-                is_admin=bool(email) and email in _admin_emails(), tid=tid, oid=oid)
+                is_admin=_forwarded_admin(req), tid=tid, oid=oid)
 
 
 # ── users ─────────────────────────────────────────────────────────────────────
@@ -625,13 +675,23 @@ def _identity_row_key(tid: str, oid: str) -> str:
     return f"{tid}_{oid}"
 
 
-def _resolve_user(tid: str, oid: str, email: str, name: str) -> str | None:
+def _resolve_user(tid: str, oid: str, email: str, name: str,
+                  terms_accepted: bool = False) -> str | None:
     """Identity -> userId; creates the user on the first request.
 
     Point read first. A new identity writes the users row, then INSERTS the
     identity row: two concurrent first requests both try, one insert wins and
     the loser drops its own users row and re-reads, so both converge on one
     userId. The winner alone runs the one-time legacy owner claim.
+
+    An identity of an Entra External ID tenant (EXTERNAL_TENANT_IDS) with no
+    identity row raises MigrationPending before anything is written, unless
+    EXTERNAL_NEW_USERS_ENABLED is on: then it becomes a new user (Provider
+    entra-external) like a workforce identity, minus the legacy e-mail claim.
+
+    `terms_accepted` (the router's X-Forwarded-User-Terms-Accepted: the sign-up
+    checkbox's claim) records the current TERMS_VERSION on the users row the
+    first time it is seen; see _record_terms_acceptance.
     """
     identities = get_table_client(_user_identities_table_name())
     users = get_table_client(_users_table_name())
@@ -645,7 +705,16 @@ def _resolve_user(tid: str, oid: str, email: str, name: str) -> str | None:
         link = None
     if link is not None and link.get("UserId"):
         _touch_user(users, link["UserId"], email, name)
+        if terms_accepted:
+            _record_terms_acceptance(users, link["UserId"])
         return link["UserId"]
+
+    # Entra External ID: no new users until the existing ones are linked
+    # (phase C), unless switched on. Decided before any write, so nothing is
+    # left behind.
+    external = tid in _external_tenant_ids()
+    if external and not _external_new_users_enabled():
+        raise MigrationPending(key)
 
     user_id = str(uuid4())
     now = _now_utc()
@@ -656,6 +725,7 @@ def _resolve_user(tid: str, oid: str, email: str, name: str) -> str | None:
         "DisplayName": name,
         "FirstSeenUtc": now,
         "LastSeenUtc": now,
+        **(_terms_acceptance_columns(now) if terms_accepted else {}),
     })
     try:
         _create_row(identities, {
@@ -664,7 +734,7 @@ def _resolve_user(tid: str, oid: str, email: str, name: str) -> str | None:
             "UserId": user_id,
             "Tid": tid,
             "Oid": oid,
-            "Provider": IDENTITY_PROVIDER_ENTRA,
+            "Provider": IDENTITY_PROVIDER_ENTRA_EXTERNAL if external else IDENTITY_PROVIDER_ENTRA,
             "CreatedUtc": now,
         })
     except ResourceExistsError:
@@ -674,13 +744,20 @@ def _resolve_user(tid: str, oid: str, email: str, name: str) -> str | None:
         winner = link.get("UserId") or None
         if winner:
             _touch_user(users, winner, email, name)
+            if terms_accepted:
+                _record_terms_acceptance(users, winner)
         return winner
     except Exception:
         _delete_user_row(users, user_id)
         raise
 
     _LAST_SEEN_WRITES[user_id] = time.monotonic()
-    _claim_legacy_competitions(user_id, email)
+    if terms_accepted:
+        _TERMS_RECORDED.add(user_id)
+    # Legacy rows were created by workforce identities; an external one gets
+    # them only through the phase C linking, never by e-mail.
+    if not external:
+        _claim_legacy_competitions(user_id, email)
     return user_id
 
 
@@ -713,6 +790,68 @@ def _touch_user(users, user_id: str, email: str, name: str) -> None:
         _LAST_SEEN_WRITES[user_id] = now
     except Exception as e:
         logging.warning(f"Could not refresh users row '{user_id}': {e}")
+
+
+# ── terms acceptance ──────────────────────────────────────────────────────────
+# The External ID sign-up has a required "I accept the terms of use" checkbox,
+# which arrives as the `termsAccepted` claim; the router forwards it as
+# X-Forwarded-User-Terms-Accepted: 1. The claim is not versioned, so the
+# platform records which version was current when it first saw the acceptance:
+# users row TermsVersion, PrivacyVersion, TermsAcceptedUtc. Written once, never
+# overwritten by a later sign-in (that would turn an old checkbox into consent
+# to new terms). Nothing is ever refused for a missing record: workforce
+# sign-ins carry no claim. terms_outdated() is the check a future re-acceptance
+# step will use.
+
+# userIds whose acceptance this process has already seen recorded.
+_TERMS_RECORDED: set = set()
+
+
+def _forwarded_terms_accepted(req: func.HttpRequest) -> bool:
+    return _header(req, "X-Forwarded-User-Terms-Accepted").strip() == "1"
+
+
+def _terms_acceptance_columns(now: str) -> dict:
+    return {"TermsVersion": TERMS_VERSION, "PrivacyVersion": PRIVACY_VERSION,
+            "TermsAcceptedUtc": now}
+
+
+def terms_outdated(accepted_version, current_version: str = TERMS_VERSION) -> bool:
+    """True when a user's accepted terms version is older than the current one.
+    A missing or malformed record counts as outdated too, so a re-acceptance
+    step would ask that user; callers decide what to do (today: nothing)."""
+    accepted = str(accepted_version or "").strip()
+    if not _LEGAL_VERSION_RE.fullmatch(accepted):
+        return True
+    return accepted < current_version
+
+
+def _record_terms_acceptance(users, user_id: str) -> None:
+    """Write the acceptance columns on an existing users row that has none yet.
+    At most one read per user per process once recorded; best effort, never
+    raises (a missed write is retried on the next request)."""
+    if user_id in _TERMS_RECORDED:
+        return
+    try:
+        row = users.get_entity(partition_key=PK_USER, row_key=user_id)
+    except ResourceNotFoundError:
+        return
+    except Exception as e:
+        logging.warning(f"Could not read users row '{user_id}' for terms acceptance: {e}")
+        return
+    if row.get("TermsVersion"):
+        _TERMS_RECORDED.add(user_id)
+        return
+    try:
+        users.update_entity(
+            {"PartitionKey": PK_USER, "RowKey": user_id, **_terms_acceptance_columns(_now_utc())},
+            mode=UpdateMode.MERGE, etag=_entity_etag(row),
+            match_condition=MatchConditions.IfNotModified)
+        _TERMS_RECORDED.add(user_id)
+    except ResourceModifiedError:
+        pass  # a concurrent write; the next request looks again
+    except Exception as e:
+        logging.warning(f"Could not record the terms acceptance of '{user_id}': {e}")
 
 
 def _owner_lock_row(competition_id: str, owner_id: str, now: str) -> dict:
@@ -1395,6 +1534,239 @@ def _route_file_name(req: func.HttpRequest) -> str:
     if not name or name in (".", "..") or "/" in name or "\\" in name:
         return ""
     return name
+
+
+# ── birth dates out of participant files ──────────────────────────────────────
+# KEEP IN SYNC: everything from here to the end of the section is byte-identical
+# in infra/functions/function_app.py and infra/hovtp/function_app.py (pinned by
+# infra/hovtp/tests/test_parity.py). FS Manager's participant files carry each
+# skater's date of birth (`BirthDate`); nothing on the site uses it, so it is cut
+# out before a file is stored. Only the birth-date attributes and elements go:
+# every other byte stays as it arrived, because the tools parse these files.
+
+PARTICIPANT_DOCUMENT_TYPES = frozenset({
+    "DT_PARTIC",
+    "DT_PARTIC_TEAMS",
+    "DT_PARTIC_UPDATE",
+    "DT_PARTIC_TEAMS_UPDATE",
+})
+
+# One token of well-formed XML markup. Text between tokens is copied untouched.
+# Attribute values may hold '>' but never '<', which is what keeps this exact.
+_XML_MARKUP_RE = re.compile(
+    rb"<!--.*?-->"
+    rb"|<!\[CDATA\[.*?\]\]>"
+    rb"|<\?.*?\?>"
+    rb"|<!DOCTYPE(?:[^\[>]|\[.*?\])*>"
+    rb"|</(?P<end>[^\s>]+)\s*>"
+    rb"|<(?P<start>[^\s/>!?]+)"
+    rb"(?P<attrs>(?:\s+[^\s=/>]+\s*=\s*(?:\"[^\"]*\"|'[^']*'))*)\s*(?P<empty>/?)>",
+    re.S,
+)
+_XML_ATTRIBUTE_RE = re.compile(rb"\s+(?P<name>[^\s=/>]+)\s*=\s*(?:\"[^\"]*\"|'[^']*')")
+
+
+class BirthDateError(ValueError):
+    """A participant file whose birth dates could not be removed safely."""
+
+
+class _NoDtdTreeBuilder(ET.TreeBuilder):
+    """ET's tree builder, except that a DOCTYPE stops the parse. An entity
+    declared in a DTD keeps its value in the declaration — `BirthDate="&dob;"`
+    with `<!ENTITY dob "2012-03-04">` would leave the date there once the
+    attribute is gone — and FS Manager never sends one, so a participant file
+    with a DTD (internal subset or external) is refused outright. That also
+    keeps entity expansion out of the files we store."""
+
+    def doctype(self, name, pubid, system):
+        raise BirthDateError("the file declares a DTD")
+
+
+def _parse_xml(data: bytes):
+    """ET.fromstring, but BirthDateError for a document with a DTD."""
+    parser = ET.XMLParser(target=_NoDtdTreeBuilder())
+    parser.feed(data)
+    return parser.close()
+
+
+def _is_birth_date_name(name) -> bool:
+    """`BirthDate` in any case, with or without a namespace (`{uri}` or `prefix:`)."""
+    if isinstance(name, bytes):
+        name = name.decode("latin-1")
+    if not isinstance(name, str) or name == "xmlns" or name.startswith("xmlns:"):
+        return False
+    return name.rsplit("}", 1)[-1].rsplit(":", 1)[-1].lower() == "birthdate"
+
+
+def _has_birth_date(root) -> bool:
+    return any(
+        _is_birth_date_name(element.tag) or any(_is_birth_date_name(k) for k in element.attrib)
+        for element in root.iter()
+    )
+
+
+def _birth_date_free_shape(element):
+    """The parsed tree as nested lists, minus every birth date: what must survive."""
+    text = element.text or ""
+    children = []
+    for child in element:
+        if _is_birth_date_name(child.tag):
+            # A removed element's tail joins the text before it.
+            if children:
+                children[-1][1] += child.tail or ""
+            else:
+                text += child.tail or ""
+            continue
+        children.append([_birth_date_free_shape(child), child.tail or ""])
+    attrs = sorted((k, v) for k, v in element.attrib.items() if not _is_birth_date_name(k))
+    return [element.tag, attrs, text, children]
+
+
+def _remove_birth_date_markup(data: bytes) -> bytes:
+    """Drop `BirthDate` attributes and elements from the raw bytes, nothing else."""
+    out = []
+    pos = 0
+    skip_depth = 0      # > 0 while inside a removed <BirthDate> element
+    for match in _XML_MARKUP_RE.finditer(data):
+        start = match.group("start")
+        if skip_depth:
+            if start is not None and not match.group("empty"):
+                skip_depth += 1
+            elif match.group("end") is not None:
+                skip_depth -= 1
+            pos = match.end()
+            continue
+
+        out.append(data[pos:match.start()])
+        pos = match.end()
+        if start is None:
+            out.append(match.group(0))
+        elif _is_birth_date_name(start):
+            skip_depth = 0 if match.group("empty") else 1
+        else:
+            attrs = match.group("attrs")
+            kept = _XML_ATTRIBUTE_RE.sub(
+                lambda m: b"" if _is_birth_date_name(m.group("name")) else m.group(0), attrs)
+            out.append(data[match.start():match.start("attrs")] + kept
+                       + data[match.end("attrs"):match.end()])
+    out.append(data[pos:])
+    return b"".join(out)
+
+
+def strip_birth_dates(data: bytes) -> bytes:
+    """
+    `data` without its birth dates. A file without any comes back as the very
+    same bytes. Raises BirthDateError — and the caller must then store nothing —
+    when `data` is not XML or declares a DTD, or when the result would not
+    parse, would still hold a birth date, or would differ from the original in
+    anything else.
+    """
+    try:
+        original = _parse_xml(data)
+    except ET.ParseError:
+        raise BirthDateError("not valid XML")
+    if not _has_birth_date(original):
+        return data
+
+    stripped = _remove_birth_date_markup(data)
+    try:
+        result = _parse_xml(stripped)
+    except ET.ParseError:
+        raise BirthDateError("the stripped file is not valid XML")
+    if _has_birth_date(result):
+        raise BirthDateError("a birth date could not be removed")
+    if _birth_date_free_shape(result) != _birth_date_free_shape(original):
+        raise BirthDateError("removing the birth dates changed something else")
+    return stripped
+
+
+# ── participant files uploaded by users ───────────────────────────────────────
+
+# What may come before an XML document's first '<': the bytes of a byte-order
+# mark (UTF-8, UTF-16, UTF-32), the NULs UTF-16/32 pad ASCII with, and whitespace.
+_XML_LEADING_BYTES = b"\xef\xbb\xbf\xfe\xff\x00 \t\r\n"
+# `birthdate`, any case, as it would appear in a file in each encoding XML allows.
+_BIRTH_DATE_TOKENS = tuple("birthdate".encode(codec) for codec in
+                           ("ascii", "utf-16-le", "utf-16-be", "utf-32-le", "utf-32-be"))
+
+
+class _RootStartTag(Exception):
+    """Raised by _RootReader with the root's (tag, attrib): all we need to know."""
+
+
+class _RootReader:
+    """XMLParser target that stops the parse at the root's start tag."""
+
+    def start(self, tag, attrib):
+        raise _RootStartTag(tag, attrib)
+
+    def close(self):
+        return None
+
+
+def _looks_like_xml(data: bytes) -> bool:
+    """XML-like: after any byte-order mark, NUL padding and whitespace, the
+    first byte is '<'. Every file an XML parser (and so a tool) could read as
+    a document is XML-like; a PDF or an image never is."""
+    return data.lstrip(_XML_LEADING_BYTES)[:1] == b"<"
+
+
+def _looks_like_pdf(data: bytes) -> bool:
+    """A PDF header within the first 1024 bytes, where PDF readers look for it."""
+    return b"%PDF-" in data[:1024]
+
+
+def _mentions_birth_date(data: bytes) -> bool:
+    lowered = data.lower()
+    return any(token in lowered for token in _BIRTH_DATE_TOKENS)
+
+
+def _odf_document_type(data: bytes):
+    """An XML-like file's declared `DocumentType` (upper-cased, "" if it
+    declares none), or None when its root is not `OdfBody`. Reads only as far
+    as the root's start tag. Raises BirthDateError when that much does not
+    parse (a broken root tag, a newline before the XML declaration): such a
+    file could be a participant file, and nothing can tell.
+    """
+    parser = ET.XMLParser(target=_RootReader())
+    try:
+        parser.feed(data)
+        parser.close()
+    except _RootStartTag as found:
+        tag, attrib = found.args
+    except (ET.ParseError, ValueError, LookupError):
+        raise BirthDateError("an XML file whose root does not parse")
+    else:
+        raise BirthDateError("an XML file without a root element")
+    if not isinstance(tag, str) or tag.rsplit("}", 1)[-1] != "OdfBody":
+        return None
+    for key, value in attrib.items():
+        if key.rsplit("}", 1)[-1] == "DocumentType":
+            return (value or "").strip().upper()
+    return ""
+
+
+def _strip_upload_birth_dates(body: bytes) -> bytes:
+    """
+    A user upload gets the same treatment as an FSM push: a participant file
+    loses its birth dates before it is stored. Recognised by its content, not
+    its name — an ODF file declaring a participant DocumentType, or declaring
+    none at all (the tools recognise a roster by its shape then). Anything else
+    that parses is returned untouched, and so is a file that is not XML-like
+    (a PDF, an image) unless it is no PDF and still names a birth date. Raises
+    BirthDateError (store nothing) when a participant file cannot be cleaned,
+    when an XML-like file cannot be classified, and for that last case.
+    """
+    if not _looks_like_xml(body):
+        if not _looks_like_pdf(body) and _mentions_birth_date(body):
+            raise BirthDateError("a file that is neither XML nor PDF names a birth date")
+        return body
+    document_type = _odf_document_type(body)
+    if document_type is None:
+        return body
+    if document_type and document_type not in PARTICIPANT_DOCUMENT_TYPES:
+        return body
+    return strip_birth_dates(body)
 
 
 # ── HOVTP source helpers ──────────────────────────────────────────────────────
@@ -2139,6 +2511,14 @@ def _upload_competition_file(req: func.HttpRequest) -> func.HttpResponse:
         return _error("empty_file", "The uploaded file is empty.", 400)
     if len(body) > POOL_MAX_FILE_SIZE:
         return _error("file_too_large", "Files are limited to 50 MB.", 413)
+
+    try:
+        body = _strip_upload_birth_dates(body)
+    except BirthDateError as e:
+        logging.warning(f"Participant file upload for '{competition_id}' refused: {e}")
+        return _error("birth_dates_not_removed",
+                      "The birth dates in this participant file could not be removed, "
+                      "so it was not stored.", 422)
 
     container = _get_container_client()
     if container is None:
@@ -3140,6 +3520,7 @@ def _sweep_inactive_users(now: datetime, purge_enabled: bool, summary: dict) -> 
             continue
         _delete_search_rate_row(users, user_id)
         _LAST_SEEN_WRITES.pop(user_id, None)
+        _TERMS_RECORDED.discard(user_id)
         summary["users_deleted"] += 1
 
 
@@ -3282,20 +3663,21 @@ def _sweep_registry(now: datetime, purge_enabled: bool) -> dict:
 
 # ── admin: gate ───────────────────────────────────────────────────────────────
 # The router already answers 403 on /api/manage/* for non-admins, but this
-# app's hostname is public, so the decision is made again here from its own
-# copy of the allow-list. Same fail-closed gate as _require_user (secret,
-# forwarded tid/oid, allowed tenant), then the forwarded e-mail must be in
-# ADMIN_EMAILS. It reads no table: the admin routes need no users row.
+# app's hostname is public, so the gate is checked again here. Same
+# fail-closed checks as _require_user (secret, forwarded tid/oid, allowed
+# tenant), then X-Forwarded-User-Admin: 1 — which the router sends only for
+# identities carrying the admin app role (Site.Admin) and strips from client
+# requests; the proxy secret is what makes that header trustworthy, exactly as
+# for the tool backends. It reads no table: the admin routes need no users row.
 
-def _admin_emails() -> frozenset:
-    """ADMIN_EMAILS (comma-separated) -> lowercased set. Empty = no admins.
-    Entries that are not printable ASCII are dropped (see _normalize_email)."""
-    raw = os.environ.get("ADMIN_EMAILS") or ""
-    return frozenset(email for email in map(_normalize_email, raw.split(",")) if email)
+def _forwarded_admin(req: func.HttpRequest) -> bool:
+    """The router's admin verdict. Only meaningful after the secret check."""
+    return _header(req, "X-Forwarded-User-Admin").strip() == "1"
 
 
 def _require_admin(req: func.HttpRequest):
-    """-> the admin's lowercased e-mail, or the 401/403 response to return."""
+    """-> the admin's audit name (lowercased e-mail, or `<tid>_<oid>` when the
+    identity has no usable e-mail), or the 401/403 response to return."""
     if not _proxy_secret_ok(req):
         logging.warning("Admin route: proxy shared secret unset, missing or mismatched")
         return _error("unauthorized", "Sign-in required.", 401)
@@ -3303,12 +3685,12 @@ def _require_admin(req: func.HttpRequest):
     identity = _forwarded_identity(req)
     if identity is None:
         return _error("unauthorized", "Sign-in required.", 401)
-    tid, _oid, email, _name = identity
+    tid, oid, email, _name = identity
     if tid not in _allowed_tenant_ids():
         return _error("tenant_not_allowed", "Accounts of your organisation cannot use this site.", 403)
-    if not email or email not in _admin_emails():
+    if not _forwarded_admin(req):
         return _error("admin_required", "Administrator access required.", 403)
-    return email
+    return email or _identity_row_key(tid, oid)
 
 
 # ── admin: log (audit trail + sweep runs) ─────────────────────────────────────
@@ -4118,6 +4500,8 @@ def _admin_diagnostics(req: func.HttpRequest) -> func.HttpResponse:
         "userIdentitiesTable": _user_identities_table_name(),
         "competitionAccessTable": _access_table_name(),
         "allowedTenantCount": len(_allowed_tenant_ids()),
+        "externalTenantCount": len(_external_tenant_ids()),
+        "externalNewUsersEnabled": _external_new_users_enabled(),
         "inactiveUserDays": INACTIVE_USER_DAYS,
     }
     by_status = {STATUS_ACTIVE: 0, STATUS_DELETED: 0, STATUS_PURGED: 0}

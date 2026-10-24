@@ -35,13 +35,30 @@ param proxySharedSecretScoremodifier = readEnvironmentVariable('PROXY_SHARED_SEC
 param proxySharedSecretProtocolgenerator = readEnvironmentVariable('PROXY_SHARED_SECRET_PROTOCOLGENERATOR', '')
 param proxySharedSecretGdprtool = readEnvironmentVariable('PROXY_SHARED_SECRET_GDPRTOOL', '')
 
-// Admin panel allow-list (comma-separated e-mails), from the GitHub environment
-// variable ADMIN_EMAILS — kept out of the repo. Unset = nobody is admin.
-param adminEmails = readEnvironmentVariable('ADMIN_EMAILS', '')
+// Admins are whoever carries this app role (GitHub environment variable
+// ADMIN_ROLE; unset = Site.Admin). There is no e-mail list.
+param adminRole = readEnvironmentVariable('ADMIN_ROLE', '')
 
 // Entra tenants whose users may use the site (comma-separated), from the GitHub
 // environment variable ALLOWED_TENANT_IDS. Unset = the deployment tenant only.
 param allowedTenantIds = readEnvironmentVariable('ALLOWED_TENANT_IDS', '')
+
+// Entra External ID (customer tenant), from the GitHub environment variables
+// AUTH_TENANT_MODE, EXTERNAL_TENANT_ID, AUTH_EXTERNAL_CLIENT_ID and
+// AUTH_EXTERNAL_AUTHORITY_HOST. AUTH_TENANT_MODE=external points Easy Auth at
+// the External ID tenant; anything else (unset arrives as '') = workforce.
+// EXTERNAL_TENANT_ID alone only adds the tenant to the allowed ones. There is no
+// secret here and there never will be: external mode is credential-free
+// (ID-token flow) — see infra/EXTERNAL-ID.md.
+param authTenantMode = readEnvironmentVariable('AUTH_TENANT_MODE', '') == 'external' ? 'external' : 'workforce'
+param externalTenantId = readEnvironmentVariable('EXTERNAL_TENANT_ID', '')
+param externalClientId = readEnvironmentVariable('AUTH_EXTERNAL_CLIENT_ID', '')
+param externalAuthorityHost = readEnvironmentVariable('AUTH_EXTERNAL_AUTHORITY_HOST', '')
+// App role External ID users need (else the /no-access/ page). Unset = Site.Access.
+param externalAccessRole = readEnvironmentVariable('EXTERNAL_ACCESS_ROLE', '')
+// New External ID users are created as in production (EXTERNAL_NEW_USERS_ENABLED;
+// only the literal 'false' turns it off), so testers get in without linking.
+param externalNewUsersEnabled = readEnvironmentVariable('EXTERNAL_NEW_USERS_ENABLED', 'true') != 'false'
 
 // System-assigned principal ids of the tool Function Apps, for read access to
 // the shared competition-data container. Empty entries are ignored, so this

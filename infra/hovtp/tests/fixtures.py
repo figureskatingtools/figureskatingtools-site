@@ -142,3 +142,118 @@ DT_SCHEDULE_NO_CODE_BODY = odf({
 
 NOT_XML_BODY = b"this is not xml at all"
 NOT_ODF_BODY = b'<?xml version="1.0"?><SomethingElse Foo="bar"/>'
+
+
+# ── participant files with birth dates ────────────────────────────────────────
+# The ODF participant shape: `BirthDate` as an attribute of `<Participant>` (the
+# common form) and of a team member's `<Description>`, written with either quote
+# style, plus the element form. The invented names stand in for minors' real
+# ones. Each `_STRIPPED` twin is written out by hand: it is the input with only
+# the birth dates gone, every other byte (spacing, quotes, order) untouched.
+
+_PARTIC_HEAD = (
+    '<?xml version="1.0" encoding="utf-8"?>\n'
+    f'<OdfBody CompetitionCode="{COMPETITION_CODE_RAW}" '
+    'DocumentCode="FSK-------------------------------" DocumentType="DT_PARTIC" '
+    'Version="1" FeedFlag="P" Date="2026-09-01" Time="180000000" '
+    'LogicalDate="2026-09-01" Source="FSKFSK1">\n'
+    '  <Competition>\n'
+)
+
+DT_PARTIC_BIRTHDATES_BODY = (
+    _PARTIC_HEAD
+    + '    <Participant Code="1234567" Parent="1234567" Status="ACTIVE" GivenName="Aino" '
+      'FamilyName="Koskinen " PrintName="KOSKINEN Aino" Gender="W" Organisation="FIN" '
+      'BirthDate="2012-03-04" Current="true">\n'
+      '      <Discipline Code="FSK-------------------------------">\n'
+      '        <RegisteredEvent Event="FSKWSINGLES-ADVNOV----------------"/>\n'
+      '      </Discipline>\n'
+      '    </Participant>\n'
+      "    <Participant Code='1234568' GivenName='Bertil' FamilyName='Ahlberg' "
+      "birthdate = '2011-12-31' Organisation='SWE'/>\n"
+      '    <Participant Code="1234569" GivenName="Cecilia" FamilyName="Lindgren">\n'
+      '      <BirthDate>2013-01-15</BirthDate>\n'
+      '      <!-- BirthDate="this comment is not a birth date and stays" -->\n'
+      '    </Participant>\n'
+      '  </Competition>\n'
+      '</OdfBody>\n'
+).encode("utf-8")
+
+DT_PARTIC_BIRTHDATES_STRIPPED = (
+    _PARTIC_HEAD
+    + '    <Participant Code="1234567" Parent="1234567" Status="ACTIVE" GivenName="Aino" '
+      'FamilyName="Koskinen " PrintName="KOSKINEN Aino" Gender="W" Organisation="FIN" '
+      'Current="true">\n'
+      '      <Discipline Code="FSK-------------------------------">\n'
+      '        <RegisteredEvent Event="FSKWSINGLES-ADVNOV----------------"/>\n'
+      '      </Discipline>\n'
+      '    </Participant>\n'
+      "    <Participant Code='1234568' GivenName='Bertil' FamilyName='Ahlberg' "
+      "Organisation='SWE'/>\n"
+      '    <Participant Code="1234569" GivenName="Cecilia" FamilyName="Lindgren">\n'
+      '      \n'
+      '      <!-- BirthDate="this comment is not a birth date and stays" -->\n'
+      '    </Participant>\n'
+      '  </Competition>\n'
+      '</OdfBody>\n'
+).encode("utf-8")
+
+_TEAMS_HEAD = (
+    '<?xml version="1.0" encoding="utf-8"?>\n'
+    '<OdfBody xmlns="http://www.swisstiming.com/odf" xmlns:st="http://www.swisstiming.com/ext" '
+    f'CompetitionCode="{COMPETITION_CODE_RAW}" '
+    'DocumentCode="FSK-------------------------------" DocumentType="DT_PARTIC_TEAMS" '
+    'Version="1" Source="FSKFSK1">\n'
+    '  <Competition>\n'
+    '    <Team Code="SYNCHRO0001" Organisation="BHK " Name="Blue Herons " Gender="X">\n'
+    '      <RegisteredEvent Event="" />\n'
+    '      <RegisteredEvent Event="FSKXSYNCHRONMLTULO----------------" />\n'
+    '      <Composition>\n'
+)
+
+DT_PARTIC_TEAMS_BIRTHDATES_BODY = (
+    _TEAMS_HEAD
+    + '        <Athlete Code="1234567" Order="1">\n'
+      '          <Description GivenName="Aino" FamilyName="Koskinen" BirthDate="2012-03-04" '
+      'Gender="W"/>\n'
+      '        </Athlete>\n'
+      "        <Athlete Code=\"1234568\" Order=\"2\"><Description st:BirthDate='2011-12-31' "
+      "GivenName='Bertil'/></Athlete>\n"
+      '      </Composition>\n'
+      '    </Team>\n'
+      '  </Competition>\n'
+      '</OdfBody>\n'
+).encode("utf-8")
+
+DT_PARTIC_TEAMS_BIRTHDATES_STRIPPED = (
+    _TEAMS_HEAD
+    + '        <Athlete Code="1234567" Order="1">\n'
+      '          <Description GivenName="Aino" FamilyName="Koskinen" '
+      'Gender="W"/>\n'
+      '        </Athlete>\n'
+      "        <Athlete Code=\"1234568\" Order=\"2\"><Description "
+      "GivenName='Bertil'/></Athlete>\n"
+      '      </Composition>\n'
+      '    </Team>\n'
+      '  </Competition>\n'
+      '</OdfBody>\n'
+).encode("utf-8")
+
+# Not a participant file, so not touched even though it (artificially) has one.
+DT_SCHEDULE_WITH_BIRTHDATE_BODY = odf({
+    "CompetitionCode": COMPETITION_CODE_RAW,
+    "DocumentCode": "FSK-------------------------------",
+    "DocumentType": "DT_SCHEDULE",
+    "Version": "1",
+    "Source": "FSKFSK1",
+}, '<Competition><Session Code="FSKWSINGLES" BirthDate="2012-03-04"/></Competition>')
+
+# A participant file whose birth dates the byte-level pass cannot reach (UTF-16,
+# so no ASCII pattern matches): must be refused, never stored as it came.
+DT_PARTIC_UTF16_BIRTHDATES_BODY = (
+    '<?xml version="1.0" encoding="utf-16"?>\n'
+    f'<OdfBody CompetitionCode="{COMPETITION_CODE_RAW}" '
+    'DocumentCode="FSK-------------------------------" DocumentType="DT_PARTIC" '
+    'Version="1" Source="FSKFSK1"><Competition>'
+    '<Participant Code="1234567" BirthDate="2012-03-04"/></Competition></OdfBody>\n'
+).encode("utf-16")
