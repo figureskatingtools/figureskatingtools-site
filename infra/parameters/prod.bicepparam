@@ -60,6 +60,9 @@ param externalClientId = readEnvironmentVariable('AUTH_EXTERNAL_CLIENT_ID', '')
 param externalAuthorityHost = readEnvironmentVariable('AUTH_EXTERNAL_AUTHORITY_HOST', '')
 // App role External ID users need (else the /no-access/ page). Unset = Site.Access.
 param externalAccessRole = readEnvironmentVariable('EXTERNAL_ACCESS_ROLE', '')
+// Off until phase C has linked the existing users (EXTERNAL_NEW_USERS_ENABLED=true
+// then): a new External ID identity gets 503 migration_pending instead.
+param externalNewUsersEnabled = readEnvironmentVariable('EXTERNAL_NEW_USERS_ENABLED', 'false') == 'true'
 
 // System-assigned principal ids of the tool Function Apps, for read access to
 // the shared competition-data container. Empty entries are ignored, so this

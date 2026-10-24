@@ -92,6 +92,9 @@ param authTenantMode string = 'workforce'
 @description('Entra External ID tenant id (GitHub var EXTERNAL_TENANT_ID). Added to the allowed tenants and handed to the platform as EXTERNAL_TENANT_IDS. Empty = not configured.')
 param externalTenantId string = ''
 
+@description('true = a new External ID identity becomes a new platform user (GitHub var EXTERNAL_NEW_USERS_ENABLED; default on in test, off in prod until phase C); false = 503 migration_pending.')
+param externalNewUsersEnabled bool = false
+
 @description('Client id of the Entra External ID app registration (GitHub var AUTH_EXTERNAL_CLIENT_ID). Used by Easy Auth in external mode.')
 param externalClientId string = ''
 
@@ -241,6 +244,7 @@ module platformFunction 'modules/platform-function.bicep' = {
     competitionAccessTableName: platformStorage.outputs.competitionAccessTableName
     allowedTenantIds: effectiveAllowedTenantIds
     externalTenantIds: normalizedExternalTenantId
+    externalNewUsersEnabled: externalNewUsersEnabled
     // Informational copy for the admin diagnostics; the listener's own
     // setting (below) is the one that switches it.
     hovtpEnabled: hovtpEnabled

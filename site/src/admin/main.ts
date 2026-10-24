@@ -1466,6 +1466,7 @@ function platformDiagHtml(): string {
     <dl class="adm-facts">
       ${fact('Purge', cfg.retentionPurgeEnabled ? badge('enabled', 'ok') : badge('dry-run only', 'warn'))}
       ${fact('HOVTP listener', cfg.hovtpEnabled === null || cfg.hovtpEnabled === undefined ? '<span class="adm-dim">unknown</span>' : cfg.hovtpEnabled ? badge('enabled', 'ok') : badge('disabled', 'warn'))}
+      ${fact('New External ID users', cfg.externalNewUsersEnabled ? badge('created', 'ok') : badge('migration pending', 'warn'))}
       ${fact('Retention', `${esc(cfg.retentionDays)} days · extend +${esc(cfg.extensionDays)} days`)}
       ${fact('Audit retention', `${esc(cfg.auditRetentionDays)} days`)}
       ${fact('Tables', `<span class="adm-mono">${esc(cfg.clockTable)}</span> · <span class="adm-mono">${esc(cfg.adminLogTable)}</span>`)}

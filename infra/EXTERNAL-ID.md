@@ -328,6 +328,7 @@ provider config first, then deleting the old one.
 | `AUTH_EXTERNAL_AUTHORITY_HOST` | `380073b3-804e-4cc7-bfcc-843637630d04.ciamlogin.com` | same, at phase C |
 | `AUTH_LOGIN_PROVIDER` | unset (`aad`) | unset (`aad`) |
 | `EXTERNAL_ACCESS_ROLE` | unset (`Site.Access`) | unset (`Site.Access`) |
+| `EXTERNAL_NEW_USERS_ENABLED` | unset (`true`: new users are created) | unset (`false`) until the existing users are linked at phase C, then `true` |
 | `ADMIN_ROLE` | unset (`Site.Admin`) | unset (`Site.Admin`) |
 
 Variables only — there is no External ID secret to configure. `deploy-site.yml`:
@@ -341,7 +342,10 @@ Variables only — there is no External ID secret to configure. `deploy-site.yml
     (their `preferred_username` / principal name need not be an e-mail), and
     requires the `EXTERNAL_ACCESS_ROLE` app role of them (else `/no-access/`);
   - the platform answers a new identity of that tenant with **503
-    `migration_pending`** and creates no user, until phase C;
+    `migration_pending`** and creates no user, unless
+    `EXTERNAL_NEW_USERS_ENABLED` is on (test by default; prod after the phase C
+    linking): then it becomes a new user with `Provider` `entra-external`, with
+    no legacy e-mail claim;
 - shows the mode ("Sign-in tenant") and the External ID tenant count in the admin
   Diagnostics tab, and the mode in the run summary.
 

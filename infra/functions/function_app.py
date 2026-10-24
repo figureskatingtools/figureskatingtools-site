@@ -353,9 +353,9 @@ COMPETITION_ACCESS_TABLE_DEFAULT = "competitionaccess"
 PK_USER = "USER"
 PK_IDENTITY = "IDENTITY"
 IDENTITY_PROVIDER_ENTRA = "entra"
-# `Provider` of an Entra External ID identity row. Written only by the phase C
-# linking code; until that exists, external identities never create a user
-# (see _resolve_user and MigrationPending).
+# `Provider` of an Entra External ID identity row: a new user created while
+# EXTERNAL_NEW_USERS_ENABLED is on, or a row the phase C linking writes to an
+# existing userId (see _resolve_user and MigrationPending).
 IDENTITY_PROVIDER_ENTRA_EXTERNAL = "entra-external"
 ROLE_OWNER = "owner"
 ROLE_WRITE = "write"
@@ -546,11 +546,20 @@ def _external_tenant_ids() -> frozenset:
     return frozenset(part.strip().lower() for part in raw.split(",") if part.strip())
 
 
+def _external_new_users_enabled() -> bool:
+    """EXTERNAL_NEW_USERS_ENABLED (app setting, Bicep-owned): whether a new
+    External ID identity may become a new user. On in test, so new testers
+    get in as they will in production; off in prod until the phase C linking
+    of the existing users is done."""
+    return (os.environ.get("EXTERNAL_NEW_USERS_ENABLED") or "").strip().lower() in ("1", "true", "yes")
+
+
 class MigrationPending(Exception):
-    """An Entra External ID identity with no useridentities row yet. Until the
-    linking code (phase C) exists, such an identity must not become a new
-    user — it would be an orphan to merge later — so the request is refused
-    with 503 migration_pending instead."""
+    """An Entra External ID identity with no useridentities row yet while
+    EXTERNAL_NEW_USERS_ENABLED is off. Until the existing users are linked
+    (phase C), such an identity must not become a new user — it would be an
+    orphan to merge later — so the request is refused with 503
+    migration_pending instead."""
 
 
 _PRINTABLE_ASCII_RE = re.compile(r"[\x21-\x7e]+")
@@ -676,8 +685,9 @@ def _resolve_user(tid: str, oid: str, email: str, name: str,
     userId. The winner alone runs the one-time legacy owner claim.
 
     An identity of an Entra External ID tenant (EXTERNAL_TENANT_IDS) with no
-    identity row raises MigrationPending before anything is written: until
-    the phase C linking code exists, it must not become a new user.
+    identity row raises MigrationPending before anything is written, unless
+    EXTERNAL_NEW_USERS_ENABLED is on: then it becomes a new user (Provider
+    entra-external) like a workforce identity, minus the legacy e-mail claim.
 
     `terms_accepted` (the router's X-Forwarded-User-Terms-Accepted: the sign-up
     checkbox's claim) records the current TERMS_VERSION on the users row the
@@ -699,9 +709,11 @@ def _resolve_user(tid: str, oid: str, email: str, name: str,
             _record_terms_acceptance(users, link["UserId"])
         return link["UserId"]
 
-    # Entra External ID: no new users until the linking code exists (phase C).
-    # Decided before any write, so nothing is left behind.
-    if tid in _external_tenant_ids():
+    # Entra External ID: no new users until the existing ones are linked
+    # (phase C), unless switched on. Decided before any write, so nothing is
+    # left behind.
+    external = tid in _external_tenant_ids()
+    if external and not _external_new_users_enabled():
         raise MigrationPending(key)
 
     user_id = str(uuid4())
@@ -722,7 +734,7 @@ def _resolve_user(tid: str, oid: str, email: str, name: str,
             "UserId": user_id,
             "Tid": tid,
             "Oid": oid,
-            "Provider": IDENTITY_PROVIDER_ENTRA,
+            "Provider": IDENTITY_PROVIDER_ENTRA_EXTERNAL if external else IDENTITY_PROVIDER_ENTRA,
             "CreatedUtc": now,
         })
     except ResourceExistsError:
@@ -742,7 +754,10 @@ def _resolve_user(tid: str, oid: str, email: str, name: str,
     _LAST_SEEN_WRITES[user_id] = time.monotonic()
     if terms_accepted:
         _TERMS_RECORDED.add(user_id)
-    _claim_legacy_competitions(user_id, email)
+    # Legacy rows were created by workforce identities; an external one gets
+    # them only through the phase C linking, never by e-mail.
+    if not external:
+        _claim_legacy_competitions(user_id, email)
     return user_id
 
 
@@ -4486,6 +4501,7 @@ def _admin_diagnostics(req: func.HttpRequest) -> func.HttpResponse:
         "competitionAccessTable": _access_table_name(),
         "allowedTenantCount": len(_allowed_tenant_ids()),
         "externalTenantCount": len(_external_tenant_ids()),
+        "externalNewUsersEnabled": _external_new_users_enabled(),
         "inactiveUserDays": INACTIVE_USER_DAYS,
     }
     by_status = {STATUS_ACTIVE: 0, STATUS_DELETED: 0, STATUS_PURGED: 0}

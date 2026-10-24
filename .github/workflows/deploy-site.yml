@@ -154,6 +154,9 @@ jobs:
           # never add one (infra/EXTERNAL-ID.md).
           AUTH_TENANT_MODE: ${{ vars.AUTH_TENANT_MODE }}
           EXTERNAL_TENANT_ID: ${{ vars.EXTERNAL_TENANT_ID }}
+          # 'true'/'false': may a new External ID identity become a new user?
+          # Unset = the bicepparam default (test on, prod off until phase C).
+          EXTERNAL_NEW_USERS_ENABLED: ${{ vars.EXTERNAL_NEW_USERS_ENABLED }}
           AUTH_EXTERNAL_CLIENT_ID: ${{ vars.AUTH_EXTERNAL_CLIENT_ID }}
           AUTH_EXTERNAL_AUTHORITY_HOST: ${{ vars.AUTH_EXTERNAL_AUTHORITY_HOST }}
           # App role External ID users need; without it the router sends them

@@ -61,11 +61,16 @@ param competitionAccessTableName string = 'competitionaccess'
 @description('Comma-separated Entra tenant ids whose users may use the API (ALLOWED_TENANT_IDS).')
 param allowedTenantIds string
 
-// The Entra External ID tenant(s). Identities from these tenants are never
-// turned into new users until the phase C linking code exists: the platform
-// answers 503 migration_pending instead (see _resolve_user). Empty = none.
+// The Entra External ID tenant(s). A new identity from these tenants becomes a
+// new user only when externalNewUsersEnabled is on; otherwise the platform
+// answers 503 migration_pending (see _resolve_user). Empty = none.
 @description('Comma-separated Entra External ID tenant ids (EXTERNAL_TENANT_IDS).')
 param externalTenantIds string = ''
+
+// Lets a new identity of those tenants become a new user (EXTERNAL_NEW_USERS_ENABLED).
+// On in test so testers get in as in production; off in prod until phase C.
+@description('true = a new External ID identity becomes a new user; false = 503 migration_pending.')
+param externalNewUsersEnabled bool = false
 
 // Informational only: the admin diagnostics show it. The HOVTP listener has its
 // own copy of the setting, and that one is what switches it.
@@ -183,6 +188,10 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'EXTERNAL_TENANT_IDS'
           value: externalTenantIds
+        }
+        {
+          name: 'EXTERNAL_NEW_USERS_ENABLED'
+          value: string(externalNewUsersEnabled)
         }
       ]
     }

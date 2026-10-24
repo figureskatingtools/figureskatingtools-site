@@ -173,6 +173,7 @@ export interface PlatformDiagnostics {
   config: {
     retentionPurgeEnabled: boolean;
     hovtpEnabled: boolean | null;
+    externalNewUsersEnabled?: boolean;
     retentionDays: number;
     extensionDays: number;
     clockTable: string;

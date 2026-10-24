@@ -1,7 +1,8 @@
 """Entra External ID readiness (phase B): an identity of the external tenant
-never becomes a new platform user until the linking code (phase C) exists.
+becomes a new platform user only with EXTERNAL_NEW_USERS_ENABLED on (test).
 
-  * a new external identity gets 503 migration_pending and writes nothing;
+  * off: a new external identity gets 503 migration_pending and writes nothing;
+  * on: it becomes a new user (Provider entra-external), with no legacy claim;
   * an external identity that already has a useridentities row works as today;
   * workforce identities are untouched, also with EXTERNAL_TENANT_IDS set;
   * the tenant allow-list still applies first.
@@ -85,6 +86,36 @@ def test_workforce_identities_still_create_users_with_the_external_tenant_config
     assert user_id
     link = external.identities.rows[(fa.PK_IDENTITY, f"{TENANT_ID}_{oid_for('newcomer@example.com')}")]
     assert link["Provider"] == fa.IDENTITY_PROVIDER_ENTRA
+
+
+@pytest.mark.parametrize("value, enabled", [
+    ("", False), ("false", False), ("False", False), ("true", True), ("TRUE", True), ("1", True),
+])
+def test_the_new_users_setting(monkeypatch, value, enabled):
+    monkeypatch.setenv("EXTERNAL_NEW_USERS_ENABLED", value)
+    assert fa._external_new_users_enabled() is enabled
+
+
+def test_with_new_users_enabled_a_new_external_identity_becomes_a_user(external, monkeypatch):
+    monkeypatch.setenv("EXTERNAL_NEW_USERS_ENABLED", "true")
+    claimed = []
+    monkeypatch.setattr(fa, "_claim_legacy_competitions", lambda *a: claimed.append(a))
+    oid = oid_for(EXTERNAL_EMAIL)
+    response = fa._list_competitions(make_request("GET", user_email=EXTERNAL_EMAIL,
+                                                  tid=EXTERNAL_TENANT_ID, oid=oid))
+    assert response.status_code == 200
+    link = external.identities.rows[(fa.PK_IDENTITY, f"{EXTERNAL_TENANT_ID}_{oid}")]
+    assert link["Provider"] == fa.IDENTITY_PROVIDER_ENTRA_EXTERNAL
+    assert external.users.rows[(fa.PK_USER, link["UserId"])]["Email"] == EXTERNAL_EMAIL
+    assert claimed == []
+
+
+def test_with_new_users_enabled_a_new_external_identity_can_create_a_competition(external, monkeypatch):
+    monkeypatch.setenv("EXTERNAL_NEW_USERS_ENABLED", "true")
+    response = fa._create_competition(make_request("POST", body={"name": "Winter Cup"},
+                                                   user_email=EXTERNAL_EMAIL, tid=EXTERNAL_TENANT_ID))
+    assert response.status_code == 201
+    assert payload(response)["access"] == "owner"
 
 
 def test_the_tenant_allow_list_is_checked_before_migration_pending(table, monkeypatch):
