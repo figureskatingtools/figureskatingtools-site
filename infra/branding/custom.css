@@ -1,0 +1,151 @@
+/*
+ * figureskatingtools.com: Entra External ID sign-in (Company branding > Layout > Custom CSS).
+ *
+ * Colours and shapes follow the site's landing page (site/public/landing/landing.css):
+ * ink #0d1f33, rink #0d5a92, gold #b08d2f, pill buttons, soft white card.
+ * Web fonts are not loaded here (the sign-in page only uses fonts it serves itself),
+ * so the stacks fall back to Georgia for the display face and the system UI font.
+ *
+ * Only colour, type, border, radius, shadow and spacing inside elements are set.
+ * No layout or positioning properties (position, margin, display, transform, overflow,
+ * opacity, ...), which Microsoft is retiring from custom CSS.
+ */
+
+body {
+  font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  color: #0d1f33;
+  background-color: #0d1f33;
+}
+
+a, a:link { color: #0d5a92; }
+a:hover { color: #0d1f33; }
+a:focus { color: #0d1f33; outline: 3px solid #0d1f33; outline-offset: 2px; }
+a:focus:hover { color: #0d1f33; }
+a:active { color: #0d1f33; }
+
+.ext-link { color: #0d5a92; }
+
+/* The white card over the photo. */
+.ext-sign-in-box {
+  background-color: #ffffff;
+  border: 1px solid #dde6ee;
+  border-radius: 16px;
+  box-shadow: 0 30px 60px -20px rgba(0, 0, 0, 0.6);
+  padding: 40px 44px;
+}
+
+.ext-title {
+  font-family: "Fraunces", Georgia, "Times New Roman", serif;
+  font-weight: 400;
+  font-size: 30px;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  color: #0d1f33;
+}
+
+.ext-subtitle {
+  font-size: 15px;
+  line-height: 1.5;
+  color: #3c5168;
+}
+
+/* Primary action: the landing page's gold pill (ink on gold, about 5.2:1). */
+.ext-button.ext-primary {
+  background-color: #b08d2f;
+  color: #0d1f33;
+  border: 1px solid #b08d2f;
+  border-radius: 999px;
+  font-weight: 600;
+  min-height: 44px;
+  padding: 0 28px;
+}
+.ext-button.ext-primary:hover {
+  background-color: #d4af4f;
+  border-color: #d4af4f;
+  color: #0d1f33;
+}
+.ext-button.ext-primary:focus,
+.ext-button.ext-primary:focus:hover {
+  background-color: #d4af4f;
+  border-color: #0d1f33;
+  color: #0d1f33;
+  outline: 3px solid #0d1f33;
+  outline-offset: 2px;
+}
+.ext-button.ext-primary:active {
+  background-color: #8a6d1f;
+  border-color: #8a6d1f;
+  color: #ffffff;
+}
+
+/* Secondary (Back, sign-in options): ink outline pill. */
+.ext-button.ext-secondary {
+  background-color: #ffffff;
+  color: #0d1f33;
+  border: 1.5px solid #0d1f33;
+  border-radius: 999px;
+  font-weight: 600;
+  min-height: 44px;
+  padding: 0 24px;
+}
+.ext-button.ext-secondary:hover {
+  background-color: #0d1f33;
+  color: #ffffff;
+}
+.ext-button.ext-secondary:focus,
+.ext-button.ext-secondary:focus:hover {
+  background-color: #0d1f33;
+  color: #ffffff;
+  outline: 3px solid #0d1f33;
+  outline-offset: 2px;
+}
+.ext-button.ext-secondary:active {
+  background-color: #0d5a92;
+  border-color: #0d5a92;
+  color: #ffffff;
+}
+
+/* Text boxes. */
+.ext-input.ext-text-box {
+  border: 1px solid #c6d3df;
+  border-radius: 10px;
+  background-color: #ffffff;
+  color: #0d1f33;
+  padding: 10px 14px;
+  min-height: 44px;
+}
+.ext-input.ext-text-box:hover { border-color: #3c5168; }
+.ext-input.ext-text-box:focus,
+.ext-input.ext-text-box:focus:hover {
+  border-color: #1271b5;
+  box-shadow: 0 0 0 3px rgba(18, 113, 181, 0.25);
+}
+.ext-input.ext-text-box.ext-has-error { border-color: #b3261e; }
+
+.ext-error { color: #b3261e; }
+
+/* "Sign in with Google / Microsoft account" options. */
+.ext-promoted-fed-cred-box {
+  border: 1px solid #dde6ee;
+  border-radius: 12px;
+  background-color: #f6f9fb;
+}
+
+/* Sign-in page text at the bottom of the card (intro line + links). */
+.ext-boilerplate-text {
+  font-size: 13px;
+  line-height: 1.55;
+  color: #3c5168;
+}
+
+/* Page footer: Privacy notice / Terms of use. */
+.ext-footer {
+  background-color: rgba(10, 24, 40, 0.92);
+  color: #c9d7e3;
+}
+.ext-footer-links { color: #c9d7e3; }
+.ext-footer-item,
+.ext-footer-item:link,
+.ext-footer-item:visited { color: #c9d7e3; }
+.ext-footer-item:hover { color: #ffffff; }
+.ext-debug-item { color: #a9bccd; }

@@ -120,7 +120,7 @@ X-HOVTP-Error-Reason:        human text, on failures only
 | `403` | `X-Proxy-Secret` missing or wrong while `PROXY_SHARED_SECRET` is set          |
 | `413` | over 50 MiB (checked from `Content-Length` first, then from the bytes)        |
 | `450` | out of synchro: duplicate serial, or a gap while `HOVTP_STRICT_SERIAL=true`   |
-| `451` | data-layer error: unknown/deleted competition, rejected source, quarantine full, unusable PDF payload or filename |
+| `451` | data-layer error: unknown/deleted competition, rejected source, quarantine full, unusable PDF payload or filename, participant file whose birth dates could not be removed |
 | `500` | client address unavailable, storage unavailable, storage write failed         |
 | `503` | `HOVTP_ENABLED=false`                                                         |
 
@@ -170,6 +170,12 @@ surfaces in the UI for the operator to accept.
   `<DocumentType>_<DocumentCode>[_<DocumentSubcode>].xml`. A `*_UPDATE` type
   gets `_<LogicalDate><Time>` appended (serial as a fallback) so increments do
   not overwrite each other; bulk messages deliberately do overwrite.
+  Participant files (`DT_PARTIC`, `DT_PARTIC_TEAMS` and their `_UPDATE`s) are
+  the exception to "raw": their `BirthDate` attributes and elements are cut out
+  first (`strip_birth_dates`, byte-for-byte otherwise, shared with the platform's
+  upload route), and one that cannot be cleaned safely — or declares a DTD, whose
+  entities could carry a date past the strip — is `451 birth dates could not be
+  removed` with nothing stored.
 
 Every name goes through the platform's `sanitize_pool_filename`; a name that
 survives it as nothing usable is `451`.

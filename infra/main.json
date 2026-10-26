@@ -4,8 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.47.16.16243",
-      "templateHash": "6538232666392944578"
+      "version": "0.48.1.52935",
+      "templateHash": "15548820138164897440"
     }
   },
   "parameters": {
@@ -80,6 +80,20 @@
         "description": "Base URL of the protocolgenerator Function App (fs-protocolgenerator repo)."
       }
     },
+    "authLoginProvider": {
+      "type": "string",
+      "defaultValue": "aad",
+      "metadata": {
+        "description": "Easy Auth provider for the router's /signin redirect (AUTH_LOGIN_PROVIDER app setting). Default aad."
+      }
+    },
+    "functionAppUrlGdprtool": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Base URL of the GDPR removal tool Function App (fs-gdpr-tool repo) — the /tools/gdpr/api/* proxy target."
+      }
+    },
     "proxySharedSecretJudgepapers": {
       "type": "securestring",
       "defaultValue": "",
@@ -101,11 +115,78 @@
         "description": "Shared secret the router sends to the protocolgenerator Function App."
       }
     },
+    "proxySharedSecretGdprtool": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Shared secret the router sends to the GDPR removal tool Function App."
+      }
+    },
     "toolFunctionPrincipalIds": {
       "type": "array",
       "defaultValue": [],
       "metadata": {
         "description": "System-assigned principal ids of the tool Function Apps that need read access to competition-data. May be empty on a first deploy."
+      }
+    },
+    "retentionPurgeEnabled": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "true = the platform retention_sweep purges competitions past their deletion date; false = dry-run (logs only) — the kill switch. See modules/platform-function.bicep."
+      }
+    },
+    "adminRole": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "App role that makes a user an admin (GitHub variable ADMIN_ROLE; empty = Site.Admin), in both tenant modes. The router serves /admin/ and gates /api/manage/* on it and tells the platform via X-Forwarded-User-Admin; there is no e-mail list."
+      }
+    },
+    "allowedTenantIds": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Comma-separated Entra tenant ids whose users may use the site (GitHub variable ALLOWED_TENANT_IDS). Empty = the deployment tenant only. Written to both the router (403 tenant_not_allowed for anyone else) and the platform Function App (which checks again)."
+      }
+    },
+    "authTenantMode": {
+      "type": "string",
+      "defaultValue": "workforce",
+      "allowedValues": [
+        "workforce",
+        "external"
+      ],
+      "metadata": {
+        "description": "Which tenant Easy Auth signs users in with (GitHub var AUTH_TENANT_MODE): workforce (default; MI federated credential) or external (the External ID tenant, no credential). external needs externalTenantId and externalClientId."
+      }
+    },
+    "externalTenantId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Entra External ID tenant id (GitHub var EXTERNAL_TENANT_ID). Added to the allowed tenants and handed to the platform as EXTERNAL_TENANT_IDS. Empty = not configured."
+      }
+    },
+    "externalClientId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Client id of the Entra External ID app registration (GitHub var AUTH_EXTERNAL_CLIENT_ID). Used by Easy Auth in external mode."
+      }
+    },
+    "externalAuthorityHost": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Authority host of the external tenant (GitHub var AUTH_EXTERNAL_AUTHORITY_HOST), e.g. <tenantId>.ciamlogin.com."
+      }
+    },
+    "externalAccessRole": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "App role an External ID identity needs to use the site (GitHub var EXTERNAL_ACCESS_ROLE). Empty = Site.Access."
       }
     },
     "hovtpEnabled": {
@@ -140,6 +221,11 @@
         "description": "Shared secret API Management injects as X-Proxy-Secret on forwarded HOVTP requests. Empty = the listener accepts direct callers (gate off)."
       }
     }
+  },
+  "variables": {
+    "normalizedExternalTenantId": "[toLower(trim(parameters('externalTenantId')))]",
+    "baseAllowedTenantIds": "[if(not(empty(trim(parameters('allowedTenantIds')))), toLower(replace(parameters('allowedTenantIds'), ' ', '')), toLower(if(not(empty(parameters('tenantId'))), parameters('tenantId'), tenant().tenantId)))]",
+    "effectiveAllowedTenantIds": "[if(or(empty(variables('normalizedExternalTenantId')), contains(split(variables('baseAllowedTenantIds'), ','), variables('normalizedExternalTenantId'))), variables('baseAllowedTenantIds'), format('{0},{1}', variables('baseAllowedTenantIds'), variables('normalizedExternalTenantId')))]"
   },
   "resources": [
     {
@@ -178,8 +264,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "13587412431444522201"
+              "version": "0.48.1.52935",
+              "templateHash": "6070345621224514620"
             }
           },
           "parameters": {
@@ -241,6 +327,27 @@
           "authClientId": {
             "value": "[parameters('authClientId')]"
           },
+          "authLoginProvider": {
+            "value": "[parameters('authLoginProvider')]"
+          },
+          "authTenantMode": {
+            "value": "[parameters('authTenantMode')]"
+          },
+          "externalClientId": {
+            "value": "[trim(parameters('externalClientId'))]"
+          },
+          "externalTenantId": {
+            "value": "[variables('normalizedExternalTenantId')]"
+          },
+          "externalAuthorityHost": {
+            "value": "[trim(parameters('externalAuthorityHost'))]"
+          },
+          "externalTenantIds": {
+            "value": "[variables('normalizedExternalTenantId')]"
+          },
+          "externalAccessRole": {
+            "value": "[parameters('externalAccessRole')]"
+          },
           "authManagedIdentityClientId": {
             "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'authIdentityDeployment'), '2025-04-01').outputs.clientId.value]"
           },
@@ -260,6 +367,9 @@
           "functionAppUrlProtocolgenerator": {
             "value": "[parameters('functionAppUrlProtocolgenerator')]"
           },
+          "functionAppUrlGdprtool": {
+            "value": "[parameters('functionAppUrlGdprtool')]"
+          },
           "proxySharedSecretPlatform": {
             "value": "[parameters('proxySharedSecretPlatform')]"
           },
@@ -271,6 +381,18 @@
           },
           "proxySharedSecretProtocolgenerator": {
             "value": "[parameters('proxySharedSecretProtocolgenerator')]"
+          },
+          "proxySharedSecretGdprtool": {
+            "value": "[parameters('proxySharedSecretGdprtool')]"
+          },
+          "adminRole": {
+            "value": "[parameters('adminRole')]"
+          },
+          "allowedTenantIds": {
+            "value": "[variables('effectiveAllowedTenantIds')]"
+          },
+          "hovtpHealthUrl": {
+            "value": "[format('{0}/api/health', reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'hovtpFunctionDeployment'), '2025-04-01').outputs.functionAppUrl.value)]"
           }
         },
         "template": {
@@ -279,8 +401,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "7659786952994055026"
+              "version": "0.48.1.52935",
+              "templateHash": "15279050544107427960"
             }
           },
           "parameters": {
@@ -317,6 +439,52 @@
               "type": "string",
               "defaultValue": "[subscription().tenantId]"
             },
+            "authTenantMode": {
+              "type": "string",
+              "defaultValue": "workforce",
+              "allowedValues": [
+                "workforce",
+                "external"
+              ],
+              "metadata": {
+                "description": "workforce (default) or external. external needs externalTenantId and externalClientId; without them the deployment stays workforce."
+              }
+            },
+            "externalClientId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Client id of the Entra External ID app registration (GitHub var AUTH_EXTERNAL_CLIENT_ID)."
+              }
+            },
+            "externalTenantId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "External tenant id (GitHub var EXTERNAL_TENANT_ID)."
+              }
+            },
+            "externalAuthorityHost": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Authority host of the external tenant (GitHub var AUTH_EXTERNAL_AUTHORITY_HOST), e.g. <tenantId>.ciamlogin.com. Empty = <externalTenantId>.ciamlogin.com."
+              }
+            },
+            "externalTenantIds": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Comma-separated External ID tenant ids (EXTERNAL_TENANT_IDS) for the router, which reads the e-mail of those identities only from their email claim and requires externalAccessRole of them."
+              }
+            },
+            "externalAccessRole": {
+              "type": "string",
+              "defaultValue": "Site.Access",
+              "metadata": {
+                "description": "App role (EXTERNAL_ACCESS_ROLE) an External ID identity needs to use the site; without it the router sends them to /no-access/. Empty = Site.Access."
+              }
+            },
             "functionAppUrlPlatform": {
               "type": "string",
               "defaultValue": "",
@@ -343,6 +511,13 @@
               "defaultValue": "",
               "metadata": {
                 "description": "Base URL of the protocolgenerator Function App — the /protocolgenerator/api/* proxy target."
+              }
+            },
+            "functionAppUrlGdprtool": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Base URL of the GDPR removal tool Function App — the /tools/gdpr/api/* proxy target."
               }
             },
             "proxySharedSecretPlatform": {
@@ -373,15 +548,76 @@
                 "description": "X-Proxy-Secret the router sends to the protocolgenerator Function App."
               }
             },
+            "proxySharedSecretGdprtool": {
+              "type": "securestring",
+              "defaultValue": "",
+              "metadata": {
+                "description": "X-Proxy-Secret the router sends to the GDPR removal tool Function App."
+              }
+            },
+            "adminRole": {
+              "type": "string",
+              "defaultValue": "Site.Admin",
+              "metadata": {
+                "description": "App role that makes a user an admin (ADMIN_ROLE). The router serves /admin/ and proxies /api/manage/* only for identities carrying it, and tells the backends with X-Forwarded-User-Admin: 1. Empty = Site.Admin."
+              }
+            },
+            "allowedTenantIds": {
+              "type": "string",
+              "defaultValue": "[tenant().tenantId]",
+              "metadata": {
+                "description": "Comma-separated Entra tenant ids whose principals may use the APIs (ALLOWED_TENANT_IDS). Defaults to the deployment tenant; any other tenant gets 403 tenant_not_allowed from the router. Empty = nobody (fail closed)."
+              }
+            },
+            "hovtpHealthUrl": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Health URL of the HOVTP listener, probed by the admin diagnostics (HOVTP_HEALTH_URL)."
+              }
+            },
+            "authLoginProvider": {
+              "type": "string",
+              "defaultValue": "aad",
+              "metadata": {
+                "description": "Easy Auth provider segment the router's /signin redirects to (/.auth/login/<provider>). Written to the AUTH_LOGIN_PROVIDER app setting; empty means aad. Changes together with the authsettingsV2 identity provider (e.g. the move to Entra External ID)."
+              }
+            },
             "authExcludedPaths": {
               "type": "array",
               "defaultValue": [
-                "/health"
+                "/health",
+                "/judgepapers/download",
+                "/",
+                "/index.html",
+                "/signin",
+                "/landing/*",
+                "/assets/*",
+                "/favicon.png",
+                "/apple-touch-icon.png",
+                "/robots.txt",
+                "/llms.txt",
+                "/privacy",
+                "/privacy/*",
+                "/tietosuoja",
+                "/tietosuoja/*",
+                "/terms",
+                "/terms/*",
+                "/fonts/*",
+                "/no-access",
+                "/no-access/*"
               ],
               "metadata": {
-                "description": "Paths served without an Easy Auth login redirect. /health must stay open so Azure/uptime probes get a 200 instead of a 302."
+                "description": "Paths served without an Easy Auth login redirect. /health must stay open so Azure/uptime probes get a 200 instead of a 302; /judgepapers/download is the judges'-papers link e-mailed to recipients without an account (the token is checked by the judgepapers backend); /, /index.html, /signin, /landing/* and the icons, robots.txt and llms.txt make up the public landing page, which the router serves at / unless the request carries an Easy Auth session (keep in sync with LANDING_DOCUMENT_PATHS and SIGNIN_PATH in server/server.js); /assets/* holds the Vite bundles (open-source code, no data), public so the home page served at / by session cookie can always load and fall back to its sign-in view when the session has expired; /privacy (+ /*) is the privacy notice and /tietosuoja (+ /*) its Finnish translation, which everyone must be able to read before signing in; /terms (+ /*) are the terms of use, which the sign-up page links to; /fonts/* holds the self-hosted web fonts every page uses, including the public ones; /no-access and /no-access/* are the page an External ID user without the access app role is sent to (keep in sync with NO_ACCESS_PATH and PUBLIC_PATH_PREFIXES in server/server.js)."
               }
             }
+          },
+          "variables": {
+            "externalMode": "[and(and(equals(parameters('authTenantMode'), 'external'), not(empty(parameters('externalClientId')))), not(empty(parameters('externalTenantId'))))]",
+            "effectiveAuthTenantMode": "[if(variables('externalMode'), 'external', 'workforce')]",
+            "effectiveExternalAuthorityHost": "[if(not(empty(parameters('externalAuthorityHost'))), parameters('externalAuthorityHost'), format('{0}.ciamlogin.com', parameters('externalTenantId')))]",
+            "easyAuthClientId": "[if(variables('externalMode'), parameters('externalClientId'), parameters('authClientId'))]",
+            "aadRegistration": "[if(variables('externalMode'), createObject('clientId', parameters('externalClientId'), 'openIdIssuer', format('https://{0}/{1}/v2.0', variables('effectiveExternalAuthorityHost'), parameters('externalTenantId'))), createObject('clientId', parameters('authClientId'), 'clientSecretSettingName', 'OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID', 'openIdIssuer', format('{0}{1}/v2.0', environment().authentication.loginEndpoint, parameters('tenantId'))))]"
           },
           "resources": [
             {
@@ -426,6 +662,29 @@
               ]
             },
             {
+              "type": "Microsoft.Web/sites/config",
+              "apiVersion": "2022-09-01",
+              "name": "[format('{0}/{1}', parameters('webAppName'), 'logs')]",
+              "properties": {
+                "httpLogs": {
+                  "fileSystem": {
+                    "enabled": true,
+                    "retentionInDays": 90,
+                    "retentionInMb": 35
+                  }
+                },
+                "detailedErrorMessages": {
+                  "enabled": false
+                },
+                "failedRequestsTracing": {
+                  "enabled": false
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
+              ]
+            },
+            {
               "condition": "[not(empty(parameters('authClientId')))]",
               "type": "Microsoft.Web/sites/config",
               "apiVersion": "2022-09-01",
@@ -440,16 +699,13 @@
                 "identityProviders": {
                   "azureActiveDirectory": {
                     "enabled": true,
-                    "registration": {
-                      "clientId": "[parameters('authClientId')]",
-                      "clientSecretSettingName": "OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID",
-                      "openIdIssuer": "[format('{0}{1}/v2.0', environment().authentication.loginEndpoint, parameters('tenantId'))]"
-                    },
+                    "registration": "[variables('aadRegistration')]",
                     "validation": {
                       "allowedAudiences": [
-                        "[parameters('authClientId')]"
+                        "[variables('easyAuthClientId')]"
                       ]
-                    }
+                    },
+                    "login": "[if(variables('externalMode'), createObject('loginParameters', createArray('scope=openid profile email')), createObject())]"
                   }
                 },
                 "login": {
@@ -466,7 +722,7 @@
               "type": "Microsoft.Web/sites/config",
               "apiVersion": "2022-09-01",
               "name": "[format('{0}/{1}', parameters('webAppName'), 'appsettings')]",
-              "properties": "[union(createObject('FUNCTION_APP_URL_PLATFORM', parameters('functionAppUrlPlatform'), 'FUNCTION_APP_URL_JUDGEPAPERS', parameters('functionAppUrlJudgepapers'), 'FUNCTION_APP_URL_SCOREMODIFIER', parameters('functionAppUrlScoremodifier'), 'FUNCTION_APP_URL_PROTOCOLGENERATOR', parameters('functionAppUrlProtocolgenerator'), 'PROXY_SHARED_SECRET_PLATFORM', parameters('proxySharedSecretPlatform'), 'PROXY_SHARED_SECRET_JUDGEPAPERS', parameters('proxySharedSecretJudgepapers'), 'PROXY_SHARED_SECRET_SCOREMODIFIER', parameters('proxySharedSecretScoremodifier'), 'PROXY_SHARED_SECRET_PROTOCOLGENERATOR', parameters('proxySharedSecretProtocolgenerator'), 'SCM_DO_BUILD_DURING_DEPLOYMENT', 'false'), if(empty(parameters('authClientId')), createObject(), createObject('OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID', parameters('authManagedIdentityClientId'))))]",
+              "properties": "[union(createObject('FUNCTION_APP_URL_PLATFORM', parameters('functionAppUrlPlatform'), 'FUNCTION_APP_URL_JUDGEPAPERS', parameters('functionAppUrlJudgepapers'), 'FUNCTION_APP_URL_SCOREMODIFIER', parameters('functionAppUrlScoremodifier'), 'FUNCTION_APP_URL_PROTOCOLGENERATOR', parameters('functionAppUrlProtocolgenerator'), 'FUNCTION_APP_URL_GDPRTOOL', parameters('functionAppUrlGdprtool'), 'PROXY_SHARED_SECRET_PLATFORM', parameters('proxySharedSecretPlatform'), 'PROXY_SHARED_SECRET_JUDGEPAPERS', parameters('proxySharedSecretJudgepapers'), 'PROXY_SHARED_SECRET_SCOREMODIFIER', parameters('proxySharedSecretScoremodifier'), 'PROXY_SHARED_SECRET_PROTOCOLGENERATOR', parameters('proxySharedSecretProtocolgenerator'), 'PROXY_SHARED_SECRET_GDPRTOOL', parameters('proxySharedSecretGdprtool'), 'AUTH_LOGIN_PROVIDER', if(empty(parameters('authLoginProvider')), 'aad', parameters('authLoginProvider')), 'AUTH_TENANT_MODE', variables('effectiveAuthTenantMode'), 'EXTERNAL_TENANT_IDS', parameters('externalTenantIds'), 'EXTERNAL_ACCESS_ROLE', if(empty(trim(parameters('externalAccessRole'))), 'Site.Access', trim(parameters('externalAccessRole'))), 'ADMIN_ROLE', if(empty(trim(parameters('adminRole'))), 'Site.Admin', trim(parameters('adminRole'))), 'ALLOWED_TENANT_IDS', parameters('allowedTenantIds'), 'HOVTP_HEALTH_URL', parameters('hovtpHealthUrl'), 'NODE_ENV', 'production', 'SCM_DO_BUILD_DURING_DEPLOYMENT', 'false'), if(or(empty(parameters('authClientId')), variables('externalMode')), createObject(), createObject('OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID', parameters('authManagedIdentityClientId'))))]",
               "dependsOn": [
                 "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
               ]
@@ -495,12 +751,17 @@
             "appServicePlanId": {
               "type": "string",
               "value": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]"
+            },
+            "authTenantMode": {
+              "type": "string",
+              "value": "[variables('effectiveAuthTenantMode')]"
             }
           }
         }
       },
       "dependsOn": [
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'authIdentityDeployment')]",
+        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'hovtpFunctionDeployment')]",
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformFunctionDeployment')]",
         "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
       ]
@@ -529,8 +790,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "4307431702006555811"
+              "version": "0.48.1.52935",
+              "templateHash": "10935321534140424458"
             }
           },
           "parameters": {
@@ -552,6 +813,41 @@
               "defaultValue": "competitions",
               "metadata": {
                 "description": "Table holding both the COMPETITION rows and the CODE uniqueness rows."
+              }
+            },
+            "clockTableName": {
+              "type": "string",
+              "defaultValue": "retentionclock",
+              "metadata": {
+                "description": "Non-personal mirror of each competition deletion state, readable by the tool Function Apps."
+              }
+            },
+            "adminLogTableName": {
+              "type": "string",
+              "defaultValue": "adminlog",
+              "metadata": {
+                "description": "Admin audit log and retention sweep history of the platform Function App."
+              }
+            },
+            "usersTableName": {
+              "type": "string",
+              "defaultValue": "users",
+              "metadata": {
+                "description": "User directory (e-mail, display name, first/last seen) of the platform Function App."
+              }
+            },
+            "userIdentitiesTableName": {
+              "type": "string",
+              "defaultValue": "useridentities",
+              "metadata": {
+                "description": "Identity links (tid_oid -> userId), readable by the tool Function Apps."
+              }
+            },
+            "competitionAccessTableName": {
+              "type": "string",
+              "defaultValue": "competitionaccess",
+              "metadata": {
+                "description": "Competition access grants (owner/write/read per user), readable by the tool Function Apps."
               }
             }
           },
@@ -617,6 +913,46 @@
               "dependsOn": [
                 "[resourceId('Microsoft.Storage/storageAccounts/tableServices', parameters('storageAccountName'), 'default')]"
               ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/tableServices/tables",
+              "apiVersion": "2023-01-01",
+              "name": "[format('{0}/{1}/{2}', parameters('storageAccountName'), 'default', parameters('clockTableName'))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/tableServices', parameters('storageAccountName'), 'default')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/tableServices/tables",
+              "apiVersion": "2023-01-01",
+              "name": "[format('{0}/{1}/{2}', parameters('storageAccountName'), 'default', parameters('adminLogTableName'))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/tableServices', parameters('storageAccountName'), 'default')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/tableServices/tables",
+              "apiVersion": "2023-01-01",
+              "name": "[format('{0}/{1}/{2}', parameters('storageAccountName'), 'default', parameters('usersTableName'))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/tableServices', parameters('storageAccountName'), 'default')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/tableServices/tables",
+              "apiVersion": "2023-01-01",
+              "name": "[format('{0}/{1}/{2}', parameters('storageAccountName'), 'default', parameters('userIdentitiesTableName'))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/tableServices', parameters('storageAccountName'), 'default')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Storage/storageAccounts/tableServices/tables",
+              "apiVersion": "2023-01-01",
+              "name": "[format('{0}/{1}/{2}', parameters('storageAccountName'), 'default', parameters('competitionAccessTableName'))]",
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/tableServices', parameters('storageAccountName'), 'default')]"
+              ]
             }
           ],
           "outputs": {
@@ -639,6 +975,26 @@
             "dataContainerName": {
               "type": "string",
               "value": "[parameters('dataContainerName')]"
+            },
+            "clockTableName": {
+              "type": "string",
+              "value": "[parameters('clockTableName')]"
+            },
+            "adminLogTableName": {
+              "type": "string",
+              "value": "[parameters('adminLogTableName')]"
+            },
+            "usersTableName": {
+              "type": "string",
+              "value": "[parameters('usersTableName')]"
+            },
+            "userIdentitiesTableName": {
+              "type": "string",
+              "value": "[parameters('userIdentitiesTableName')]"
+            },
+            "competitionAccessTableName": {
+              "type": "string",
+              "value": "[parameters('competitionAccessTableName')]"
             }
           }
         }
@@ -671,8 +1027,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "16668098184907597555"
+              "version": "0.48.1.52935",
+              "templateHash": "7026302659182350696"
             }
           },
           "parameters": {
@@ -763,6 +1119,9 @@
           "appInsightsName": {
             "value": "ai-fs-platform"
           },
+          "logAnalyticsWorkspaceName": {
+            "value": "[format('log-fs-platform-{0}', last(split(parameters('resourceGroupName'), '-')))]"
+          },
           "storageAccountName": {
             "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.storageAccountName.value]"
           },
@@ -774,6 +1133,33 @@
           },
           "proxySharedSecret": {
             "value": "[parameters('proxySharedSecretPlatform')]"
+          },
+          "retentionPurgeEnabled": {
+            "value": "[parameters('retentionPurgeEnabled')]"
+          },
+          "clockTableName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.clockTableName.value]"
+          },
+          "adminLogTableName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.adminLogTableName.value]"
+          },
+          "usersTableName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.usersTableName.value]"
+          },
+          "userIdentitiesTableName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.userIdentitiesTableName.value]"
+          },
+          "competitionAccessTableName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.competitionAccessTableName.value]"
+          },
+          "allowedTenantIds": {
+            "value": "[variables('effectiveAllowedTenantIds')]"
+          },
+          "externalTenantIds": {
+            "value": "[variables('normalizedExternalTenantId')]"
+          },
+          "hovtpEnabled": {
+            "value": "[parameters('hovtpEnabled')]"
           }
         },
         "template": {
@@ -782,8 +1168,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "3122050296282859768"
+              "version": "0.48.1.52935",
+              "templateHash": "12036322609162971322"
             }
           },
           "parameters": {
@@ -798,6 +1184,21 @@
             },
             "appInsightsName": {
               "type": "string"
+            },
+            "logAnalyticsWorkspaceName": {
+              "type": "string",
+              "metadata": {
+                "description": "Log Analytics workspace behind ai-fs-platform (log-fs-platform-<env>)."
+              }
+            },
+            "logRetentionDays": {
+              "type": "int",
+              "defaultValue": 90,
+              "minValue": 30,
+              "maxValue": 90,
+              "metadata": {
+                "description": "Days the technical logs are kept (workspace and App Insights). The privacy notice promises 90."
+              }
             },
             "storageAccountName": {
               "type": "string"
@@ -815,6 +1216,68 @@
             "proxySharedSecret": {
               "type": "securestring",
               "defaultValue": ""
+            },
+            "retentionPurgeEnabled": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "true = retention_sweep purges expired competitions; false = dry-run logging only."
+              }
+            },
+            "clockTableName": {
+              "type": "string",
+              "defaultValue": "retentionclock",
+              "metadata": {
+                "description": "Table the platform mirrors each competition retention state into for the tools."
+              }
+            },
+            "adminLogTableName": {
+              "type": "string",
+              "defaultValue": "adminlog",
+              "metadata": {
+                "description": "Table for the admin audit log and the retention sweep history."
+              }
+            },
+            "usersTableName": {
+              "type": "string",
+              "defaultValue": "users",
+              "metadata": {
+                "description": "Table of the user directory (PII; this app only)."
+              }
+            },
+            "userIdentitiesTableName": {
+              "type": "string",
+              "defaultValue": "useridentities",
+              "metadata": {
+                "description": "Table linking sign-in identities (tid_oid) to platform user ids."
+              }
+            },
+            "competitionAccessTableName": {
+              "type": "string",
+              "defaultValue": "competitionaccess",
+              "metadata": {
+                "description": "Table of the competition access grants (owner/write/read)."
+              }
+            },
+            "allowedTenantIds": {
+              "type": "string",
+              "metadata": {
+                "description": "Comma-separated Entra tenant ids whose users may use the API (ALLOWED_TENANT_IDS)."
+              }
+            },
+            "externalTenantIds": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Comma-separated Entra External ID tenant ids (EXTERNAL_TENANT_IDS)."
+              }
+            },
+            "hovtpEnabled": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "The value the HOVTP listener gets for HOVTP_ENABLED."
+              }
             }
           },
           "resources": [
@@ -832,14 +1295,32 @@
               }
             },
             {
+              "type": "Microsoft.OperationalInsights/workspaces",
+              "apiVersion": "2023-09-01",
+              "name": "[parameters('logAnalyticsWorkspaceName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "sku": {
+                  "name": "PerGB2018"
+                },
+                "retentionInDays": "[parameters('logRetentionDays')]"
+              }
+            },
+            {
               "type": "Microsoft.Insights/components",
               "apiVersion": "2020-02-02",
               "name": "[parameters('appInsightsName')]",
               "location": "[parameters('location')]",
               "kind": "web",
               "properties": {
-                "Application_Type": "web"
-              }
+                "Application_Type": "web",
+                "WorkspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsWorkspaceName'))]",
+                "IngestionMode": "LogAnalytics",
+                "RetentionInDays": "[parameters('logRetentionDays')]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('logAnalyticsWorkspaceName'))]"
+              ]
             },
             {
               "type": "Microsoft.Web/sites",
@@ -874,6 +1355,42 @@
                     {
                       "name": "COMPETITION_DATA_CONTAINER",
                       "value": "[parameters('dataContainerName')]"
+                    },
+                    {
+                      "name": "RETENTION_PURGE_ENABLED",
+                      "value": "[string(parameters('retentionPurgeEnabled'))]"
+                    },
+                    {
+                      "name": "RETENTION_CLOCK_TABLE",
+                      "value": "[parameters('clockTableName')]"
+                    },
+                    {
+                      "name": "ADMIN_LOG_TABLE",
+                      "value": "[parameters('adminLogTableName')]"
+                    },
+                    {
+                      "name": "HOVTP_ENABLED",
+                      "value": "[string(parameters('hovtpEnabled'))]"
+                    },
+                    {
+                      "name": "USERS_TABLE",
+                      "value": "[parameters('usersTableName')]"
+                    },
+                    {
+                      "name": "USER_IDENTITIES_TABLE",
+                      "value": "[parameters('userIdentitiesTableName')]"
+                    },
+                    {
+                      "name": "COMPETITION_ACCESS_TABLE",
+                      "value": "[parameters('competitionAccessTableName')]"
+                    },
+                    {
+                      "name": "ALLOWED_TENANT_IDS",
+                      "value": "[parameters('allowedTenantIds')]"
+                    },
+                    {
+                      "name": "EXTERNAL_TENANT_IDS",
+                      "value": "[parameters('externalTenantIds')]"
                     }
                   ]
                 },
@@ -976,8 +1493,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "11287382927328424640"
+              "version": "0.48.1.52935",
+              "templateHash": "13306267774980480332"
             }
           },
           "parameters": {
@@ -1098,8 +1615,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "5915982136487267663"
+              "version": "0.48.1.52935",
+              "templateHash": "1310888727410319757"
             }
           },
           "parameters": {
@@ -1363,8 +1880,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "12130473472396994604"
+              "version": "0.48.1.52935",
+              "templateHash": "1804965636207999055"
             }
           },
           "parameters": {
@@ -1426,8 +1943,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "11130104994807108915"
+              "version": "0.48.1.52935",
+              "templateHash": "12441820469840520462"
             }
           },
           "parameters": {
@@ -1502,6 +2019,18 @@
           "storageAccountName": {
             "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.storageAccountName.value]"
           },
+          "dataContainerName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.dataContainerName.value]"
+          },
+          "clockTableName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.clockTableName.value]"
+          },
+          "userIdentitiesTableName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.userIdentitiesTableName.value]"
+          },
+          "competitionAccessTableName": {
+            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformStorageDeployment'), '2025-04-01').outputs.competitionAccessTableName.value]"
+          },
           "toolPrincipalIds": {
             "value": "[parameters('toolFunctionPrincipalIds')]"
           }
@@ -1512,13 +2041,41 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "4111271637362070528"
+              "version": "0.48.1.52935",
+              "templateHash": "4933135632767394252"
             }
           },
           "parameters": {
             "storageAccountName": {
               "type": "string"
+            },
+            "dataContainerName": {
+              "type": "string",
+              "defaultValue": "competition-data",
+              "metadata": {
+                "description": "Shared blob container holding the per-competition file pool."
+              }
+            },
+            "clockTableName": {
+              "type": "string",
+              "defaultValue": "retentionclock",
+              "metadata": {
+                "description": "Table holding the platform retention clock (DeletionDate / Status / PurgedUtc only)."
+              }
+            },
+            "userIdentitiesTableName": {
+              "type": "string",
+              "defaultValue": "useridentities",
+              "metadata": {
+                "description": "Table linking sign-in identities (tid_oid) to platform user ids."
+              }
+            },
+            "competitionAccessTableName": {
+              "type": "string",
+              "defaultValue": "competitionaccess",
+              "metadata": {
+                "description": "Table of the competition access grants (owner/write/read)."
+              }
             },
             "toolPrincipalIds": {
               "type": "array",
@@ -1530,20 +2087,66 @@
           },
           "variables": {
             "storageBlobDataReaderId": "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1",
+            "storageTableDataReaderId": "76199698-9eea-4c19-bc75-cec21354c6b6",
             "validPrincipalIds": "[filter(parameters('toolPrincipalIds'), lambda('id', not(empty(trim(string(lambdaVariables('id')))))))]"
           },
           "resources": [
             {
               "copy": {
-                "name": "toolBlobReader",
+                "name": "toolContainerBlobReader",
                 "count": "[length(variables('validPrincipalIds'))]"
               },
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
-              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), string(variables('validPrincipalIds')[copyIndex()]), variables('storageBlobDataReaderId'))]",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', parameters('dataContainerName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', parameters('dataContainerName')), string(variables('validPrincipalIds')[copyIndex()]), variables('storageBlobDataReaderId'))]",
               "properties": {
                 "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataReaderId'))]",
+                "principalId": "[string(variables('validPrincipalIds')[copyIndex()])]",
+                "principalType": "ServicePrincipal"
+              }
+            },
+            {
+              "copy": {
+                "name": "toolTableReader",
+                "count": "[length(variables('validPrincipalIds'))]"
+              },
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts/tableServices/tables', parameters('storageAccountName'), 'default', parameters('clockTableName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts/tableServices/tables', parameters('storageAccountName'), 'default', parameters('clockTableName')), string(variables('validPrincipalIds')[copyIndex()]), variables('storageTableDataReaderId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageTableDataReaderId'))]",
+                "principalId": "[string(variables('validPrincipalIds')[copyIndex()])]",
+                "principalType": "ServicePrincipal"
+              }
+            },
+            {
+              "copy": {
+                "name": "toolIdentitiesReader",
+                "count": "[length(variables('validPrincipalIds'))]"
+              },
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts/tableServices/tables', parameters('storageAccountName'), 'default', parameters('userIdentitiesTableName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts/tableServices/tables', parameters('storageAccountName'), 'default', parameters('userIdentitiesTableName')), string(variables('validPrincipalIds')[copyIndex()]), variables('storageTableDataReaderId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageTableDataReaderId'))]",
+                "principalId": "[string(variables('validPrincipalIds')[copyIndex()])]",
+                "principalType": "ServicePrincipal"
+              }
+            },
+            {
+              "copy": {
+                "name": "toolAccessReader",
+                "count": "[length(variables('validPrincipalIds'))]"
+              },
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts/tableServices/tables', parameters('storageAccountName'), 'default', parameters('competitionAccessTableName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts/tableServices/tables', parameters('storageAccountName'), 'default', parameters('competitionAccessTableName')), string(variables('validPrincipalIds')[copyIndex()]), variables('storageTableDataReaderId'))]",
+              "properties": {
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageTableDataReaderId'))]",
                 "principalId": "[string(variables('validPrincipalIds')[copyIndex()])]",
                 "principalType": "ServicePrincipal"
               }
@@ -1553,7 +2156,7 @@
             "grantedCount": {
               "type": "int",
               "metadata": {
-                "description": "Number of tool principals actually granted read access (0 on a first deploy)."
+                "description": "Number of tool principals granted read access (0 on a first deploy)."
               },
               "value": "[length(variables('validPrincipalIds'))]"
             }
@@ -1598,8 +2201,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "931355369448053010"
+              "version": "0.48.1.52935",
+              "templateHash": "5946291631733232658"
             }
           },
           "parameters": {
@@ -1641,7 +2244,10 @@
           "variables": {
             "isApex": "[and(not(empty(parameters('customDomain'))), equals(length(split(parameters('customDomain'), '.')), 2))]",
             "subdomainLabel": "[replace(parameters('customDomain'), format('.{0}', parameters('zoneName')), '')]",
-            "asuidRecordName": "[if(variables('isApex'), 'asuid', format('asuid.{0}', variables('subdomainLabel')))]"
+            "asuidRecordName": "[if(variables('isApex'), 'asuid', format('asuid.{0}', variables('subdomainLabel')))]",
+            "mailgunDkimSelector": "mta",
+            "mailgunDkimValue": "k=rsa; p=MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDdXBnsu6cy0BTR/tTiejafTspr7bDQJaw6PITZ7w+lh6zjJiVolV0ODC+GpzY0ePv3y/2XlcsQZcYjJ1aVHfYRQGGc8NE/boQnZlaL1QpvLvze89E42urRJGqZk6kAM5H3ktXuItS32J/G6eDIP+5vg5BHd/Lhap+Sn8lqGzXtPQIDAQAB",
+            "dmarcReportTargets": "mailto:ff4d1058@dmarc.mailgun.org,mailto:xg6gbnavqm5@inbox.ondmarc.com"
           },
           "resources": [
             {
@@ -1700,6 +2306,74 @@
               "dependsOn": [
                 "[resourceId('Microsoft.Network/dnsZones', parameters('zoneName'))]"
               ]
+            },
+            {
+              "type": "Microsoft.Network/dnsZones/TXT",
+              "apiVersion": "2018-05-01",
+              "name": "[format('{0}/{1}', parameters('zoneName'), '@')]",
+              "properties": {
+                "TTL": 3600,
+                "TXTRecords": [
+                  {
+                    "value": [
+                      "v=spf1 include:mailgun.org -all"
+                    ]
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/dnsZones', parameters('zoneName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Network/dnsZones/TXT",
+              "apiVersion": "2018-05-01",
+              "name": "[format('{0}/{1}', parameters('zoneName'), format('{0}._domainkey', variables('mailgunDkimSelector')))]",
+              "properties": {
+                "TTL": 3600,
+                "TXTRecords": [
+                  {
+                    "value": [
+                      "[variables('mailgunDkimValue')]"
+                    ]
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/dnsZones', parameters('zoneName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Network/dnsZones/TXT",
+              "apiVersion": "2018-05-01",
+              "name": "[format('{0}/{1}', parameters('zoneName'), '_dmarc')]",
+              "properties": {
+                "TTL": 3600,
+                "TXTRecords": [
+                  {
+                    "value": [
+                      "[format('v=DMARC1; p=reject; pct=100; fo=1; ri=3600; rua={0}; ruf={1}', variables('dmarcReportTargets'), variables('dmarcReportTargets'))]"
+                    ]
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/dnsZones', parameters('zoneName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Network/dnsZones/CNAME",
+              "apiVersion": "2018-05-01",
+              "name": "[format('{0}/{1}', parameters('zoneName'), 'email')]",
+              "properties": {
+                "TTL": 3600,
+                "CNAMERecord": {
+                  "cname": "eu.mailgun.org"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/dnsZones', parameters('zoneName'))]"
+              ]
             }
           ],
           "outputs": {
@@ -1749,8 +2423,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "15348017569795913157"
+              "version": "0.48.1.52935",
+              "templateHash": "18388016108704755804"
             }
           },
           "parameters": {
@@ -1816,8 +2490,8 @@
                   "metadata": {
                     "_generator": {
                       "name": "bicep",
-                      "version": "0.47.16.16243",
-                      "templateHash": "9124815284901924517"
+                      "version": "0.48.1.52935",
+                      "templateHash": "12386441339786920348"
                     }
                   },
                   "parameters": {
@@ -1875,6 +2549,10 @@
       "type": "string",
       "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'webAppDeployment'), '2025-04-01').outputs.inboundIpAddress.value]"
     },
+    "authTenantMode": {
+      "type": "string",
+      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'webAppDeployment'), '2025-04-01').outputs.authTenantMode.value]"
+    },
     "authManagedIdentityClientId": {
       "type": "string",
       "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'authIdentityDeployment'), '2025-04-01').outputs.clientId.value]"
@@ -1918,6 +2596,10 @@
     "hovtpEnabled": {
       "type": "bool",
       "value": "[parameters('hovtpEnabled')]"
+    },
+    "retentionPurgeEnabled": {
+      "type": "bool",
+      "value": "[parameters('retentionPurgeEnabled')]"
     },
     "hovtpEnvironment": {
       "type": "string",

@@ -61,12 +61,11 @@ def snapshot(table, blobs):
 
 
 @pytest.fixture
-def world(table, blobs, monkeypatch):
+def world(table, blobs, admin):
     """One competition owned by the default user, shared read with READER and
     write with WRITER and read with GRANTEE; STRANGER has signed in but has no
     access; ADMIN_EMAIL is an admin with no grant. Plus one uploaded file and
     one pending HOVTP source, so every route has something to act on."""
-    monkeypatch.setenv("ADMIN_EMAILS", ADMIN_EMAIL)
     competition = create()
     cid = competition["id"]
     ids = {email: table.seed_user(email, email.split("@")[0].title())
@@ -1060,17 +1059,17 @@ def test_admin_routes_take_only_the_normalised_id(world, table):
 
 # ── e-mail: printable ASCII before lowercasing ────────────────────────────────
 
-def test_a_kelvin_sign_email_is_no_email_and_never_an_admin(table, monkeypatch):
-    monkeypatch.setenv("ADMIN_EMAILS", "kim@example.com, Kate@example.com")
-    assert fa._admin_emails() == frozenset({"kim@example.com"})
-    lookalike = make_request("GET", user_email="KIM@example.com")
+def test_a_kelvin_sign_email_is_no_email_and_admin_comes_only_from_the_header(table):
+    lookalike = make_request("GET", user_email="\u212aim@example.com")
     assert fa._forwarded_identity(lookalike)[2] == ""
     me = payload(fa._current_user(lookalike))
     assert (me["email"], me["isAdmin"]) == ("", False)
     assert payload(fa._admin_list_competitions(lookalike))["error"] == "admin_required"
     real = make_request("GET", user_email="KIM@Example.com")
     assert fa._forwarded_identity(real)[2] == "kim@example.com"
-    assert payload(fa._current_user(real))["isAdmin"] is True
+    # No e-mail list any more: only the router's admin header makes an admin.
+    assert payload(fa._current_user(real))["isAdmin"] is False
+    assert payload(fa._current_user(make_request("GET", user_email="KIM@Example.com", admin=True)))["isAdmin"] is True
     # Over-long is no e-mail either (never truncated into someone else's).
     long_email = "a" * 250 + "@x.fi"
     assert fa._forwarded_identity(make_request("GET", user_email=long_email))[2] == ""

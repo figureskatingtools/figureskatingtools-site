@@ -73,16 +73,51 @@ param toolFunctionPrincipalIds array = []
 @description('true = the platform retention_sweep purges competitions past their deletion date; false = dry-run (logs only) — the kill switch. See modules/platform-function.bicep.')
 param retentionPurgeEnabled bool = true
 
-@description('Comma-separated admin e-mail addresses (GitHub variable ADMIN_EMAILS). Written to both the router (which serves /admin/ and gates /api/manage/*) and the platform Function App (which enforces it again). Empty = nobody is admin.')
-param adminEmails string = ''
+@description('App role that makes a user an admin (GitHub variable ADMIN_ROLE; empty = Site.Admin), in both tenant modes. The router serves /admin/ and gates /api/manage/* on it and tells the platform via X-Forwarded-User-Admin; there is no e-mail list.')
+param adminRole string = ''
 
 @description('Comma-separated Entra tenant ids whose users may use the site (GitHub variable ALLOWED_TENANT_IDS). Empty = the deployment tenant only. Written to both the router (403 tenant_not_allowed for anyone else) and the platform Function App (which checks again).')
 param allowedTenantIds string = ''
 
-// The tenant the site's Easy Auth app registration lives in, unless overridden.
-var effectiveAllowedTenantIds = !empty(trim(allowedTenantIds))
+// Entra External ID (customer tenant). All from GitHub vars; empty = not
+// configured, and nothing changes. There is deliberately no secret param: in
+// external mode Easy Auth is credential-free (infra/EXTERNAL-ID.md).
+@description('Which tenant Easy Auth signs users in with (GitHub var AUTH_TENANT_MODE): workforce (default; MI federated credential) or external (the External ID tenant, no credential). external needs externalTenantId and externalClientId.')
+@allowed([
+  'workforce'
+  'external'
+])
+param authTenantMode string = 'workforce'
+
+@description('Entra External ID tenant id (GitHub var EXTERNAL_TENANT_ID). Added to the allowed tenants and handed to the platform as EXTERNAL_TENANT_IDS. Empty = not configured.')
+param externalTenantId string = ''
+
+@description('true = a new External ID identity becomes a new platform user (GitHub var EXTERNAL_NEW_USERS_ENABLED; default on in test, off in prod until phase C); false = 503 migration_pending.')
+param externalNewUsersEnabled bool = false
+
+@description('Client id of the Entra External ID app registration (GitHub var AUTH_EXTERNAL_CLIENT_ID). Used by Easy Auth in external mode.')
+param externalClientId string = ''
+
+@description('Authority host of the external tenant (GitHub var AUTH_EXTERNAL_AUTHORITY_HOST), e.g. <tenantId>.ciamlogin.com.')
+param externalAuthorityHost string = ''
+
+@description('App role an External ID identity needs to use the site (GitHub var EXTERNAL_ACCESS_ROLE). Empty = Site.Access.')
+param externalAccessRole string = ''
+
+var normalizedExternalTenantId = toLower(trim(externalTenantId))
+
+// The tenant the site's Easy Auth app registration lives in, unless overridden,
+// plus the external tenant once it is configured — in BOTH modes, so sessions
+// issued by the other tenant before a mode switch keep working until they expire.
+var baseAllowedTenantIds = !empty(trim(allowedTenantIds))
   ? toLower(replace(allowedTenantIds, ' ', ''))
   : toLower(!empty(tenantId) ? tenantId : tenant().tenantId)
+var effectiveAllowedTenantIds = empty(normalizedExternalTenantId) || contains(
+    split(baseAllowedTenantIds, ','),
+    normalizedExternalTenantId
+  )
+  ? baseAllowedTenantIds
+  : '${baseAllowedTenantIds},${normalizedExternalTenantId}'
 
 @description('Kill switch for the HOVTP listener. false = the app is still deployed but answers every request 503 (see modules/hovtp-function.bicep).')
 param hovtpEnabled bool = true
@@ -134,6 +169,12 @@ module webApp 'modules/webapp.bicep' = {
     appServicePlanName: 'asp-fs-site-web'
     authClientId: authClientId
     authLoginProvider: authLoginProvider
+    authTenantMode: authTenantMode
+    externalClientId: trim(externalClientId)
+    externalTenantId: normalizedExternalTenantId
+    externalAuthorityHost: trim(externalAuthorityHost)
+    externalTenantIds: normalizedExternalTenantId
+    externalAccessRole: externalAccessRole
     authManagedIdentityClientId: authManagedIdentity.outputs.clientId
     authManagedIdentityResourceId: authManagedIdentity.outputs.resourceId
     tenantId: !empty(tenantId) ? tenantId : subscription().tenantId
@@ -151,7 +192,7 @@ module webApp 'modules/webapp.bicep' = {
     proxySharedSecretScoremodifier: proxySharedSecretScoremodifier
     proxySharedSecretProtocolgenerator: proxySharedSecretProtocolgenerator
     proxySharedSecretGdprtool: proxySharedSecretGdprtool
-    adminEmails: adminEmails
+    adminRole: adminRole
     allowedTenantIds: effectiveAllowedTenantIds
     // Probed by the router's admin diagnostics.
     hovtpHealthUrl: '${hovtpFunction.outputs.functionAppUrl}/api/health'
@@ -189,18 +230,21 @@ module platformFunction 'modules/platform-function.bicep' = {
     functionAppName: 'func-fs-platform-${uniqueString(rg.id)}'
     appServicePlanName: 'asp-fs-platform'
     appInsightsName: 'ai-fs-platform'
+    // rg-fs-site-<env> -> log-fs-platform-<env>
+    logAnalyticsWorkspaceName: 'log-fs-platform-${last(split(resourceGroupName, '-'))}'
     storageAccountName: platformStorage.outputs.storageAccountName
     deploymentContainerUrl: platformStorage.outputs.deploymentContainerUrl
     dataContainerName: platformStorage.outputs.dataContainerName
     proxySharedSecret: proxySharedSecretPlatform
     retentionPurgeEnabled: retentionPurgeEnabled
     clockTableName: platformStorage.outputs.clockTableName
-    adminEmails: adminEmails
     adminLogTableName: platformStorage.outputs.adminLogTableName
     usersTableName: platformStorage.outputs.usersTableName
     userIdentitiesTableName: platformStorage.outputs.userIdentitiesTableName
     competitionAccessTableName: platformStorage.outputs.competitionAccessTableName
     allowedTenantIds: effectiveAllowedTenantIds
+    externalTenantIds: normalizedExternalTenantId
+    externalNewUsersEnabled: externalNewUsersEnabled
     // Informational copy for the admin diagnostics; the listener's own
     // setting (below) is the one that switches it.
     hovtpEnabled: hovtpEnabled
@@ -327,6 +371,7 @@ output resourceGroupName string = rg.name
 output webAppName string = webApp.outputs.webAppName
 output webAppDefaultHostName string = webApp.outputs.webAppDefaultHostName
 output webAppInboundIpAddress string = webApp.outputs.inboundIpAddress
+output authTenantMode string = webApp.outputs.authTenantMode
 output authManagedIdentityClientId string = authManagedIdentity.outputs.clientId
 output authManagedIdentityObjectId string = authManagedIdentity.outputs.principalId
 output platformFunctionAppName string = platformFunction.outputs.functionAppName

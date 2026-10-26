@@ -153,8 +153,10 @@ export interface RouterDiagnostics {
   config: {
     targets: Record<string, { url: boolean; secret: boolean }>;
     hovtpHealthUrl?: boolean;
-    adminCount: number;
+    adminRole?: string;
     loginProvider: string;
+    authTenantMode?: string;
+    externalTenantCount?: number;
     devFakeUser: boolean;
   };
   backends: BackendHealth[];
@@ -171,6 +173,7 @@ export interface PlatformDiagnostics {
   config: {
     retentionPurgeEnabled: boolean;
     hovtpEnabled: boolean | null;
+    externalNewUsersEnabled?: boolean;
     retentionDays: number;
     extensionDays: number;
     clockTable: string;

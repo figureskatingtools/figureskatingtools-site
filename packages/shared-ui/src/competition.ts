@@ -542,7 +542,8 @@ export async function listCompetitions(): Promise<PlatformCompetition[]> {
     throw new CompetitionApiError(0, 'Competitions API unreachable');
   }
   if (!resp.ok) {
-    throw new CompetitionApiError(resp.status, `Competitions API returned ${resp.status}`);
+    // Keeps the API's code and message (e.g. 503 migration_pending) for the UI
+    throw await errorFromResponse(resp, 'Competitions API returned an error');
   }
   let payload: unknown;
   try {
@@ -583,14 +584,7 @@ export async function createCompetition(
     throw new CompetitionApiError(409, `Competition code "${body.code}" is already in use.`);
   }
   if (!resp.ok) {
-    let detail = '';
-    try {
-      const payload = await resp.json();
-      detail = typeof payload?.error === 'string' ? payload.error : '';
-    } catch (_e) {
-      // No JSON body — fall back to the bare status
-    }
-    throw new CompetitionApiError(resp.status, detail || `Could not create competition (${resp.status})`);
+    throw await errorFromResponse(resp, 'Could not create competition');
   }
 
   const created = toPlatformCompetition(await resp.json());

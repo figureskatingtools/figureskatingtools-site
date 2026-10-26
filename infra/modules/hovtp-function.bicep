@@ -12,7 +12,8 @@
 // listener holds account-scoped roles only on the former; on the latter it gets
 // the `competition-data` container and the `competitions` table and nothing
 // else (modules/hovtp-data-access.bicep). It still shares the ai-fs-platform
-// Application Insights component, and has its own plan and identity.
+// Application Insights component (and so its 90-day log retention, set in
+// modules/platform-function.bicep), and has its own plan and identity.
 param location string
 param functionAppName string
 param appServicePlanName string

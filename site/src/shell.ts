@@ -56,6 +56,9 @@ export function logoutUrl(redirectPath = '/'): string {
  */
 let tenantBlocked = false;
 
+/** The router's public "no access yet" page (server.js NO_ACCESS_PATH). */
+const NO_ACCESS_PATH = '/no-access/';
+
 /** True when the last `fetchUser` hit 403 `tenant_not_allowed` */
 export function isTenantBlocked(): boolean {
   return tenantBlocked;
@@ -66,6 +69,8 @@ export function isTenantBlocked(): boolean {
  * Auth `x-ms-client-principal` header into `{authenticated, userId, …}`.
  * Returns null when unauthenticated or when the call fails — and also for an
  * account from a tenant the site does not allow (then `isTenantBlocked()`).
+ * An External ID account without the access role (403 `access_not_granted`)
+ * is sent to /no-access/ and the promise never settles.
  */
 export async function fetchUser(): Promise<UserInfo | null> {
   tenantBlocked = false;
@@ -73,6 +78,13 @@ export async function fetchUser(): Promise<UserInfo | null> {
     const resp = await fetch('/userinfo', { headers: { Accept: 'application/json' } });
     if (resp.status === 403) {
       const body = await resp.json().catch(() => null);
+      if (body?.error === 'access_not_granted') {
+        // Signed in to External ID but without the site's access app role:
+        // the public no-access page explains it. Never resolve, so the app
+        // does not flash its sign-in view while the browser navigates away.
+        location.replace(NO_ACCESS_PATH);
+        return new Promise<never>(() => {});
+      }
       tenantBlocked = body?.error === 'tenant_not_allowed';
       return null;
     }
@@ -139,7 +151,7 @@ export function renderSignInView(appElement: HTMLElement, redirectPath = '/'): v
           </p>
           <a href="${logoutUrl()}" class="btn btn-primary">Sign out</a>
           <p class="unauth-privacy">
-            <a href="/privacy/">Privacy notice</a> · <a href="/tietosuoja/" lang="fi">Tietosuojaseloste</a>
+            <a href="/privacy/">Privacy notice</a> · <a href="/terms/">Terms of use</a>
           </p>
         </div>
       </div>
@@ -164,7 +176,7 @@ export function renderSignInView(appElement: HTMLElement, redirectPath = '/'): v
         </p>
         <a href="${href}" class="btn btn-primary reveal reveal-4">Sign In to Continue</a>
         <p class="unauth-privacy reveal reveal-4">
-          <a href="/privacy/">Privacy notice</a> · <a href="/tietosuoja/" lang="fi">Tietosuojaseloste</a>
+          <a href="/privacy/">Privacy notice</a> · <a href="/terms/">Terms of use</a>
         </p>
       </div>
     </div>
@@ -187,6 +199,7 @@ export function setupUserMenu(container: HTMLElement, user: UserInfo): void {
         </div>
         ${user.isAdmin ? '<a href="/admin/" class="dropdown-item">Admin panel</a>' : ''}
         <a href="/privacy/" class="dropdown-item">Privacy notice</a>
+        <a href="/terms/" class="dropdown-item">Terms of use</a>
         <a href="${logoutUrl()}" class="dropdown-item">Sign Out</a>
       </div>
     </div>

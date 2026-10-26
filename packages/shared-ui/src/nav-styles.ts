@@ -616,6 +616,10 @@ const NAV_STYLES = `
   color: #93a7ba;
 }
 
+.fst-comp-empty--error {
+  color: #c03434;
+}
+
 .fst-comp-menu-foot {
   display: flex;
   flex-direction: column;

@@ -1,0 +1,11 @@
+/* "No access yet" page (/no-access/): the privacy notice's layout
+ * (/landing/landing.css + /privacy/privacy.css) plus these few rules.
+ * Public (Easy Auth excluded paths). */
+
+/* Two headings, one shown: "signed in" once /userinfo confirmed who it is,
+ * the generic one before that and for everyone else. */
+html:not(.is-denied) [data-state='granted-denied'] { display: none; }
+html.is-denied [data-state='generic'] { display: none; }
+
+.doc .actions { margin-top: 28px; }
+.doc .signed-in strong { overflow-wrap: anywhere; }

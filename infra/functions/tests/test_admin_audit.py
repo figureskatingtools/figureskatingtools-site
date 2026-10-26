@@ -263,7 +263,7 @@ def test_diagnostics_reports_config_and_counts(admin, table, blobs, monkeypatch)
         "adminLogTable": "adminlog", "auditRetentionDays": 365,
         "usersTable": "users", "userIdentitiesTable": "useridentities",
         "competitionAccessTable": "competitionaccess", "allowedTenantCount": 1,
-        "inactiveUserDays": 365,
+        "externalTenantCount": 0, "externalNewUsersEnabled": False, "inactiveUserDays": 365,
     }
     assert body["storage"] == {"ok": True, "error": None}
     counts = body["counts"]
