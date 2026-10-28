@@ -14,8 +14,6 @@ param customDomain = readEnvironmentVariable('SKIP_CUSTOM_DOMAIN', '') == 'true'
 // Supplied by the deploy workflow from GitHub environment secrets + vars. Read
 // from the environment rather than passed on the command line so the shared
 // secret never appears in a process argument list.
-param authClientId = readEnvironmentVariable('AUTH_CLIENT_ID', '')
-param tenantId = readEnvironmentVariable('AZURE_TENANT_ID', '')
 param proxySharedSecretPlatform = readEnvironmentVariable('PROXY_SHARED_SECRET_PLATFORM', '')
 
 // Router proxy targets + their shared secrets. Part of the template so the Web
@@ -39,18 +37,16 @@ param proxySharedSecretGdprtool = readEnvironmentVariable('PROXY_SHARED_SECRET_G
 // ADMIN_ROLE; unset = Site.Admin). There is no e-mail list.
 param adminRole = readEnvironmentVariable('ADMIN_ROLE', '')
 
-// Entra tenants whose users may use the site (comma-separated), from the GitHub
-// environment variable ALLOWED_TENANT_IDS. Unset = the deployment tenant only.
+// Extra Entra tenants whose users may use the site (comma-separated), from the
+// GitHub environment variable ALLOWED_TENANT_IDS, next to the External ID tenant,
+// which is always allowed. Unset = that tenant only.
 param allowedTenantIds = readEnvironmentVariable('ALLOWED_TENANT_IDS', '')
 
-// Entra External ID (customer tenant), from the GitHub environment variables
-// AUTH_TENANT_MODE, EXTERNAL_TENANT_ID, AUTH_EXTERNAL_CLIENT_ID and
-// AUTH_EXTERNAL_AUTHORITY_HOST. AUTH_TENANT_MODE=external points Easy Auth at
-// the External ID tenant; anything else (unset arrives as '') = workforce.
-// EXTERNAL_TENANT_ID alone only adds the tenant to the allowed ones. There is no
-// secret here and there never will be: external mode is credential-free
-// (ID-token flow) — see infra/EXTERNAL-ID.md.
-param authTenantMode = readEnvironmentVariable('AUTH_TENANT_MODE', '') == 'external' ? 'external' : 'workforce'
+// Entra External ID (customer tenant), the only sign-in, from the GitHub
+// environment variables EXTERNAL_TENANT_ID, AUTH_EXTERNAL_CLIENT_ID (both
+// required) and AUTH_EXTERNAL_AUTHORITY_HOST. There is no secret here and there
+// never will be: Easy Auth is credential-free (ID-token flow) — see
+// infra/EXTERNAL-ID.md.
 param externalTenantId = readEnvironmentVariable('EXTERNAL_TENANT_ID', '')
 param externalClientId = readEnvironmentVariable('AUTH_EXTERNAL_CLIENT_ID', '')
 param externalAuthorityHost = readEnvironmentVariable('AUTH_EXTERNAL_AUTHORITY_HOST', '')
