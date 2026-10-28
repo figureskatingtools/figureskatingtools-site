@@ -70,6 +70,9 @@ let currentId: string | null = null;
 let boundPlatformId: string | null = null;
 /** Label the current binding was resolved with — a same-GUID rename must re-resolve. */
 let boundLabel: string | null = null;
+/** Competition code the current binding was resolved with — it names the generated
+ *  protocol, so a code-only change (e.g. from another tab) must re-resolve too. */
+let boundCode: string | null = null;
 /** Guards against an out-of-order resolve when the selection changes mid-flight. */
 let bindToken = 0;
 let details: CompetitionDetails | null = null;
@@ -253,10 +256,11 @@ async function editBoundCompetition(btn: HTMLButtonElement): Promise<void> {
  * Bind this tool to the active platform competition.
  *
  * No selection → the quiet "pick a competition" card. Same GUID *and* the same
- * label as the current binding → nothing to do (the subscription fires on every
- * storage change). A label change on the same GUID — a rename from the header
- * pencil, or one made in another tab and arriving as a storage event — must
- * re-resolve: that is what lets the backend sync this tool's record name.
+ * label and code as the current binding → nothing to do (the subscription fires
+ * on every storage change). A label or code change on the same GUID — an edit
+ * from the header pencil, or one made in another tab and arriving as a storage
+ * event — must re-resolve: that is what lets the backend sync this tool's record
+ * name and the code the protocol PDF is named after.
  * Otherwise resolve the platform GUID into this tool's competition record and
  * open it.
  */
@@ -267,6 +271,7 @@ async function bindActiveCompetition(force = false): Promise<void> {
   if (!active) {
     boundPlatformId = null;
     boundLabel = null;
+    boundCode = null;
     currentId = null;
     details = null;
     poolFiles = null;
@@ -275,7 +280,8 @@ async function bindActiveCompetition(force = false): Promise<void> {
   }
 
   const label = competitionLabel(active);
-  if (!force && active.id === boundPlatformId && label === boundLabel) return;
+  if (!force && active.id === boundPlatformId && label === boundLabel
+    && (active.code || '') === boundCode) return;
   deletedNotice = null;
 
   // Pool availability is per competition (a tool record can be unbound) — a new
@@ -304,6 +310,7 @@ async function bindActiveCompetition(force = false): Promise<void> {
         // the stale selection everywhere and say why, instead of a raw error.
         boundPlatformId = null;
         boundLabel = null;
+        boundCode = null;
         deletedNotice = platformErrorMessage(code!, label);
         clearActiveCompetition();   // re-binds → the pick card with the notice
         return;
@@ -317,11 +324,13 @@ async function bindActiveCompetition(force = false): Promise<void> {
     if (!data?.id) throw new Error('The tool API returned no competition id.');
     boundPlatformId = active.id;
     boundLabel = label;
+    boundCode = active.code || '';
     await openCompetition(data.id, data.name || label);
   } catch (e) {
     if (token !== bindToken) return;
     boundPlatformId = null;
     boundLabel = null;
+    boundCode = null;
     showBindError(e instanceof Error ? e.message : 'Network error.');
   }
 }
