@@ -93,6 +93,8 @@ ROUTES = {
     "download": (fa._download_competition_file, "GET",
                  lambda w: {"route_params": {"name": "a.pdf"}}, "read"),
     "hovtp list": (fa._list_hovtp_sources, "GET", lambda w: {}, "read"),
+    "get settings": (fa._get_tool_settings, "GET",
+                     lambda w: {"route_params": {"tool": "banner"}}, "read"),
     "patch": (fa._update_competition, "PATCH", lambda w: {"body": {"venue": "Tampere"}}, "write"),
     "put": (fa._update_competition, "PUT", lambda w: {"body": {"venue": "Tampere"}}, "write"),
     "extend": (fa._extend_competition, "POST", lambda w: {}, "write"),
@@ -104,6 +106,8 @@ ROUTES = {
                      lambda w: {"body": {"days": 1}, "route_params": {"ip": IP}}, "write"),
     "hovtp reject": (fa._deny_hovtp_source, "POST", lambda w: {"route_params": {"ip": IP}}, "write"),
     "hovtp revoke": (fa._deny_hovtp_source, "DELETE", lambda w: {"route_params": {"ip": IP}}, "write"),
+    "put settings": (fa._put_tool_settings, "PUT", lambda w: {
+        "body": {"settings": {"title": "X"}}, "route_params": {"tool": "banner"}}, "write"),
     "delete": (fa._delete_competition, "DELETE", lambda w: {}, "owner"),
     "access list": (fa._list_access, "GET", lambda w: {}, "owner"),
     "access set": (fa._set_access, "PUT", lambda w: {
@@ -1090,6 +1094,7 @@ EXPECTED_OVERRIDE = {
     "hovtp accept": "admin.override.hovtp.accept",
     "hovtp reject": "admin.override.hovtp.reject",
     "hovtp revoke": "admin.override.hovtp.revoke",
+    "put settings": "admin.override.settings.update",
     "delete": "admin.override.competition.delete",
     "access set": "admin.override.access.grant",
     "access revoke": "admin.override.access.revoke",

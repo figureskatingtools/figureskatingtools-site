@@ -77,6 +77,38 @@ export function formatDateFi(value: string | Date | null | undefined): string {
   return raw;
 }
 
+/** The calendar parts of a valid ISO date, or null */
+function isoParts(value: string | null | undefined): [number, number, number] | null {
+  const m = ISO_DATE_RE.exec(String(value ?? '').trim());
+  if (!m) return null;
+  const parts: [number, number, number] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  return isRealDate(...parts) ? parts : null;
+}
+
+/**
+ * Format a date range compactly for print: `11.–12.09.2026` within a month,
+ * `30.09.–01.10.2026` within a year, else both dates in full joined by an en
+ * dash. An end that is missing, invalid or not after the start renders as the
+ * single start date; with no valid start it is `formatDateFi(start)` (so
+ * human text passes through, and blank renders as the end date or `''`).
+ */
+export function formatDateRangeFi(
+  start: string | null | undefined,
+  end: string | null | undefined
+): string {
+  const from = isoParts(start);
+  const to = isoParts(end);
+  if (!from) return String(start ?? '').trim() ? formatDateFi(start) : (to ? formatDateFi(end) : '');
+  const [y1, m1, d1] = from;
+  if (!to || to[0] * 10000 + to[1] * 100 + to[2] <= y1 * 10000 + m1 * 100 + d1) {
+    return fiParts(d1, m1, y1);
+  }
+  const [y2, m2, d2] = to;
+  if (y1 === y2 && m1 === m2) return `${pad2(d1)}.–${fiParts(d2, m2, y2)}`;
+  if (y1 === y2) return `${pad2(d1)}.${pad2(m1)}.–${fiParts(d2, m2, y2)}`;
+  return `${fiParts(d1, m1, y1)}–${fiParts(d2, m2, y2)}`;
+}
+
 /**
  * Format a byte count for a file list: `1.4 MB` / `812 kB`.
  *

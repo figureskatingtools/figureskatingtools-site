@@ -5,9 +5,34 @@
  *
  * The SVG geometry is a verbatim port of the proven working draft; only the
  * plumbing around it (typed state, asset loading, DOM wiring) is new.
+ *
+ * The form is remembered per competition: with a competition selected, every
+ * change is saved to it (`/api/competitions/{id}/settings/banner`) and loaded
+ * again next time, by anyone it is shared with. A competition with nothing
+ * saved yet starts from its own data (see `settings.ts`).
  */
 
-import { formatDateFi, getActiveCompetition } from '@figureskatingtools/shared-ui';
+import {
+  CompetitionApiError,
+  competitionLabel,
+  getActiveCompetition,
+  getToolSettings,
+  isReadOnlyCompetition,
+  saveToolSettings,
+  subscribeActiveCompetition,
+  type PlatformCompetition,
+} from '@figureskatingtools/shared-ui';
+import {
+  MAX_REMEMBERED_LOGO_CHARS,
+  SIZE_RANGES,
+  basePrefill,
+  fallbackSettings,
+  fullPrefill,
+  toBannerSettings,
+  type BannerSettings,
+  type ClubChoice,
+  type ClubEntry,
+} from './settings.js';
 
 /* ── Asset + tuning constants ── */
 const RALEWAY_URL = '/tools/banner/assets/raleway.woff2';
@@ -24,6 +49,12 @@ const SPORTITY_H = 1200;
 const RENDER_SETTLE_MS = 150;
 /** Object URLs for downloads are revoked lazily so the browser can start the save */
 const DOWNLOAD_REVOKE_MS = 5000;
+/** Quiet time after the last change before it is saved to the competition */
+const SAVE_DELAY_MS = 800;
+/** A dropped raster logo too large to remember is scaled to fit this box */
+const LOGO_MAX_PX = 800;
+/** Browsers refuse `keepalive` bodies over 64 kB */
+const KEEPALIVE_MAX_CHARS = 60_000;
 
 /* ── State ── */
 /** The Raleway variable font, as a data URI (embedded into every SVG) */
@@ -39,11 +70,10 @@ let assetsReady = false;
 let previewUrl: string | null = null;
 let sportityPreviewUrl: string | null = null;
 
-/** One entry of the club logo manifest */
-interface ClubEntry {
-  name: string;
-  file: string;
-}
+/** The club logo manifest, sorted by name */
+let clubs: ClubEntry[] = [];
+/** Where the current club logo came from — what gets remembered */
+let clubChoice: ClubChoice | null = null;
 
 /* ── Small DOM helpers ── */
 function el<T extends HTMLElement>(id: string): T {
@@ -64,33 +94,14 @@ function escAttr(s: string): string {
   return esc(s).replace(/"/g, '&quot;');
 }
 
-/* ── Defaults, prefilled from the active competition when there is one ── */
-
-const FALLBACK_TITLE = 'WINTER CUP 2026';
-const FALLBACK_DATE_VENUE = '14.–15.2.2026  |  Ice Arena, Helsinki';
-
-/** Banner title default — the active competition's name, shouted */
-function defaultTitle(): string {
-  const active = getActiveCompetition();
-  const name = active?.name.trim();
-  return name ? name.toUpperCase() : FALLBACK_TITLE;
-}
-
-/** Date & venue default — `date  |  venue` from the active competition */
-function defaultDateVenue(): string {
-  const active = getActiveCompetition();
-  if (!active) return FALLBACK_DATE_VENUE;
-  // The banner is print-facing text, so the date goes on it Finnish (dd.MM.yyyy)
-  const parts = [formatDateFi(active.date), active.venue.trim()].filter(Boolean);
-  return parts.length > 0 ? parts.join('  |  ') : FALLBACK_DATE_VENUE;
-}
-
 /* ════════════════════════════════════════════════════════════════
    Page markup
    ════════════════════════════════════════════════════════════════ */
 
 /** The generator page (everything below the site nav) */
 export function renderGeneratorPage(): string {
+  const initial = basePrefill(getActiveCompetition());
+  const { titleSize, dateVenueSize, categoriesSize } = SIZE_RANGES;
   return `
     <main class="auth-main banner-main">
       <header class="banner-header reveal reveal-1">
@@ -100,6 +111,12 @@ export function renderGeneratorPage(): string {
           Fill in the event details, add your club logo and download a ready-made
           competition banner — everything is generated right here in your browser.
         </p>
+        <div class="banner-memory">
+          <p class="banner-memory-status" id="memoryStatus" aria-live="polite"></p>
+          <button type="button" class="btn btn-secondary btn-sm hidden" id="btnRefill">
+            Fill in from competition
+          </button>
+        </div>
       </header>
 
       <div class="banner-sticky reveal reveal-2">
@@ -126,31 +143,31 @@ export function renderGeneratorPage(): string {
 
           <div class="field">
             <label class="field-label" for="title">Title</label>
-            <input type="text" id="title" class="field-input" value="${escAttr(defaultTitle())}">
+            <input type="text" id="title" class="field-input" value="${escAttr(initial.title)}">
             <div class="field-size">
               <span class="field-size-label">Size</span>
-              <input type="range" id="titleSize" min="24" max="60" step="1" value="48">
-              <output class="field-size-value" id="titleSizeOut">48 px</output>
+              <input type="range" id="titleSize" min="${titleSize.min}" max="${titleSize.max}" step="1" value="${initial.titleSize}">
+              <output class="field-size-value" id="titleSizeOut">${initial.titleSize} px</output>
             </div>
           </div>
 
           <div class="field">
             <label class="field-label" for="dateVenue">Date &amp; venue</label>
-            <input type="text" id="dateVenue" class="field-input" value="${escAttr(defaultDateVenue())}">
+            <input type="text" id="dateVenue" class="field-input" value="${escAttr(initial.dateVenue)}">
             <div class="field-size">
               <span class="field-size-label">Size</span>
-              <input type="range" id="dateVenueSize" min="14" max="32" step="1" value="22">
-              <output class="field-size-value" id="dateVenueSizeOut">22 px</output>
+              <input type="range" id="dateVenueSize" min="${dateVenueSize.min}" max="${dateVenueSize.max}" step="1" value="${initial.dateVenueSize}">
+              <output class="field-size-value" id="dateVenueSizeOut">${initial.dateVenueSize} px</output>
             </div>
           </div>
 
           <div class="field">
             <label class="field-label" for="categories">Categories</label>
-            <input type="text" id="categories" class="field-input" value="SENIORS  ·  JUNIORS  ·  NOVICES">
+            <input type="text" id="categories" class="field-input" value="${escAttr(initial.categories)}">
             <div class="field-size">
               <span class="field-size-label">Size</span>
-              <input type="range" id="categoriesSize" min="10" max="22" step="1" value="14">
-              <output class="field-size-value" id="categoriesSizeOut">14 px</output>
+              <input type="range" id="categoriesSize" min="${categoriesSize.min}" max="${categoriesSize.max}" step="1" value="${initial.categoriesSize}">
+              <output class="field-size-value" id="categoriesSizeOut">${initial.categoriesSize} px</output>
             </div>
           </div>
         </section>
@@ -502,7 +519,16 @@ function setDropzoneText(text: string): void {
 const DROPZONE_DEFAULT_TEXT = 'Drop your club logo here (or click) — JPG, PNG or SVG';
 const ACCEPTED_LOGO_TYPES = ['image/jpeg', 'image/png', 'image/svg+xml'];
 
+function clearClubLogo(): void {
+  clubLogo = null;
+  clubW = 0;
+  clubH = 0;
+  setDropzoneText(DROPZONE_DEFAULT_TEXT);
+  refresh();
+}
+
 async function useClubFromManifest(file: string): Promise<void> {
+  clubChoice = { file };
   try {
     const resp = await fetch(CLUB_LOGO_BASE + file);
     if (!resp.ok) throw new Error(`Could not load ${file}`);
@@ -514,15 +540,41 @@ async function useClubFromManifest(file: string): Promise<void> {
   }
 }
 
+/**
+ * Scale a raster logo down to fit LOGO_MAX_PX, so it can be remembered —
+ * the banner never draws a club logo larger than 280 × 180.
+ */
+async function shrinkLogo(dataUri: string, type: string): Promise<string> {
+  const img = new Image();
+  img.src = dataUri;
+  await img.decode();
+  const scale = Math.min(1, LOGO_MAX_PX / Math.max(img.naturalWidth, img.naturalHeight, 1));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+  canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+  return type === 'image/jpeg' ? canvas.toDataURL('image/jpeg', 0.92) : canvas.toDataURL('image/png');
+}
+
 async function useCustomFile(file: File): Promise<void> {
   if (!ACCEPTED_LOGO_TYPES.includes(file.type)) {
     setDropzoneText('Unsupported file type — please use JPG, PNG or SVG.');
     return;
   }
-  setClubLogo(await blobToDataUri(file));
+  let dataUri = await blobToDataUri(file);
+  if (dataUri.length > MAX_REMEMBERED_LOGO_CHARS && file.type !== 'image/svg+xml') {
+    try {
+      dataUri = await shrinkLogo(dataUri, file.type);
+    } catch (_e) {
+      // Not decodable here — setClubLogo below reports the bad file
+    }
+  }
+  clubChoice = { name: file.name, dataUri };
+  setClubLogo(dataUri);
   setDropzoneText(file.name);
   const select = el<HTMLSelectElement>('clubSelect');
   if (select) select.value = '';
+  formChanged();
 }
 
 /* ════════════════════════════════════════════════════════════════
@@ -542,12 +594,10 @@ function setDownloadsEnabled(enabled: boolean): void {
 function bindSizeSlider(sliderId: string, outputId: string): void {
   const slider = input(sliderId);
   const out = el<HTMLOutputElement>(outputId);
-  const sync = (): void => {
+  slider.addEventListener('input', () => {
     out.textContent = `${slider.value} px`;
-    refresh();
-  };
-  slider.addEventListener('input', sync);
-  sync();
+    formChanged();
+  });
 }
 
 function bindClubLogoInputs(): void {
@@ -556,20 +606,18 @@ function bindClubLogoInputs(): void {
 
   clubBubble.addEventListener('change', () => {
     clubOptions.classList.toggle('hidden', !clubBubble.checked);
-    refresh();
+    formChanged();
   });
 
   const select = el<HTMLSelectElement>('clubSelect');
   select.addEventListener('change', () => {
     if (!select.value) {
-      clubLogo = null;
-      clubW = 0;
-      clubH = 0;
-      setDropzoneText(DROPZONE_DEFAULT_TEXT);
-      refresh();
-      return;
+      clubChoice = null;
+      clearClubLogo();
+    } else {
+      void useClubFromManifest(select.value);
     }
-    void useClubFromManifest(select.value);
+    formChanged();
   });
 
   const dropZone = el<HTMLElement>('dropZone');
@@ -600,7 +648,7 @@ function bindClubLogoInputs(): void {
     e.preventDefault();
     dropZone.classList.remove('dropzone--active');
     const file = (e as DragEvent).dataTransfer?.files?.[0];
-    if (file) void useCustomFile(file);
+    if (file && formEnabled) void useCustomFile(file);
   });
 }
 
@@ -615,34 +663,44 @@ function bindDownloadButtons(): void {
   const sportityActions = el<HTMLElement>('sportityActions');
   sportityToggle.addEventListener('change', () => {
     sportityActions.classList.toggle('hidden', !sportityToggle.checked);
-    refresh();
+    formChanged();
   });
 }
 
-/** Boot the generator: load assets, wire the form, render the first preview */
+/** Boot the generator: load assets, wire the form, load what the competition remembers */
 export function initGenerator(): void {
   for (const id of ['title', 'dateVenue', 'categories']) {
-    input(id).addEventListener('input', refresh);
+    input(id).addEventListener('input', formChanged);
   }
   bindSizeSlider('titleSize', 'titleSizeOut');
   bindSizeSlider('dateVenueSize', 'dateVenueSizeOut');
   bindSizeSlider('categoriesSize', 'categoriesSizeOut');
   bindClubLogoInputs();
   bindDownloadButtons();
+  bindMemory();
 
-  void loadAssets();
+  void start();
+}
+
+async function start(): Promise<void> {
+  await loadAssets();
+  const active = getActiveCompetition();
+  shownCompetitionId = active?.id ?? null;
+  subscribeActiveCompetition(onActiveCompetition);
+  await loadForCompetition(active);
 }
 
 async function loadAssets(): Promise<void> {
   const status = el<HTMLElement>('previewStatus');
   try {
-    const [ralewayUri, logoUri, clubs] = await Promise.all([
+    const [ralewayUri, logoUri, clubList] = await Promise.all([
       fetchDataUri(RALEWAY_URL),
       fetchDataUri(LOGO_URL),
       loadClubs(),
     ]);
     raleway = ralewayUri;
     logo = logoUri;
+    clubs = clubList;
 
     if (clubs.length > 0) {
       const select = el<HTMLSelectElement>('clubSelect');
@@ -665,4 +723,255 @@ async function loadAssets(): Promise<void> {
     status.textContent = 'Banner assets could not be loaded. Please reload the page.';
     status.classList.add('banner-preview-status--error');
   }
+}
+
+/* ════════════════════════════════════════════════════════════════
+   Form state ⇄ remembered settings
+   ════════════════════════════════════════════════════════════════ */
+
+const FORM_CONTROL_IDS = [
+  'title', 'titleSize', 'dateVenue', 'dateVenueSize', 'categories', 'categoriesSize',
+  'clubBubble', 'clubSelect', 'fileInput', 'sportityToggle', 'btnRefill',
+];
+let formEnabled = true;
+
+/** Lock the form while a competition's values load, so no typing is overwritten */
+function setFormEnabled(enabled: boolean): void {
+  formEnabled = enabled;
+  for (const id of FORM_CONTROL_IDS) {
+    const control = el<HTMLInputElement>(id);
+    if (control) control.disabled = !enabled;
+  }
+  el<HTMLElement>('dropZone').setAttribute('aria-disabled', String(!enabled));
+}
+
+/** The form as a settings object (a too-large dropped logo is not remembered) */
+function readForm(): BannerSettings {
+  const custom = clubChoice && 'dataUri' in clubChoice ? clubChoice : null;
+  return {
+    v: 1,
+    title: input('title').value,
+    titleSize: +input('titleSize').value,
+    dateVenue: input('dateVenue').value,
+    dateVenueSize: +input('dateVenueSize').value,
+    categories: input('categories').value,
+    categoriesSize: +input('categoriesSize').value,
+    clubBubble: input('clubBubble').checked,
+    club: custom && custom.dataUri.length > MAX_REMEMBERED_LOGO_CHARS ? null : clubChoice,
+    sportity: input('sportityToggle').checked,
+  };
+}
+
+function logoTooLargeToRemember(): boolean {
+  return !!clubChoice && 'dataUri' in clubChoice && clubChoice.dataUri.length > MAX_REMEMBERED_LOGO_CHARS;
+}
+
+/** Put a settings object into the form and redraw */
+function applyForm(settings: BannerSettings): void {
+  input('title').value = settings.title;
+  input('dateVenue').value = settings.dateVenue;
+  input('categories').value = settings.categories;
+  for (const id of ['titleSize', 'dateVenueSize', 'categoriesSize'] as const) {
+    input(id).value = String(settings[id]);
+    el<HTMLOutputElement>(`${id}Out`).textContent = `${settings[id]} px`;
+  }
+  input('clubBubble').checked = settings.clubBubble;
+  el<HTMLElement>('clubOptions').classList.toggle('hidden', !settings.clubBubble);
+  input('sportityToggle').checked = settings.sportity;
+  el<HTMLElement>('sportityActions').classList.toggle('hidden', !settings.sportity);
+
+  const select = el<HTMLSelectElement>('clubSelect');
+  const club = settings.club;
+  if (club && 'file' in club && clubs.some((c) => c.file === club.file)) {
+    select.value = club.file;
+    void useClubFromManifest(club.file);
+  } else if (club && 'dataUri' in club) {
+    select.value = '';
+    clubChoice = club;
+    setClubLogo(club.dataUri);
+    setDropzoneText(club.name);
+  } else {
+    select.value = '';
+    clubChoice = null;
+    clearClubLogo();
+  }
+  refresh();
+}
+
+/* ════════════════════════════════════════════════════════════════
+   Competition memory — load on select, save on change
+   ════════════════════════════════════════════════════════════════ */
+
+/** Where changes go: the competition shown, and whether saving is possible */
+interface MemoryTarget {
+  competition: PlatformCompetition;
+  writable: boolean;
+  /** The saved values could not be read — saving would overwrite them blind */
+  loadFailed: boolean;
+}
+
+let target: MemoryTarget | null = null;
+let shownCompetitionId: string | null = null;
+let loadSeq = 0;
+let saveTimer: number | null = null;
+let lastSave: Promise<void> = Promise.resolve();
+
+function setMemoryStatus(text: string, isError = false): void {
+  const status = el<HTMLElement>('memoryStatus');
+  status.textContent = text;
+  status.classList.toggle('banner-memory-status--error', isError);
+}
+
+function quoted(competition: PlatformCompetition): string {
+  return `“${competitionLabel(competition)}”`;
+}
+
+function showRefill(visible: boolean): void {
+  el<HTMLElement>('btnRefill').classList.toggle('hidden', !visible);
+}
+
+function savedStatus(t: MemoryTarget): string {
+  const note = logoTooLargeToRemember()
+    ? ' The club logo is too large to remember — use a smaller file.'
+    : '';
+  return `Saved to ${quoted(t.competition)}.${note}`;
+}
+
+/** Every user change: redraw, then save to the competition shortly after */
+function formChanged(): void {
+  refresh();
+  if (!target?.writable) return;
+  if (saveTimer !== null) clearTimeout(saveTimer);
+  setMemoryStatus('Saving…');
+  saveTimer = window.setTimeout(() => {
+    saveTimer = null;
+    void saveNow();
+  }, SAVE_DELAY_MS);
+}
+
+/** Save a pending change now (on leaving the page or the competition) */
+function flushSave(): void {
+  if (saveTimer === null) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  void saveNow();
+}
+
+/** Save the form to the current target; saves run one after another */
+function saveNow(): Promise<void> {
+  const t = target;
+  if (!t?.writable) return Promise.resolve();
+  const settings = readForm();
+  const keepalive = JSON.stringify(settings).length < KEEPALIVE_MAX_CHARS;
+  const previous = lastSave;
+  lastSave = (async () => {
+    await previous;
+    try {
+      await saveToolSettings(t.competition.id, 'banner', { ...settings }, { keepalive });
+      if (target === t && saveTimer === null) setMemoryStatus(savedStatus(t));
+    } catch (e) {
+      if (target === t) onSaveError(t, e);
+    }
+  })();
+  return lastSave;
+}
+
+function onSaveError(t: MemoryTarget, error: unknown): void {
+  const code = error instanceof CompetitionApiError ? error.code : '';
+  if (code === 'read_only') {
+    t.writable = false;
+    showRefill(false);
+    setMemoryStatus(`You have view-only access to ${quoted(t.competition)}, so your changes aren't saved.`);
+  } else if (code === 'not_found' || code === 'competition_deleted') {
+    t.writable = false;
+    showRefill(false);
+    setMemoryStatus(`${quoted(t.competition)} no longer exists or isn't shared with you, so changes aren't saved.`, true);
+  } else if (code === 'settings_too_large') {
+    setMemoryStatus('The club logo is too large to save — use a smaller file.', true);
+  } else {
+    setMemoryStatus("Your changes couldn't be saved. They will be saved with your next change.", true);
+  }
+}
+
+/** Show what a competition remembers — or what its own data says, the first time */
+async function loadForCompetition(competition: PlatformCompetition | null): Promise<void> {
+  flushSave();
+  const seq = ++loadSeq;
+  target = null;
+  showRefill(false);
+
+  if (!competition) {
+    applyForm(fallbackSettings());
+    setFormEnabled(true);
+    setMemoryStatus('Select a competition in the top bar and these values are remembered for it.');
+    return;
+  }
+
+  setFormEnabled(false);
+  setMemoryStatus(`Loading the values saved for ${quoted(competition)}…`);
+
+  let saved: BannerSettings | null = null;
+  let loadFailed = false;
+  try {
+    saved = toBannerSettings((await getToolSettings(competition.id, 'banner')).settings);
+  } catch (_e) {
+    loadFailed = true;
+  }
+  if (seq !== loadSeq) return;
+  const settings = saved ?? (await fullPrefill(competition, clubs));
+  if (seq !== loadSeq) return;
+
+  applyForm(settings);
+  setFormEnabled(true);
+  const readOnly = isReadOnlyCompetition(competition);
+  target = { competition, writable: !readOnly && !loadFailed, loadFailed };
+  showRefill(target.writable);
+
+  const name = quoted(competition);
+  if (loadFailed) {
+    setMemoryStatus(`The values saved for ${name} couldn't be loaded, so changes aren't saved. Reload the page to try again.`, true);
+  } else if (readOnly) {
+    setMemoryStatus(`${saved ? `Showing the values saved for ${name}` : `Filled in from ${name}`}. You have view-only access, so your changes aren't saved.`);
+  } else if (saved) {
+    setMemoryStatus(`Showing the values saved for ${name}. Changes are saved automatically.`);
+  } else {
+    setMemoryStatus(`Filled in from ${name}. Changes are saved to it automatically.`);
+  }
+}
+
+/** The nav selector (or another tab) switched competitions — or renamed this one */
+function onActiveCompetition(next: PlatformCompetition | null): void {
+  const nextId = next?.id ?? null;
+  if (nextId !== shownCompetitionId) {
+    shownCompetitionId = nextId;
+    void loadForCompetition(next);
+    return;
+  }
+  if (!target || !next) return;
+  // Same competition: keep the form, follow a new name or a changed role
+  target.competition = next;
+  target.writable = !isReadOnlyCompetition(next) && !target.loadFailed;
+  showRefill(target.writable);
+}
+
+function bindMemory(): void {
+  el<HTMLButtonElement>('btnRefill').addEventListener('click', () => void refillFromCompetition());
+  // A change still waiting for its save goes out as the page closes
+  window.addEventListener('pagehide', flushSave);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushSave();
+  });
+}
+
+/** Replace the form with what the competition's data says, then save that */
+async function refillFromCompetition(): Promise<void> {
+  const t = target;
+  if (!t?.writable) return;
+  if (!window.confirm(`Replace the banner's text and club logo with the details of ${quoted(t.competition)}?`)) return;
+  setFormEnabled(false);
+  const settings = await fullPrefill(t.competition, clubs);
+  setFormEnabled(true);
+  if (target !== t) return;
+  applyForm(settings);
+  formChanged();
 }

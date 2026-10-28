@@ -49,8 +49,9 @@ allowed is audited as `admin.override.<action>`. No access at all is a 404 not_f
 access on a write route 403 read_only, anything short of owner on an owner
 route 403 owner_required:
 
-    read   GET competition, list/download files, list HOVTP sources
-    write  PUT/PATCH, extend, upload/delete file, HOVTP accept/reject/revoke
+    read   GET competition, list/download files, list HOVTP sources, GET settings
+    write  PUT/PATCH, extend, upload/delete file, HOVTP accept/reject/revoke,
+           PUT settings
     owner  DELETE competition, manage access
 
 HTTP contract (Azure Functions' default `api` route prefix makes these the
@@ -97,6 +98,17 @@ competition with, else null with only the masked hint ("a•••@club.fi").
                                                     that cannot be done safely
     GET    /api/competitions/{id}/files/{name}   -> 200 bytes  (?source=upload|fsm)
     DELETE /api/competitions/{id}/files/{name}   -> 200 {"status": "deleted", ...}
+
+    GET    /api/competitions/{id}/settings/{tool} -> 200 ToolSettings  (read)
+    PUT    /api/competitions/{id}/settings/{tool} -> 200 ToolSettings  (write)
+                                                    {"settings": {...}}, <= 1 MiB;
+                                                    {tool} in TOOL_SETTINGS_TOOLS
+
+ToolSettings = {"tool", "settings": {...} | null, "updatedUtc"}: one JSON object
+per competition and tool, so a browser-only tool (the banner generator)
+remembers what was typed into it for everyone with access. Opaque to this app:
+the tool validates its own shape when it reads it back. Never shown in the
+file pool, and removed with the competition's other blobs.
 
     GET    /api/competitions/{id}/hovtp/sources              -> 200 {"sources": [Source, ...]}
     POST   /api/competitions/{id}/hovtp/sources/{ip}/accept  -> 200 {"source": Source,
@@ -209,6 +221,7 @@ shared `competition-data` container keyed by GUID:
     <guid>/fsm-pending/<ip>/...  quarantine for a source that is not accepted
                                  (yet); invisible to the file pool until an
                                  accept attaches it into <guid>/fsm/
+    <guid>/settings/<tool>.json  a browser tool's remembered form values
 
 Retention — ONE clock for the whole platform. The COMPETITION row owns
 `DeletionDate` (midnight UTC of creation + RETENTION_DAYS). Its non-personal
@@ -382,7 +395,7 @@ INACTIVE_USER_DAYS = 365
 # and site/public/tietosuoja/ (pinned by tests/test_legal_versions.py): bump
 # both here and in the pages whenever a document changes in substance.
 TERMS_VERSION = "2026-10-23"
-PRIVACY_VERSION = "2026-10-22"
+PRIVACY_VERSION = "2026-10-28"
 _LEGAL_VERSION_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 # The legacy e-mail claim (_claim_legacy_competitions) only ever considers
 # competitions created before this instant: the rollout of the access model.
@@ -419,6 +432,11 @@ HOVTP_STATUS_EXPIRED = "expired"
 HOVTP_ACCEPT_DAYS = (1, 2, 3, 7)
 
 POOL_MAX_FILE_SIZE = 50 * 1024 * 1024
+
+# Tools that may keep a settings object on a competition, and its size cap
+# (the banner generator's includes an uploaded club logo as a data URI).
+TOOL_SETTINGS_TOOLS = frozenset({"banner"})
+TOOL_SETTINGS_MAX_BYTES = 1024 * 1024
 MAX_FILENAME_LENGTH = 200
 MAX_SOURCE_TOOL_LENGTH = 40
 
@@ -505,6 +523,11 @@ def competition_fsm_prefix(competition_id: str) -> str:
 def competition_pending_prefix(competition_id: str, ip: str) -> str:
     """Quarantine prefix for one not-yet-accepted HOVTP source."""
     return f"{competition_id}/fsm-pending/{ip}/"
+
+
+def competition_settings_blob(competition_id: str, tool: str) -> str:
+    """Blob name of one tool's remembered settings for a competition."""
+    return f"{competition_id}/settings/{tool}.json"
 
 
 def hovtp_source_row_key(competition_id: str, ip: str) -> str:
@@ -2659,6 +2682,123 @@ def _delete_competition_file(req: func.HttpRequest) -> func.HttpResponse:
 
 # ── HOVTP source handlers ─────────────────────────────────────────────────────
 
+def _route_tool(req: func.HttpRequest) -> str:
+    """The {tool} route param, or "" when it is not a tool that keeps settings."""
+    tool = (req.route_params.get("tool") or "").strip().lower()
+    return tool if tool in TOOL_SETTINGS_TOOLS else ""
+
+
+def _unknown_tool() -> func.HttpResponse:
+    return _error("unknown_tool", "This tool does not keep settings.", 404)
+
+
+def _get_tool_settings(req: func.HttpRequest) -> func.HttpResponse:
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return user
+
+    competition_id = _route_competition_id(req)
+    if not competition_id:
+        return _competition_not_found()
+
+    _role, error = _require_access(user, competition_id, ROLE_READ)
+    if error is not None:
+        return error
+
+    tool = _route_tool(req)
+    if not tool:
+        return _unknown_tool()
+
+    # Reads stay available on a soft-deleted competition; only writes don't.
+    _entity, error = _load_competition(competition_id)
+    if error is not None:
+        return error
+
+    container = _get_container_client()
+    if container is None:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    try:
+        blob_client = container.get_blob_client(competition_settings_blob(competition_id, tool))
+        if not blob_client.exists():
+            return _json({"tool": tool, "settings": None, "updatedUtc": ""})
+        properties = blob_client.get_blob_properties()
+        data = blob_client.download_blob().readall()
+    except ResourceNotFoundError:
+        return _json({"tool": tool, "settings": None, "updatedUtc": ""})
+    except Exception as e:
+        logging.error(f"Error reading {tool} settings for competition '{competition_id}': {e}")
+        return _error("internal_error", "Could not read the settings.", 500)
+
+    try:
+        settings = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        settings = None
+    if not isinstance(settings, dict):
+        # Unreadable is the same as never saved: the tool starts afresh.
+        logging.warning(f"Ignoring unreadable {tool} settings for competition '{competition_id}'")
+        return _json({"tool": tool, "settings": None, "updatedUtc": ""})
+
+    return _json({
+        "tool": tool,
+        "settings": settings,
+        "updatedUtc": _iso_utc(getattr(properties, "last_modified", None)),
+    })
+
+
+def _put_tool_settings(req: func.HttpRequest) -> func.HttpResponse:
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return user
+
+    competition_id = _route_competition_id(req)
+    if not competition_id:
+        return _competition_not_found()
+
+    role, error = _require_access(user, competition_id, ROLE_WRITE)
+    if error is not None:
+        return error
+
+    tool = _route_tool(req)
+    if not tool:
+        return _unknown_tool()
+
+    body = req.get_body() or b""
+    if len(body) > TOOL_SETTINGS_MAX_BYTES:
+        return _error("settings_too_large", "Settings are limited to 1 MB.", 413)
+    payload = _read_body(req)
+    settings = payload.get("settings") if payload is not None else None
+    if not isinstance(settings, dict):
+        return _error("invalid_settings", 'The body must be {"settings": {...}}.', 400)
+
+    entity, error = _load_competition(competition_id)
+    if error is not None:
+        return error
+    if entity.get("Status") == STATUS_DELETED:
+        return _error("competition_deleted", "This competition has been deleted.", 409)
+
+    container = _get_container_client()
+    if container is None:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    data = json.dumps(settings, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    try:
+        container.upload_blob(
+            name=competition_settings_blob(competition_id, tool),
+            data=data,
+            overwrite=True,
+            content_settings=ContentSettings(content_type="application/json"),
+        )
+    except Exception as e:
+        logging.error(f"Error storing {tool} settings for competition '{competition_id}': {e}")
+        return _error("internal_error", "Could not store the settings.", 500)
+
+    _audit_override(user, role, ROLE_WRITE, "settings.update", entity,
+                    changes={"tool": [None, tool]})
+
+    return _json({"tool": tool, "settings": settings, "updatedUtc": _now_utc()})
+
+
 def _list_hovtp_sources(req: func.HttpRequest) -> func.HttpResponse:
     user = _require_user(req)
     if isinstance(user, func.HttpResponse):
@@ -4657,6 +4797,14 @@ def competition_file_by_name(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "DELETE":
         return _delete_competition_file(req)
     return _download_competition_file(req)
+
+
+@app.route(route="competitions/{id}/settings/{tool}", auth_level=func.AuthLevel.ANONYMOUS,
+           methods=["GET", "PUT"])
+def competition_tool_settings(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "PUT":
+        return _put_tool_settings(req)
+    return _get_tool_settings(req)
 
 
 @app.route(route="competitions/{id}/hovtp/sources", auth_level=func.AuthLevel.ANONYMOUS,

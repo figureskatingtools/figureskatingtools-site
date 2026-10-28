@@ -2,7 +2,7 @@ export { renderSiteNav, initSiteNav, getEnvPrefix } from './nav.js';
 export { injectSiteNavStyles } from './nav-styles.js';
 export type { SiteNavOptions, NavSubItem, NavTool, NavSmallTool } from './types.js';
 
-export { formatDateFi, formatDateTimeFi, formatFileSize } from './format.js';
+export { formatDateFi, formatDateRangeFi, formatDateTimeFi, formatFileSize } from './format.js';
 
 export {
   DOWNLOAD_DETAILS_MAX_AGE_MS,
@@ -142,6 +142,17 @@ export {
   sniffRosterXmlStructure,
 } from './roster-xml.js';
 export type { RosterXmlFile, RosterXmlKind, RosterXmlSelection } from './roster-xml.js';
+
+export { isScheduleXmlName, summarizeScheduleXml } from './schedule-xml.js';
+export type { ScheduleSummary } from './schedule-xml.js';
+
+export {
+  getToolSettings,
+  saveToolSettings,
+  toToolSettings,
+  toolSettingsUrl,
+} from './tool-settings.js';
+export type { SettingsTool, ToolSettings } from './tool-settings.js';
 
 export {
   initCompetitionSelector,
