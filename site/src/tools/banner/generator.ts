@@ -75,6 +75,8 @@ let sportityPreviewUrl: string | null = null;
 let clubs: ClubEntry[] = [];
 /** Where the current club logo came from — what gets remembered */
 let clubChoice: ClubChoice | null = null;
+/** A club logo is being fetched or decoded — downloads wait for it */
+let logoLoading = false;
 /**
  * Bumped by every logo change: a logo fetch or image decode that finishes
  * after a newer change (another pick, or another competition's form) is dropped.
@@ -504,6 +506,7 @@ function mimeForFile(file: string): string {
 /** Adopt a data URI as the club logo, measuring its intrinsic size first */
 function setClubLogo(dataUri: string): void {
   const seq = ++logoSeq;
+  setLogoLoading(true);
   const probe = new Image();
   probe.onload = () => {
     if (seq !== logoSeq) return;
@@ -511,10 +514,12 @@ function setClubLogo(dataUri: string): void {
     // SVGs without intrinsic dimensions report 0 — fall back to the bubble ratio
     clubW = probe.naturalWidth || 100;
     clubH = probe.naturalHeight || 80;
+    setLogoLoading(false);
     refresh();
   };
   probe.onerror = () => {
     if (seq !== logoSeq) return;
+    setLogoLoading(false);
     setDropzoneText('That file could not be read — try a JPG, PNG or SVG.');
   };
   probe.src = dataUri;
@@ -528,8 +533,14 @@ function setDropzoneText(text: string): void {
 const DROPZONE_DEFAULT_TEXT = 'Drop your club logo here (or click) — JPG, PNG or SVG';
 const ACCEPTED_LOGO_TYPES = ['image/jpeg', 'image/png', 'image/svg+xml'];
 
+function setLogoLoading(loading: boolean): void {
+  logoLoading = loading;
+  updateDownloads();
+}
+
 function clearClubLogo(): void {
   logoSeq++;
+  setLogoLoading(false);
   clubLogo = null;
   clubW = 0;
   clubH = 0;
@@ -540,6 +551,7 @@ function clearClubLogo(): void {
 async function useClubFromManifest(file: string): Promise<void> {
   clubChoice = { file };
   const seq = ++logoSeq;
+  setLogoLoading(true);
   try {
     const resp = await fetch(CLUB_LOGO_BASE + file);
     if (!resp.ok) throw new Error(`Could not load ${file}`);
@@ -602,6 +614,11 @@ async function useCustomFile(file: File): Promise<void> {
    ════════════════════════════════════════════════════════════════ */
 
 const DOWNLOAD_BUTTON_IDS = ['btnPng', 'btnSvg', 'btnJpeg', 'btnBmp', 'btnSportity'];
+
+/** Downloads only once the assets, the form and its club logo are all in place */
+function updateDownloads(): void {
+  setDownloadsEnabled(formEnabled && assetsReady && !logoLoading);
+}
 
 function setDownloadsEnabled(enabled: boolean): void {
   for (const id of DOWNLOAD_BUTTON_IDS) {
@@ -737,7 +754,7 @@ async function loadAssets(): Promise<void> {
     }
 
     assetsReady = true;
-    setDownloadsEnabled(formEnabled);
+    updateDownloads();
     status.classList.add('hidden');
     el<HTMLElement>('previewWrap').classList.remove('hidden');
     refresh();
@@ -766,7 +783,7 @@ function setFormEnabled(enabled: boolean): void {
   }
   el<HTMLElement>('dropZone').setAttribute('aria-disabled', String(!enabled));
   // A download while another competition loads would export the previous form
-  setDownloadsEnabled(enabled && assetsReady);
+  updateDownloads();
 }
 
 /** The form as a settings object (a too-large dropped logo is not remembered) */
@@ -845,73 +862,10 @@ let shownCompetitionId: string | null = null;
 let loadSeq = 0;
 let saveTimer: number | null = null;
 let lastSave: Promise<void> = Promise.resolve();
-/** The snapshot (JSON) whose PUT is on its way, null when none is */
-let inFlight: string | null = null;
-
-/* ── Changes left behind by a closed page ──
-   A change made while an earlier save is still on its way only goes out once
-   that save returns — too late if the page is closing. Then the newest
-   snapshot is kept in this browser with the one it follows (`base`), and
-   replayed on the next visit only if the competition still holds exactly
-   `base`: had anyone saved since, their values win. */
-
-interface PendingChange {
-  base: string;
-  latest: BannerSettings;
-}
-
-function pendingKey(competitionId: string): string {
-  return `fst:banner-pending:v1:${competitionId}`;
-}
-
-function storePending(competitionId: string, change: PendingChange): void {
-  try {
-    localStorage.setItem(pendingKey(competitionId), JSON.stringify(change));
-  } catch (_e) {
-    // Storage blocked or full — the normal save is all there is
-  }
-}
-
-function readPending(competitionId: string): PendingChange | null {
-  try {
-    const raw = JSON.parse(localStorage.getItem(pendingKey(competitionId)) ?? 'null');
-    return raw && typeof raw.base === 'string' && raw.latest ? raw : null;
-  } catch (_e) {
-    return null;
-  }
-}
-
-function dropPending(competitionId: string): void {
-  try {
-    localStorage.removeItem(pendingKey(competitionId));
-  } catch (_e) {
-    // Nothing to clean up then
-  }
-}
-
-/** Saved settings in one comparable spelling */
-function normalized(raw: unknown): string {
-  const settings = raw && typeof raw === 'object' ? toBannerSettings(raw as Record<string, unknown>) : null;
-  return settings ? JSON.stringify(settings) : '';
-}
-
-/** The change to replay over `saved`, or null (stale ones are dropped) */
-function takePending(competitionId: string, saved: BannerSettings | null): BannerSettings | null {
-  const pending = readPending(competitionId);
-  if (!pending) return null;
-  const savedText = saved ? JSON.stringify(saved) : '';
-  const latest = toBannerSettings(pending.latest as unknown as Record<string, unknown>);
-  let base = '';
-  try {
-    base = normalized(JSON.parse(pending.base));
-  } catch (_e) {
-    // Unreadable base: never replay over anything
-  }
-  // Replay only over exactly what it followed — or over nothing saved at all
-  if (latest && savedText !== JSON.stringify(latest) && (savedText === base || savedText === '')) return latest;
-  dropPending(competitionId);
-  return null;
-}
+/** Saves started but not yet sent (queued behind an earlier one) */
+let undispatched = 0;
+/** Saves started and not yet answered */
+let unsettled = 0;
 
 function setMemoryStatus(text: string, isError = false): void {
   const status = el<HTMLElement>('memoryStatus');
@@ -946,37 +900,55 @@ function formChanged(): void {
   }, SAVE_DELAY_MS);
 }
 
-/** Save a pending change now (on leaving the page or the competition) */
+/**
+ * Save a pending change now. Switching competitions queues it like any save;
+ * leaving the page sends it at once instead, because a save queued behind
+ * one still on its way would only go out after the page is gone.
+ */
 function flushSave(leaving = false): void {
-  if (saveTimer === null) return;
-  clearTimeout(saveTimer);
+  const waiting = saveTimer !== null || (leaving && undispatched > 0);
+  if (!waiting) return;
+  if (saveTimer !== null) clearTimeout(saveTimer);
   saveTimer = null;
-  if (leaving && inFlight !== null && target?.writable) {
-    storePending(target.competition.id, { base: inFlight, latest: readForm() });
+  if (!leaving) {
+    void saveNow();
+    return;
   }
-  void saveNow();
+  const earlier = unsettled > 0 ? lastSave : null;
+  void saveNow(true);
+  if (earlier) {
+    // A hidden tab may live on: once every earlier save has landed, send the
+    // newest values again, so an older save finishing last cannot win
+    lastSave = Promise.all([earlier, lastSave]).then(() => undefined);
+    void saveNow();
+  }
 }
 
-/** Save the form to the current target; saves run one after another */
-function saveNow(): Promise<void> {
+/**
+ * Save the form to the current target. Saves run one after another, and each
+ * reads the form when it is sent, never when it was queued — so a queued
+ * save can only repeat the newest values, not bring back older ones.
+ * `immediate` skips the queue (the page is closing).
+ */
+function saveNow(immediate = false): Promise<void> {
   const t = target;
   if (!t?.writable) return Promise.resolve();
-  const settings = readForm();
-  const text = JSON.stringify(settings);
-  const keepalive = text.length < KEEPALIVE_MAX_CHARS;
-  const previous = lastSave;
+  const previous = immediate ? Promise.resolve() : lastSave;
+  undispatched++;
+  unsettled++;
   lastSave = (async () => {
     await previous;
-    inFlight = text;
+    undispatched--;
+    const settings = readForm();
+    // Browsers cap `keepalive` bodies at 64 kB: a save with a big logo cannot outlive the page
+    const keepalive = JSON.stringify(settings).length < KEEPALIVE_MAX_CHARS;
     try {
       await saveToolSettings(t.competition.id, 'banner', { ...settings }, { keepalive });
-      const pending = readPending(t.competition.id);
-      if (pending && normalized(pending.latest) === normalized(settings)) dropPending(t.competition.id);
       if (target === t && saveTimer === null) setMemoryStatus(savedStatus(t));
     } catch (e) {
       if (target === t) onSaveError(t, e);
     } finally {
-      inFlight = null;
+      unsettled--;
     }
   })();
   return lastSave;
@@ -1028,8 +1000,7 @@ async function loadForCompetition(competition: PlatformCompetition | null): Prom
     loadFailed = true;
   }
   if (seq !== loadSeq) return;
-  const replay = loadFailed || isReadOnlyCompetition(competition) ? null : takePending(competition.id, saved);
-  const settings = replay ?? saved ?? (await fullPrefill(competition, clubs));
+  const settings = saved ?? (await fullPrefill(competition, clubs));
   if (seq !== loadSeq) return;
 
   applyForm(settings);
@@ -1043,9 +1014,6 @@ async function loadForCompetition(competition: PlatformCompetition | null): Prom
     setMemoryStatus(`The values saved for ${name} couldn't be loaded, so changes aren't saved. Reload the page to try again.`, true);
   } else if (readOnly) {
     setMemoryStatus(`${saved ? `Showing the values saved for ${name}` : `Filled in from ${name}`}. You have view-only access, so your changes aren't saved.`);
-  } else if (replay) {
-    // The page closed before these went out: save them now
-    formChanged();
   } else if (saved) {
     setMemoryStatus(`Showing the values saved for ${name}. Changes are saved automatically.`);
   } else {
