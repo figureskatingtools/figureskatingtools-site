@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.48.1.52935",
-      "templateHash": "15548820138164897440"
+      "templateHash": "17674577702240953388"
     }
   },
   "parameters": {
@@ -36,20 +36,6 @@
       "defaultValue": "figureskatingtools.com",
       "metadata": {
         "description": "The DNS zone / apex domain name."
-      }
-    },
-    "authClientId": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Client id of the per-environment Entra app registration used by Easy Auth."
-      }
-    },
-    "tenantId": {
-      "type": "string",
-      "defaultValue": "",
-      "metadata": {
-        "description": "Entra tenant id. Defaults to the deployment subscription tenant."
       }
     },
     "proxySharedSecretPlatform": {
@@ -140,39 +126,33 @@
       "type": "string",
       "defaultValue": "",
       "metadata": {
-        "description": "App role that makes a user an admin (GitHub variable ADMIN_ROLE; empty = Site.Admin), in both tenant modes. The router serves /admin/ and gates /api/manage/* on it and tells the platform via X-Forwarded-User-Admin; there is no e-mail list."
+        "description": "App role that makes a user an admin (GitHub variable ADMIN_ROLE; empty = Site.Admin). The router serves /admin/ and gates /api/manage/* on it and tells the platform via X-Forwarded-User-Admin; there is no e-mail list."
       }
     },
     "allowedTenantIds": {
       "type": "string",
       "defaultValue": "",
       "metadata": {
-        "description": "Comma-separated Entra tenant ids whose users may use the site (GitHub variable ALLOWED_TENANT_IDS). Empty = the deployment tenant only. Written to both the router (403 tenant_not_allowed for anyone else) and the platform Function App (which checks again)."
-      }
-    },
-    "authTenantMode": {
-      "type": "string",
-      "defaultValue": "workforce",
-      "allowedValues": [
-        "workforce",
-        "external"
-      ],
-      "metadata": {
-        "description": "Which tenant Easy Auth signs users in with (GitHub var AUTH_TENANT_MODE): workforce (default; MI federated credential) or external (the External ID tenant, no credential). external needs externalTenantId and externalClientId."
+        "description": "Comma-separated extra Entra tenant ids whose users may use the site (GitHub variable ALLOWED_TENANT_IDS), next to the External ID tenant, which is always allowed. Empty = that tenant only. Written to both the router (403 tenant_not_allowed for anyone else) and the platform Function App (which checks again)."
       }
     },
     "externalTenantId": {
       "type": "string",
-      "defaultValue": "",
       "metadata": {
-        "description": "Entra External ID tenant id (GitHub var EXTERNAL_TENANT_ID). Added to the allowed tenants and handed to the platform as EXTERNAL_TENANT_IDS. Empty = not configured."
+        "description": "Entra External ID tenant id (GitHub var EXTERNAL_TENANT_ID). Easy Auth signs in through it; always allowed, and handed to the router and the platform as EXTERNAL_TENANT_IDS."
+      }
+    },
+    "externalNewUsersEnabled": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "true = a new External ID identity becomes a new platform user (GitHub var EXTERNAL_NEW_USERS_ENABLED; default on); false = 503 migration_pending."
       }
     },
     "externalClientId": {
       "type": "string",
-      "defaultValue": "",
       "metadata": {
-        "description": "Client id of the Entra External ID app registration (GitHub var AUTH_EXTERNAL_CLIENT_ID). Used by Easy Auth in external mode."
+        "description": "Client id of the Entra External ID app registration (GitHub var AUTH_EXTERNAL_CLIENT_ID), the Easy Auth client."
       }
     },
     "externalAuthorityHost": {
@@ -224,8 +204,8 @@
   },
   "variables": {
     "normalizedExternalTenantId": "[toLower(trim(parameters('externalTenantId')))]",
-    "baseAllowedTenantIds": "[if(not(empty(trim(parameters('allowedTenantIds')))), toLower(replace(parameters('allowedTenantIds'), ' ', '')), toLower(if(not(empty(parameters('tenantId'))), parameters('tenantId'), tenant().tenantId)))]",
-    "effectiveAllowedTenantIds": "[if(or(empty(variables('normalizedExternalTenantId')), contains(split(variables('baseAllowedTenantIds'), ','), variables('normalizedExternalTenantId'))), variables('baseAllowedTenantIds'), format('{0},{1}', variables('baseAllowedTenantIds'), variables('normalizedExternalTenantId')))]"
+    "extraAllowedTenantIds": "[toLower(replace(parameters('allowedTenantIds'), ' ', ''))]",
+    "effectiveAllowedTenantIds": "[if(empty(variables('extraAllowedTenantIds')), variables('normalizedExternalTenantId'), if(contains(split(variables('extraAllowedTenantIds'), ','), variables('normalizedExternalTenantId')), variables('extraAllowedTenantIds'), format('{0},{1}', variables('extraAllowedTenantIds'), variables('normalizedExternalTenantId'))))]"
   },
   "resources": [
     {
@@ -239,70 +219,6 @@
       "apiVersion": "2021-04-01",
       "name": "[parameters('dnsResourceGroupName')]",
       "location": "[parameters('location')]"
-    },
-    {
-      "type": "Microsoft.Resources/deployments",
-      "apiVersion": "2025-04-01",
-      "name": "authIdentityDeployment",
-      "resourceGroup": "[parameters('resourceGroupName')]",
-      "properties": {
-        "expressionEvaluationOptions": {
-          "scope": "inner"
-        },
-        "mode": "Incremental",
-        "parameters": {
-          "location": {
-            "value": "[parameters('location')]"
-          },
-          "managedIdentityName": {
-            "value": "[format('mi-fs-site-auth-{0}', uniqueString(subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))))]"
-          }
-        },
-        "template": {
-          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
-          "contentVersion": "1.0.0.0",
-          "metadata": {
-            "_generator": {
-              "name": "bicep",
-              "version": "0.48.1.52935",
-              "templateHash": "6070345621224514620"
-            }
-          },
-          "parameters": {
-            "location": {
-              "type": "string"
-            },
-            "managedIdentityName": {
-              "type": "string"
-            }
-          },
-          "resources": [
-            {
-              "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
-              "apiVersion": "2023-01-31",
-              "name": "[parameters('managedIdentityName')]",
-              "location": "[parameters('location')]"
-            }
-          ],
-          "outputs": {
-            "clientId": {
-              "type": "string",
-              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('managedIdentityName')), '2023-01-31').clientId]"
-            },
-            "principalId": {
-              "type": "string",
-              "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('managedIdentityName')), '2023-01-31').principalId]"
-            },
-            "resourceId": {
-              "type": "string",
-              "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('managedIdentityName'))]"
-            }
-          }
-        }
-      },
-      "dependsOn": [
-        "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
-      ]
     },
     {
       "type": "Microsoft.Resources/deployments",
@@ -324,14 +240,8 @@
           "appServicePlanName": {
             "value": "asp-fs-site-web"
           },
-          "authClientId": {
-            "value": "[parameters('authClientId')]"
-          },
           "authLoginProvider": {
             "value": "[parameters('authLoginProvider')]"
-          },
-          "authTenantMode": {
-            "value": "[parameters('authTenantMode')]"
           },
           "externalClientId": {
             "value": "[trim(parameters('externalClientId'))]"
@@ -348,13 +258,6 @@
           "externalAccessRole": {
             "value": "[parameters('externalAccessRole')]"
           },
-          "authManagedIdentityClientId": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'authIdentityDeployment'), '2025-04-01').outputs.clientId.value]"
-          },
-          "authManagedIdentityResourceId": {
-            "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'authIdentityDeployment'), '2025-04-01').outputs.resourceId.value]"
-          },
-          "tenantId": "[if(not(empty(parameters('tenantId'))), createObject('value', parameters('tenantId')), createObject('value', subscription().tenantId))]",
           "functionAppUrlPlatform": {
             "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformFunctionDeployment'), '2025-04-01').outputs.functionAppUrl.value]"
           },
@@ -402,7 +305,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.48.1.52935",
-              "templateHash": "15279050544107427960"
+              "templateHash": "8509818150449815487"
             }
           },
           "parameters": {
@@ -423,43 +326,16 @@
               "type": "string",
               "defaultValue": "Basic"
             },
-            "authClientId": {
-              "type": "string",
-              "defaultValue": ""
-            },
-            "authManagedIdentityClientId": {
-              "type": "string",
-              "defaultValue": ""
-            },
-            "authManagedIdentityResourceId": {
-              "type": "string",
-              "defaultValue": ""
-            },
-            "tenantId": {
-              "type": "string",
-              "defaultValue": "[subscription().tenantId]"
-            },
-            "authTenantMode": {
-              "type": "string",
-              "defaultValue": "workforce",
-              "allowedValues": [
-                "workforce",
-                "external"
-              ],
-              "metadata": {
-                "description": "workforce (default) or external. external needs externalTenantId and externalClientId; without them the deployment stays workforce."
-              }
-            },
             "externalClientId": {
               "type": "string",
-              "defaultValue": "",
+              "minLength": 1,
               "metadata": {
                 "description": "Client id of the Entra External ID app registration (GitHub var AUTH_EXTERNAL_CLIENT_ID)."
               }
             },
             "externalTenantId": {
               "type": "string",
-              "defaultValue": "",
+              "minLength": 1,
               "metadata": {
                 "description": "External tenant id (GitHub var EXTERNAL_TENANT_ID)."
               }
@@ -564,9 +440,8 @@
             },
             "allowedTenantIds": {
               "type": "string",
-              "defaultValue": "[tenant().tenantId]",
               "metadata": {
-                "description": "Comma-separated Entra tenant ids whose principals may use the APIs (ALLOWED_TENANT_IDS). Defaults to the deployment tenant; any other tenant gets 403 tenant_not_allowed from the router. Empty = nobody (fail closed)."
+                "description": "Comma-separated Entra tenant ids whose principals may use the APIs (ALLOWED_TENANT_IDS); any other tenant gets 403 tenant_not_allowed from the router. Empty = nobody (fail closed)."
               }
             },
             "hovtpHealthUrl": {
@@ -613,11 +488,7 @@
             }
           },
           "variables": {
-            "externalMode": "[and(and(equals(parameters('authTenantMode'), 'external'), not(empty(parameters('externalClientId')))), not(empty(parameters('externalTenantId'))))]",
-            "effectiveAuthTenantMode": "[if(variables('externalMode'), 'external', 'workforce')]",
-            "effectiveExternalAuthorityHost": "[if(not(empty(parameters('externalAuthorityHost'))), parameters('externalAuthorityHost'), format('{0}.ciamlogin.com', parameters('externalTenantId')))]",
-            "easyAuthClientId": "[if(variables('externalMode'), parameters('externalClientId'), parameters('authClientId'))]",
-            "aadRegistration": "[if(variables('externalMode'), createObject('clientId', parameters('externalClientId'), 'openIdIssuer', format('https://{0}/{1}/v2.0', variables('effectiveExternalAuthorityHost'), parameters('externalTenantId'))), createObject('clientId', parameters('authClientId'), 'clientSecretSettingName', 'OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID', 'openIdIssuer', format('{0}{1}/v2.0', environment().authentication.loginEndpoint, parameters('tenantId'))))]"
+            "effectiveExternalAuthorityHost": "[if(not(empty(parameters('externalAuthorityHost'))), parameters('externalAuthorityHost'), format('{0}.ciamlogin.com', parameters('externalTenantId')))]"
           },
           "resources": [
             {
@@ -640,10 +511,7 @@
               "location": "[parameters('location')]",
               "kind": "app,linux",
               "identity": {
-                "type": "UserAssigned",
-                "userAssignedIdentities": {
-                  "[format('{0}', parameters('authManagedIdentityResourceId'))]": {}
-                }
+                "type": "None"
               },
               "properties": {
                 "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]",
@@ -685,7 +553,6 @@
               ]
             },
             {
-              "condition": "[not(empty(parameters('authClientId')))]",
               "type": "Microsoft.Web/sites/config",
               "apiVersion": "2022-09-01",
               "name": "[format('{0}/{1}', parameters('webAppName'), 'authsettingsV2')]",
@@ -699,13 +566,20 @@
                 "identityProviders": {
                   "azureActiveDirectory": {
                     "enabled": true,
-                    "registration": "[variables('aadRegistration')]",
+                    "registration": {
+                      "clientId": "[parameters('externalClientId')]",
+                      "openIdIssuer": "[format('https://{0}/{1}/v2.0', variables('effectiveExternalAuthorityHost'), parameters('externalTenantId'))]"
+                    },
                     "validation": {
                       "allowedAudiences": [
-                        "[variables('easyAuthClientId')]"
+                        "[parameters('externalClientId')]"
                       ]
                     },
-                    "login": "[if(variables('externalMode'), createObject('loginParameters', createArray('scope=openid profile email')), createObject())]"
+                    "login": {
+                      "loginParameters": [
+                        "scope=openid profile email"
+                      ]
+                    }
                   }
                 },
                 "login": {
@@ -722,7 +596,26 @@
               "type": "Microsoft.Web/sites/config",
               "apiVersion": "2022-09-01",
               "name": "[format('{0}/{1}', parameters('webAppName'), 'appsettings')]",
-              "properties": "[union(createObject('FUNCTION_APP_URL_PLATFORM', parameters('functionAppUrlPlatform'), 'FUNCTION_APP_URL_JUDGEPAPERS', parameters('functionAppUrlJudgepapers'), 'FUNCTION_APP_URL_SCOREMODIFIER', parameters('functionAppUrlScoremodifier'), 'FUNCTION_APP_URL_PROTOCOLGENERATOR', parameters('functionAppUrlProtocolgenerator'), 'FUNCTION_APP_URL_GDPRTOOL', parameters('functionAppUrlGdprtool'), 'PROXY_SHARED_SECRET_PLATFORM', parameters('proxySharedSecretPlatform'), 'PROXY_SHARED_SECRET_JUDGEPAPERS', parameters('proxySharedSecretJudgepapers'), 'PROXY_SHARED_SECRET_SCOREMODIFIER', parameters('proxySharedSecretScoremodifier'), 'PROXY_SHARED_SECRET_PROTOCOLGENERATOR', parameters('proxySharedSecretProtocolgenerator'), 'PROXY_SHARED_SECRET_GDPRTOOL', parameters('proxySharedSecretGdprtool'), 'AUTH_LOGIN_PROVIDER', if(empty(parameters('authLoginProvider')), 'aad', parameters('authLoginProvider')), 'AUTH_TENANT_MODE', variables('effectiveAuthTenantMode'), 'EXTERNAL_TENANT_IDS', parameters('externalTenantIds'), 'EXTERNAL_ACCESS_ROLE', if(empty(trim(parameters('externalAccessRole'))), 'Site.Access', trim(parameters('externalAccessRole'))), 'ADMIN_ROLE', if(empty(trim(parameters('adminRole'))), 'Site.Admin', trim(parameters('adminRole'))), 'ALLOWED_TENANT_IDS', parameters('allowedTenantIds'), 'HOVTP_HEALTH_URL', parameters('hovtpHealthUrl'), 'NODE_ENV', 'production', 'SCM_DO_BUILD_DURING_DEPLOYMENT', 'false'), if(or(empty(parameters('authClientId')), variables('externalMode')), createObject(), createObject('OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID', parameters('authManagedIdentityClientId'))))]",
+              "properties": {
+                "FUNCTION_APP_URL_PLATFORM": "[parameters('functionAppUrlPlatform')]",
+                "FUNCTION_APP_URL_JUDGEPAPERS": "[parameters('functionAppUrlJudgepapers')]",
+                "FUNCTION_APP_URL_SCOREMODIFIER": "[parameters('functionAppUrlScoremodifier')]",
+                "FUNCTION_APP_URL_PROTOCOLGENERATOR": "[parameters('functionAppUrlProtocolgenerator')]",
+                "FUNCTION_APP_URL_GDPRTOOL": "[parameters('functionAppUrlGdprtool')]",
+                "PROXY_SHARED_SECRET_PLATFORM": "[parameters('proxySharedSecretPlatform')]",
+                "PROXY_SHARED_SECRET_JUDGEPAPERS": "[parameters('proxySharedSecretJudgepapers')]",
+                "PROXY_SHARED_SECRET_SCOREMODIFIER": "[parameters('proxySharedSecretScoremodifier')]",
+                "PROXY_SHARED_SECRET_PROTOCOLGENERATOR": "[parameters('proxySharedSecretProtocolgenerator')]",
+                "PROXY_SHARED_SECRET_GDPRTOOL": "[parameters('proxySharedSecretGdprtool')]",
+                "AUTH_LOGIN_PROVIDER": "[if(empty(parameters('authLoginProvider')), 'aad', parameters('authLoginProvider'))]",
+                "EXTERNAL_TENANT_IDS": "[parameters('externalTenantIds')]",
+                "EXTERNAL_ACCESS_ROLE": "[if(empty(trim(parameters('externalAccessRole'))), 'Site.Access', trim(parameters('externalAccessRole')))]",
+                "ADMIN_ROLE": "[if(empty(trim(parameters('adminRole'))), 'Site.Admin', trim(parameters('adminRole')))]",
+                "ALLOWED_TENANT_IDS": "[parameters('allowedTenantIds')]",
+                "HOVTP_HEALTH_URL": "[parameters('hovtpHealthUrl')]",
+                "NODE_ENV": "production",
+                "SCM_DO_BUILD_DURING_DEPLOYMENT": "false"
+              },
               "dependsOn": [
                 "[resourceId('Microsoft.Web/sites', parameters('webAppName'))]"
               ]
@@ -751,16 +644,11 @@
             "appServicePlanId": {
               "type": "string",
               "value": "[resourceId('Microsoft.Web/serverfarms', parameters('appServicePlanName'))]"
-            },
-            "authTenantMode": {
-              "type": "string",
-              "value": "[variables('effectiveAuthTenantMode')]"
             }
           }
         }
       },
       "dependsOn": [
-        "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'authIdentityDeployment')]",
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'hovtpFunctionDeployment')]",
         "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'platformFunctionDeployment')]",
         "[subscriptionResourceId('Microsoft.Resources/resourceGroups', parameters('resourceGroupName'))]"
@@ -1158,6 +1046,9 @@
           "externalTenantIds": {
             "value": "[variables('normalizedExternalTenantId')]"
           },
+          "externalNewUsersEnabled": {
+            "value": "[parameters('externalNewUsersEnabled')]"
+          },
           "hovtpEnabled": {
             "value": "[parameters('hovtpEnabled')]"
           }
@@ -1169,7 +1060,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.48.1.52935",
-              "templateHash": "12036322609162971322"
+              "templateHash": "11890412408411459823"
             }
           },
           "parameters": {
@@ -1270,6 +1161,13 @@
               "defaultValue": "",
               "metadata": {
                 "description": "Comma-separated Entra External ID tenant ids (EXTERNAL_TENANT_IDS)."
+              }
+            },
+            "externalNewUsersEnabled": {
+              "type": "bool",
+              "defaultValue": true,
+              "metadata": {
+                "description": "true = a new External ID identity becomes a new user; false = 503 migration_pending."
               }
             },
             "hovtpEnabled": {
@@ -1391,6 +1289,10 @@
                     {
                       "name": "EXTERNAL_TENANT_IDS",
                       "value": "[parameters('externalTenantIds')]"
+                    },
+                    {
+                      "name": "EXTERNAL_NEW_USERS_ENABLED",
+                      "value": "[string(parameters('externalNewUsersEnabled'))]"
                     }
                   ]
                 },
@@ -2548,18 +2450,6 @@
     "webAppInboundIpAddress": {
       "type": "string",
       "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'webAppDeployment'), '2025-04-01').outputs.inboundIpAddress.value]"
-    },
-    "authTenantMode": {
-      "type": "string",
-      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'webAppDeployment'), '2025-04-01').outputs.authTenantMode.value]"
-    },
-    "authManagedIdentityClientId": {
-      "type": "string",
-      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'authIdentityDeployment'), '2025-04-01').outputs.clientId.value]"
-    },
-    "authManagedIdentityObjectId": {
-      "type": "string",
-      "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, parameters('resourceGroupName')), 'Microsoft.Resources/deployments', 'authIdentityDeployment'), '2025-04-01').outputs.principalId.value]"
     },
     "platformFunctionAppName": {
       "type": "string",

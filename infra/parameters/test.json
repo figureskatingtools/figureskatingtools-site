@@ -11,12 +11,6 @@
     "customDomain": {
       "value": "test.figureskatingtools.com"
     },
-    "authClientId": {
-      "value": ""
-    },
-    "tenantId": {
-      "value": ""
-    },
     "proxySharedSecretPlatform": {
       "value": ""
     },
@@ -53,9 +47,6 @@
     "allowedTenantIds": {
       "value": ""
     },
-    "authTenantMode": {
-      "value": "workforce"
-    },
     "externalTenantId": {
       "value": ""
     },
@@ -67,6 +58,9 @@
     },
     "externalAccessRole": {
       "value": ""
+    },
+    "externalNewUsersEnabled": {
+      "value": true
     },
     "toolFunctionPrincipalIds": {
       "value": [

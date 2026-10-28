@@ -1,46 +1,37 @@
 # Entra External ID — the hand-configured tenant
 
-The site is moving its sign-in from the **workforce** tenant to a Microsoft
-Entra **External ID** (customer) tenant. Nothing inside that tenant is IaC: the
-ARM type for the directory is preview-only and not idempotent, and user flows,
-branding, apps and groups have no Bicep surface anyway. This runbook is the
+The site signs in through a Microsoft Entra **External ID** (customer) tenant,
+the only sign-in since the move from the workforce tenant (2026-10). Nothing
+inside that tenant is IaC: the ARM type for the directory is preview-only and
+not idempotent, and user flows, branding, apps and groups have no Bicep surface
+anyway. This runbook is the
 record of every hand step, so the setup stays reproducible.
 
 Code owns everything **outside** the tenant: the Easy Auth configuration
-(`modules/webapp.bicep`, credential-free in external mode), `ALLOWED_TENANT_IDS`,
-the router's claim handling (`server/server.js`), the platform's
-`migration_pending` gate (`functions/function_app.py`), and later the Front Door
-route + DNS for the custom URL domain (`azure-publishing`). The tenant and app
+(`modules/webapp.bicep`, credential-free), `ALLOWED_TENANT_IDS`, the router's
+claim handling (`server/server.js`), the platform's `migration_pending` switch
+(`functions/function_app.py`), and the Front Door route + DNS for the custom URL
+domain `login.figureskatingtools.com` (`azure-publishing`). The tenant and app
 ids reach code as GitHub vars (below).
 
-Phases: A = this directory (done by hand), **B = code readiness** (this repo:
-test signs in through External ID, prod stays workforce), C = migration (link
-external identities to existing users by verified e-mail, then switch prod).
+Phases: A = this directory (done by hand), B = code readiness, C = migration
+(existing users linked by hand, prod switched 2026-10-27), D = the workforce
+sign-in removed (see [Workforce clean-up](#workforce-clean-up-phase-d)).
 
-## How Easy Auth reaches the tenant: one provider, two modes
+## How Easy Auth reaches the tenant
 
 There is **one** Easy Auth provider, the built-in Microsoft one
-(`azureActiveDirectory`, URL segment `aad`). The GitHub var
-**`AUTH_TENANT_MODE`** decides which tenant it signs in with:
+(`azureActiveDirectory`, URL segment `aad`):
 
-| Mode | Client id | Issuer | Credential |
-| --- | --- | --- | --- |
-| `workforce` (default) | `AUTH_CLIENT_ID` (workforce app) | `https://login.microsoftonline.com/<workforce tenant>/v2.0` | MI federated credential (`OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID`) |
-| `external` | `AUTH_EXTERNAL_CLIENT_ID` | `https://<AUTH_EXTERNAL_AUTHORITY_HOST>/<EXTERNAL_TENANT_ID>/v2.0` | **none** |
+| Client id | Issuer | Credential |
+| --- | --- | --- |
+| `AUTH_EXTERNAL_CLIENT_ID` | `https://<AUTH_EXTERNAL_AUTHORITY_HOST>/<EXTERNAL_TENANT_ID>/v2.0` | **none** |
 
-In external mode `allowedAudiences` is the external client id, and
-`loginParameters` asks for `scope=openid profile email` so the `email` claim
-arrives. `/signin`, `/.auth/login/aad` and `AUTH_LOGIN_PROVIDER=aad` are the same
-in both modes, so the frontends never notice.
-
-- **test** runs `external` (only members of `fst-test-access` get in, see
-  [Access gate](#access-gate-the-siteaccess-app-role)).
-- **prod** stays `workforce` until phase C goes live. Go-live is one var
-  (`AUTH_TENANT_MODE=external`) plus a redeploy; the rollback is setting it back
-  to `workforce` and redeploying.
-- `EXTERNAL_TENANT_ID` is in the effective `ALLOWED_TENANT_IDS` in **both** modes,
-  so sessions the other tenant issued before a switch keep working until they
-  expire.
+`allowedAudiences` is that client id, and `loginParameters` asks for
+`scope=openid profile email` so the `email` claim arrives. The router's
+`/signin` sends users to `/.auth/login/aad` (`AUTH_LOGIN_PROVIDER=aad`). Only
+members of `fst-test-access` get into test, see
+[Access gate](#access-gate-the-siteaccess-app-role).
 
 **Why there is no custom OIDC provider.** Phase B first added a second provider,
 custom OIDC `externalid`, without a `clientCredential`. ARM accepted it, but
@@ -52,8 +43,8 @@ ID-token flow when it has no secret, so External ID goes through that one.
 ## The rule: never add a secret to the site apps
 
 The two External ID site app registrations have **no client secret, no
-certificate and no federated credential, ever**, and in external mode
-`webapp.bicep` sets no `clientSecretSettingName`. Do not "fix" a sign-in problem
+certificate and no federated credential, ever**, and `webapp.bicep` sets no
+`clientSecretSettingName`. Do not "fix" a sign-in problem
 by adding one.
 
 Why this is enough:
@@ -65,9 +56,9 @@ Why this is enough:
   **ID-token flow** (`response_type=id_token`, `response_mode=form_post` to
   `/.auth/login/aad/callback`) and validates the signature, `iss`, `aud` (our
   client id) and the nonce itself.
-- The workforce managed-identity FIC can't be reused: App Service supports it
-  for workforce configurations only, and Entra tokens can't be federated into
-  another tenant's app. Azure/M365 Lighthouse don't take part in sign-ins at all.
+- The managed-identity FIC the former workforce sign-in used can't work here:
+  App Service supports it for workforce configurations only, and Entra tokens
+  can't be federated into another tenant's app. Azure/M365 Lighthouse don't take part in sign-ins at all.
 - No secret means nothing to leak, rotate or expire on the site side.
 
 ## Tenant
@@ -77,17 +68,15 @@ Why this is enough:
 | Name | `figureskatingtools.onmicrosoft.com` (Finland/Europe region) |
 | Tenant id | `380073b3-804e-4cc7-bfcc-843637630d04` |
 | Resource | in the persistent RG `rg-fs-identity` (like `rg-fs-dns`, never torn down); billed per MAU via the existing subscription |
-| Authority host (now) | `380073b3-804e-4cc7-bfcc-843637630d04.ciamlogin.com` |
+| Authority host | `login.figureskatingtools.com` (custom URL domain through Front Door; `380073b3-804e-4cc7-bfcc-843637630d04.ciamlogin.com` works too) |
 | Metadata | `https://<host>/380073b3-804e-4cc7-bfcc-843637630d04/v2.0/.well-known/openid-configuration` |
 | Issuer | `https://380073b3-804e-4cc7-bfcc-843637630d04.ciamlogin.com/380073b3-804e-4cc7-bfcc-843637630d04/v2.0` |
 
 - **The primary domain must stay `figureskatingtools.onmicrosoft.com`.** Making
   `login.figureskatingtools.com` primary broke the user flow's *Run user flow*
   with `AADSTS500210`.
-- Don't use `login.ciamlogin.com` or `login.figureskatingtools.com` as the
-  authority yet. `login.figureskatingtools.com` becomes the custom URL domain
-  once its Front Door route exists; then only `AUTH_EXTERNAL_AUTHORITY_HOST`
-  changes.
+- `login.figureskatingtools.com` must stay listed under **Custom URL domains**
+  (else `AADSTS399280`). Don't use `login.ciamlogin.com` as the authority.
 - Admins: the creating workforce account is Global Admin, plus a cloud-only
   break-glass GA. Directory admins are separate from customer identities: the
   owner uses the site with a self-signed-up account, which is in the
@@ -110,8 +99,7 @@ OIDC provider) can be removed.
 - Certificates & secrets: **empty**, permanently (see the rule above). An
   app-management policy in the tenant may enforce it.
 - App role **`Site.Access`** on both, assigned to `fst-test-access` (test) and
-  to the owner only (prod, until phase C goes live — that keeps the dark launch
-  dark). Enterprise application → **Assignment required = No** on both, *after*
+  to the prod access group (prod). Enterprise application → **Assignment required = No** on both, *after*
   the access gate is deployed; see [Access gate](#access-gate-the-siteaccess-app-role).
 - Both apps are associated with the one user flow below.
 - Manifest: `acceptMappedClaims: true` (needed for the mapped `termsAccepted`
@@ -133,7 +121,7 @@ page, which can't be customised. Instead:
   contact …", English, with a mailto and Sign out), `/userinfo` is 403
   `access_not_granted` with just the name and e-mail, and every API and
   `/admin/*` is 403 `access_not_granted`, never proxied. Admins get no
-  exception. Workforce identities are unaffected.
+  exception. Identities of other allowed tenants are unaffected.
 
 **Order matters** (tenant side, by hand):
 
@@ -182,20 +170,14 @@ For a single user, use the user's object id as `principalId`.
 Site admins (the `/admin/` panel and `/api/manage/*`) are whoever carries the
 app role **`Site.Admin`** (`ADMIN_ROLE` overrides the name). There is no admin
 e-mail list and no break-glass e-mail: `ADMIN_EMAILS` is gone. The router reads
-the role from the ID token's `roles` claim in **both** tenant modes and tells
-the platform with `X-Forwarded-User-Admin: 1`. `Site.Admin` implies
+the role from the ID token's `roles` claim and tells the platform with `X-Forwarded-User-Admin: 1`. `Site.Admin` implies
 `Site.Access`, so admins need no second assignment.
 
-Because prod runs in **workforce** mode until phase C go-live, the role is
-needed in both tenants:
+It is defined on both External ID apps (test `16c69665-…`, prod `177abce3-…`)
+and assigned to the group **`fst-admins`** (the owner's customer account).
 
-| Tenant | App registration | Assigned to |
-| --- | --- | --- |
-| External ID | test `16c69665-…`, prod `177abce3-…` | group **`fst-admins`** (create it; add the owner's customer account) |
-| Workforce | the Easy Auth app of each environment (`AUTH_CLIENT_ID` of test and of prod) | the owner's workforce account (Enterprise applications → the app → Users and groups → Add, role `Site.Admin`) |
-
-Manifest snippet for `appRoles` (next to `Site.Access` on the External ID apps;
-on its own on the workforce apps). Generate a fresh GUID for `id`:
+Manifest snippet for `appRoles` (next to `Site.Access`). Generate a fresh GUID
+for `id`:
 
 ```json
 {
@@ -222,16 +204,6 @@ az rest --method POST \
   --headers 'Content-Type=application/json' \
   --body "{\"principalId\":\"$GROUP_ID\",\"resourceId\":\"$SP_ID\",\"appRoleId\":\"$ROLE_ID\"}"
 ```
-
-**Rollout order** (or prod loses its admins):
-
-1. Add `Site.Admin` and assign it in **both** tenants: the External ID apps
-   (→ `fst-admins`) and the workforce Easy Auth apps of test and prod (→ the
-   owner). Sign out and in again so the new token carries `roles`.
-2. Deploy to test and check the admin panel there.
-3. Merge to `main` (prod deploy). Check the admin panel on prod.
-4. Only then delete the `ADMIN_EMAILS` GitHub environment variables (test and
-   prod); nothing reads them any more.
 
 ## User flow (sign-up and sign-in, shared by both apps)
 
@@ -322,44 +294,63 @@ provider config first, then deleting the old one.
 
 | Variable | test | prod |
 | --- | --- | --- |
-| `AUTH_TENANT_MODE` | `external` | unset (`workforce`) until phase C go-live |
-| `EXTERNAL_TENANT_ID` | `380073b3-804e-4cc7-bfcc-843637630d04` | same, at phase C |
-| `AUTH_EXTERNAL_CLIENT_ID` | `16c69665-3430-42b5-a789-f27bcb21f718` | `177abce3-dc07-4c94-b217-22c084f47481`, at phase C |
-| `AUTH_EXTERNAL_AUTHORITY_HOST` | `380073b3-804e-4cc7-bfcc-843637630d04.ciamlogin.com` | same, at phase C |
+| `EXTERNAL_TENANT_ID` | `380073b3-804e-4cc7-bfcc-843637630d04` | same |
+| `AUTH_EXTERNAL_CLIENT_ID` | `16c69665-3430-42b5-a789-f27bcb21f718` | `177abce3-dc07-4c94-b217-22c084f47481` |
+| `AUTH_EXTERNAL_AUTHORITY_HOST` | `login.figureskatingtools.com` | same |
+| `ALLOWED_TENANT_IDS` | unset (the External ID tenant only) | unset (same) |
 | `AUTH_LOGIN_PROVIDER` | unset (`aad`) | unset (`aad`) |
 | `EXTERNAL_ACCESS_ROLE` | unset (`Site.Access`) | unset (`Site.Access`) |
-| `EXTERNAL_NEW_USERS_ENABLED` | unset (`true`: new users are created) | unset (`false`) until the existing users are linked at phase C, then `true` |
+| `EXTERNAL_NEW_USERS_ENABLED` | unset (`true`: new users are created) | unset (`true`) |
 | `ADMIN_ROLE` | unset (`Site.Admin`) | unset (`Site.Admin`) |
 
 Variables only — there is no External ID secret to configure. `deploy-site.yml`:
 
-- refuses to deploy `AUTH_TENANT_MODE=external` without both `EXTERNAL_TENANT_ID`
-  and `AUTH_EXTERNAL_CLIENT_ID`, and any value other than `workforce`/`external`;
-- with `EXTERNAL_TENANT_ID` set (either mode), appends the tenant to
-  `ALLOWED_TENANT_IDS` for the router and the platform, and writes it to both as
+- refuses to deploy without both `EXTERNAL_TENANT_ID` and
+  `AUTH_EXTERNAL_CLIENT_ID` (and `webapp.bicep` refuses an empty one);
+- adds the tenant to `ALLOWED_TENANT_IDS` (always allowed; the variable only
+  adds other tenants) for the router and the platform, and writes it to both as
   `EXTERNAL_TENANT_IDS`:
   - the router takes those identities' e-mail **only** from the `email` claim
     (their `preferred_username` / principal name need not be an e-mail), and
     requires the `EXTERNAL_ACCESS_ROLE` app role of them (else `/no-access/`);
   - the platform answers a new identity of that tenant with **503
-    `migration_pending`** and creates no user, unless
-    `EXTERNAL_NEW_USERS_ENABLED` is on (test by default; prod after the phase C
-    linking): then it becomes a new user with `Provider` `entra-external`, with
-    no legacy e-mail claim;
-- shows the mode ("Sign-in tenant") and the External ID tenant count in the admin
-  Diagnostics tab, and the mode in the run summary.
+    `migration_pending`** and creates no user when `EXTERNAL_NEW_USERS_ENABLED`
+    is `false` (the switch for linking users by hand first); by default it
+    becomes a new user with `Provider` `entra-external`, with no legacy e-mail
+    claim;
+- shows the External ID tenant count in the admin Diagnostics tab.
 
-The workforce provider's Graph step (redirect URIs + FIC on the workforce app)
-keeps running in both modes until phase D.
+The redirect URIs of the External ID apps are kept by hand (no Graph step).
 
 ## Checks after a deploy
 
 ```bash
-# external mode: 302 to the ciamlogin authorize endpoint with
+# 302 to the login.figureskatingtools.com authorize endpoint with
 # response_type=id_token, response_mode=form_post and the external client_id
-# (workforce mode: login.microsoftonline.com, the workforce client_id)
 curl -s -o /dev/null -w '%{redirect_url}\n' https://test.figureskatingtools.com/.auth/login/aad
 # no credential in the deployed config
 az webapp auth show -g rg-fs-site-test -n <app> \
   --query 'properties.identityProviders.azureActiveDirectory.registration'
 ```
+
+## Workforce clean-up (phase D)
+
+The workforce sign-in (the workforce app registrations, the managed-identity
+federated credential and the deploy workflow's Graph step) is gone from the code:
+`webapp.bicep` configures only External ID and sets the Web App's identity to
+`None`, and `ALLOWED_TENANT_IDS` no longer includes the workforce tenant. Left
+over by hand, **after** that code is in prod (there is no rollback to the
+workforce sign-in afterwards):
+
+1. GitHub: delete the secrets `AUTH_CLIENT_ID` and `AUTH_APP_OBJECT_ID` (test and
+   prod) and the variable `AUTH_TENANT_MODE` (test and prod). Nothing reads them.
+2. Azure: delete the user-assigned managed identities `mi-fs-site-auth-*` in
+   `rg-fs-site-prod` and `rg-fs-site-test` (Bicep never deletes resources).
+3. Workforce tenant: delete the two Easy Auth app registrations of test and prod
+   (their enterprise apps, `Site.Admin` assignments, federated credentials and
+   the deploy principal's ownership go with them); groups and Conditional
+   Access policies that only served them; any Graph permission the deploy
+   principal held only for the removed step (check the tool repos don't use it).
+4. Optional: the platform's `useridentities` rows with `Provider` `entra` (the
+   workforce identities). Nobody can sign in with them any more; they are kept
+   as history otherwise.

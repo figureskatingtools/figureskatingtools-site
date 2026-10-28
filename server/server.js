@@ -199,9 +199,6 @@ function loadConfig(env = process.env) {
         devFakeRoles: isProduction ? [] : parseList(env.DEV_FAKE_ROLES),
         // Easy Auth provider segment of /.auth/login/<provider> used by /signin.
         loginProvider: (env.AUTH_LOGIN_PROVIDER || '').trim() || DEFAULT_LOGIN_PROVIDER,
-        // Which tenant Easy Auth signs in with (webapp.bicep). Diagnostics only;
-        // Easy Auth itself decides.
-        authTenantMode: (env.AUTH_TENANT_MODE || '').trim().toLowerCase() === 'external' ? 'external' : 'workforce',
         // Entra External ID tenants: their identities' e-mail comes only from
         // the `email` claim.
         externalTenantIds: parseTenantIds(env.EXTERNAL_TENANT_IDS),
@@ -334,8 +331,8 @@ function findClaim(parsed, types) {
 }
 
 const NAME_CLAIMS = ['name', 'http://schemas.xmlsoap.org/ws/2005/05/identity/claims/name'];
-// Entra External ID identities arrive through the same `aad` Easy Auth provider
-// (AUTH_TENANT_MODE=external) and are told apart by their tid being in
+// Entra External ID identities arrive through the `aad` Easy Auth provider and
+// are told apart by their tid being in
 // EXTERNAL_TENANT_IDS. Their e-mail comes from the `email` claim and nothing
 // else: preferred_username / the principal name need not be an e-mail there.
 // App Service may hand `email` on under its long schema name.
@@ -1104,7 +1101,6 @@ async function handleDiagnostics(res, config, runtime) {
             adminRole: config.adminRole,
             allowedTenantCount: config.allowedTenantIds.size,
             loginProvider: config.loginProvider,
-            authTenantMode: config.authTenantMode || 'workforce',
             externalTenantCount: config.externalTenantIds ? config.externalTenantIds.size : 0,
             devFakeUser: Boolean(config.devFakeUser),
         },

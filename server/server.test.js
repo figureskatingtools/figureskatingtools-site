@@ -1523,7 +1523,6 @@ test('GET /admin/api/diagnostics: admins only, booleans for config, health of ev
         assert.equal(body.config.hovtpHealthUrl, true);
         assert.equal(body.config.adminRole, 'Site.Admin');
         assert.equal(body.config.loginProvider, 'aad');
-        assert.equal(body.config.authTenantMode, 'workforce');
         assert.equal(body.config.externalTenantCount, 0);
         assert.equal(body.config.devFakeUser, false);
 
@@ -2068,7 +2067,7 @@ test('a non-ASCII e-mail is no e-mail: the Kelvin sign cannot pose as an ASCII a
     }
 });
 
-// ── Entra External ID (AUTH_TENANT_MODE=external, same `aad` provider) ──────
+// ── Entra External ID (the `aad` provider) ──────────────────────────────────
 
 const EXTERNAL_TENANT_ID = '380073b3-804e-4cc7-bfcc-843637630d04';
 const EXTERNAL_OID = '9f8e7d6c-5b4a-4392-8170-6f5e4d3c2b1a';
@@ -2259,10 +2258,7 @@ test('External ID tenant outside ALLOWED_TENANT_IDS gets 403 tenant_not_allowed'
     }
 });
 
-test('AUTH_TENANT_MODE and EXTERNAL_TENANT_IDS are parsed for the diagnostics', () => {
-    assert.equal(loadConfig({}).authTenantMode, 'workforce');
-    assert.equal(loadConfig({ AUTH_TENANT_MODE: 'bogus' }).authTenantMode, 'workforce');
-    assert.equal(loadConfig({ AUTH_TENANT_MODE: ' External ' }).authTenantMode, 'external');
+test('EXTERNAL_TENANT_IDS is parsed for the diagnostics', () => {
     assert.deepEqual([...loadConfig({}).externalTenantIds], []);
     assert.deepEqual([...loadConfig({ EXTERNAL_TENANT_IDS: ` ${EXTERNAL_TENANT_ID.toUpperCase()} ,` }).externalTenantIds], [
         EXTERNAL_TENANT_ID,

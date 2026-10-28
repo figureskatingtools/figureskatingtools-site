@@ -3,39 +3,28 @@
 // proxies /<tool>/api/* + /api/* to the per-tool and platform Function Apps.
 //
 // Replaces the former Static Web App and the per-tool Web Apps: one B1 Linux
-// plan, one Easy Auth (AAD) gate, one custom domain.
+// plan, one Easy Auth gate (Entra External ID), one custom domain.
 param location string
 param webAppName string
 param appServicePlanName string
 param skuName string = 'B1'
 param skuTier string = 'Basic'
-param authClientId string = ''
-param authManagedIdentityClientId string = ''
-param authManagedIdentityResourceId string = ''
-param tenantId string = subscription().tenantId
 
 // --- Entra External ID (customer tenant) ---------------------------------------
-// AUTH_TENANT_MODE picks which tenant the ONE Easy Auth provider
-// (azureActiveDirectory, segment `aad`) signs users in with:
-//   workforce — the workforce tenant, MI federated credential (as before);
-//   external  — the External ID tenant, CREDENTIAL-FREE: no clientSecretSettingName,
-//               so Easy Auth runs the ID-token flow (response_type=id_token,
-//               form_post) and validates the ID token itself. The site never
-//               needs access or refresh tokens. Never add a secret here — see
-//               infra/EXTERNAL-ID.md (also for why there is no custom OIDC provider).
-
-@description('workforce (default) or external. external needs externalTenantId and externalClientId; without them the deployment stays workforce.')
-@allowed([
-  'workforce'
-  'external'
-])
-param authTenantMode string = 'workforce'
+// The ONE Easy Auth provider (azureActiveDirectory, segment `aad`) signs users in
+// through the External ID tenant, CREDENTIAL-FREE: no clientSecretSettingName, so
+// Easy Auth runs the ID-token flow (response_type=id_token, form_post) and
+// validates the ID token itself. The site never needs access or refresh tokens.
+// Never add a secret here — see infra/EXTERNAL-ID.md (also for why there is no
+// custom OIDC provider).
 
 @description('Client id of the Entra External ID app registration (GitHub var AUTH_EXTERNAL_CLIENT_ID).')
-param externalClientId string = ''
+@minLength(1)
+param externalClientId string
 
 @description('External tenant id (GitHub var EXTERNAL_TENANT_ID).')
-param externalTenantId string = ''
+@minLength(1)
+param externalTenantId string
 
 @description('Authority host of the external tenant (GitHub var AUTH_EXTERNAL_AUTHORITY_HOST), e.g. <tenantId>.ciamlogin.com. Empty = <externalTenantId>.ciamlogin.com.')
 param externalAuthorityHost string = ''
@@ -89,8 +78,8 @@ param proxySharedSecretGdprtool string = ''
 @description('App role that makes a user an admin (ADMIN_ROLE). The router serves /admin/ and proxies /api/manage/* only for identities carrying it, and tells the backends with X-Forwarded-User-Admin: 1. Empty = Site.Admin.')
 param adminRole string = 'Site.Admin'
 
-@description('Comma-separated Entra tenant ids whose principals may use the APIs (ALLOWED_TENANT_IDS). Defaults to the deployment tenant; any other tenant gets 403 tenant_not_allowed from the router. Empty = nobody (fail closed).')
-param allowedTenantIds string = tenant().tenantId
+@description('Comma-separated Entra tenant ids whose principals may use the APIs (ALLOWED_TENANT_IDS); any other tenant gets 403 tenant_not_allowed from the router. Empty = nobody (fail closed).')
+param allowedTenantIds string
 
 @description('Health URL of the HOVTP listener, probed by the admin diagnostics (HOVTP_HEALTH_URL).')
 param hovtpHealthUrl string = ''
@@ -138,11 +127,10 @@ resource webApp 'Microsoft.Web/sites@2023-12-01' = {
   name: webAppName
   location: location
   kind: 'app,linux'
+  // The router needs no identity. 'None' detaches the user-assigned identity the
+  // former workforce sign-in used (mi-fs-site-auth-*), which can then be deleted.
   identity: {
-    type: 'UserAssigned'
-    userAssignedIdentities: {
-      '${authManagedIdentityResourceId}': {}
-    }
+    type: 'None'
   }
   properties: {
     serverFarmId: appServicePlan.id
@@ -184,31 +172,11 @@ resource siteLogs 'Microsoft.Web/sites/config@2022-09-01' = {
   }
 }
 
-// external only when it can work; the workflow refuses the deploy before
-// that, so this fallback is just a last line of defence.
-var externalMode = authTenantMode == 'external' && !empty(externalClientId) && !empty(externalTenantId)
-var effectiveAuthTenantMode = externalMode ? 'external' : 'workforce'
 var effectiveExternalAuthorityHost = !empty(externalAuthorityHost)
   ? externalAuthorityHost
   : '${externalTenantId}.ciamlogin.com'
-var easyAuthClientId = externalMode ? externalClientId : authClientId
 
-// workforce: the MI federated credential stands in for a client secret.
-// external: no credential at all (ID-token flow).
-var aadRegistration = externalMode
-  ? {
-      clientId: externalClientId
-      openIdIssuer: 'https://${effectiveExternalAuthorityHost}/${externalTenantId}/v2.0'
-    }
-  : {
-      clientId: authClientId
-      // Sentinel value: Easy Auth uses the federated managed identity named
-      // by the app setting of this name instead of a client secret.
-      clientSecretSettingName: 'OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID'
-      openIdIssuer: '${environment().authentication.loginEndpoint}${tenantId}/v2.0'
-    }
-
-resource authConfig 'Microsoft.Web/sites/config@2022-09-01' = if (!empty(authClientId)) {
+resource authConfig 'Microsoft.Web/sites/config@2022-09-01' = {
   parent: webApp
   name: 'authsettingsV2'
   properties: {
@@ -221,20 +189,22 @@ resource authConfig 'Microsoft.Web/sites/config@2022-09-01' = if (!empty(authCli
     identityProviders: {
       azureActiveDirectory: {
         enabled: true
-        registration: aadRegistration
+        // No credential at all (ID-token flow).
+        registration: {
+          clientId: externalClientId
+          openIdIssuer: 'https://${effectiveExternalAuthorityHost}/${externalTenantId}/v2.0'
+        }
         validation: {
           allowedAudiences: [
-            easyAuthClientId
+            externalClientId
           ]
         }
         // The External ID ID token carries `email` only when it is asked for.
-        login: externalMode
-          ? {
-              loginParameters: [
-                'scope=openid profile email'
-              ]
-            }
-          : {}
+        login: {
+          loginParameters: [
+            'scope=openid profile email'
+          ]
+        }
       }
     }
     login: {
@@ -256,42 +226,31 @@ resource authConfig 'Microsoft.Web/sites/config@2022-09-01' = if (!empty(authCli
 resource siteAppSettings 'Microsoft.Web/sites/config@2022-09-01' = {
   parent: webApp
   name: 'appsettings'
-  properties: union(
-    {
-      FUNCTION_APP_URL_PLATFORM: functionAppUrlPlatform
-      FUNCTION_APP_URL_JUDGEPAPERS: functionAppUrlJudgepapers
-      FUNCTION_APP_URL_SCOREMODIFIER: functionAppUrlScoremodifier
-      FUNCTION_APP_URL_PROTOCOLGENERATOR: functionAppUrlProtocolgenerator
-      FUNCTION_APP_URL_GDPRTOOL: functionAppUrlGdprtool
-      PROXY_SHARED_SECRET_PLATFORM: proxySharedSecretPlatform
-      PROXY_SHARED_SECRET_JUDGEPAPERS: proxySharedSecretJudgepapers
-      PROXY_SHARED_SECRET_SCOREMODIFIER: proxySharedSecretScoremodifier
-      PROXY_SHARED_SECRET_PROTOCOLGENERATOR: proxySharedSecretProtocolgenerator
-      PROXY_SHARED_SECRET_GDPRTOOL: proxySharedSecretGdprtool
-      AUTH_LOGIN_PROVIDER: empty(authLoginProvider) ? 'aad' : authLoginProvider
-      // Which tenant Easy Auth signs in with (diagnostics only).
-      AUTH_TENANT_MODE: effectiveAuthTenantMode
-      // External ID tenants: the router takes those identities' e-mail only
-      // from their email claim.
-      EXTERNAL_TENANT_IDS: externalTenantIds
-      // The app role those identities need (else /no-access/).
-      EXTERNAL_ACCESS_ROLE: empty(trim(externalAccessRole)) ? 'Site.Access' : trim(externalAccessRole)
-      ADMIN_ROLE: empty(trim(adminRole)) ? 'Site.Admin' : trim(adminRole)
-      ALLOWED_TENANT_IDS: allowedTenantIds
-      HOVTP_HEALTH_URL: hovtpHealthUrl
-      // Hard-disables DEV_FAKE_USER and DEV_FAKE_ROLES in the router, which the admin check relies on.
-      NODE_ENV: 'production'
-      // The zip already contains the built dist; Oryx must not try to build it.
-      SCM_DO_BUILD_DURING_DEPLOYMENT: 'false'
-    },
-    // Sentinel read by the authsettingsV2 clientSecretSettingName above; only
-    // meaningful when Easy Auth is configured in workforce mode.
-    empty(authClientId) || externalMode
-      ? {}
-      : {
-          OVERRIDE_USE_MI_FIC_ASSERTION_CLIENTID: authManagedIdentityClientId
-        }
-  )
+  properties: {
+    FUNCTION_APP_URL_PLATFORM: functionAppUrlPlatform
+    FUNCTION_APP_URL_JUDGEPAPERS: functionAppUrlJudgepapers
+    FUNCTION_APP_URL_SCOREMODIFIER: functionAppUrlScoremodifier
+    FUNCTION_APP_URL_PROTOCOLGENERATOR: functionAppUrlProtocolgenerator
+    FUNCTION_APP_URL_GDPRTOOL: functionAppUrlGdprtool
+    PROXY_SHARED_SECRET_PLATFORM: proxySharedSecretPlatform
+    PROXY_SHARED_SECRET_JUDGEPAPERS: proxySharedSecretJudgepapers
+    PROXY_SHARED_SECRET_SCOREMODIFIER: proxySharedSecretScoremodifier
+    PROXY_SHARED_SECRET_PROTOCOLGENERATOR: proxySharedSecretProtocolgenerator
+    PROXY_SHARED_SECRET_GDPRTOOL: proxySharedSecretGdprtool
+    AUTH_LOGIN_PROVIDER: empty(authLoginProvider) ? 'aad' : authLoginProvider
+    // External ID tenants: the router takes those identities' e-mail only
+    // from their email claim.
+    EXTERNAL_TENANT_IDS: externalTenantIds
+    // The app role those identities need (else /no-access/).
+    EXTERNAL_ACCESS_ROLE: empty(trim(externalAccessRole)) ? 'Site.Access' : trim(externalAccessRole)
+    ADMIN_ROLE: empty(trim(adminRole)) ? 'Site.Admin' : trim(adminRole)
+    ALLOWED_TENANT_IDS: allowedTenantIds
+    HOVTP_HEALTH_URL: hovtpHealthUrl
+    // Hard-disables DEV_FAKE_USER and DEV_FAKE_ROLES in the router, which the admin check relies on.
+    NODE_ENV: 'production'
+    // The zip already contains the built dist; Oryx must not try to build it.
+    SCM_DO_BUILD_DURING_DEPLOYMENT: 'false'
+  }
 }
 
 output webAppName string = webApp.name
@@ -307,4 +266,3 @@ output customDomainVerificationId string = webApp.properties.customDomainVerific
 #disable-next-line BCP053
 output inboundIpAddress string = split(webApp.properties.inboundIpAddress, ',')[0]
 output appServicePlanId string = appServicePlan.id
-output authTenantMode string = effectiveAuthTenantMode

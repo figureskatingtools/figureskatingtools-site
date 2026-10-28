@@ -9,26 +9,29 @@ B1 Linux) running `server/server.js`, serving the combined Vite dist from
 `/<tool>/api/*` to the existing per-tool Function Apps. The Static Web App and
 the three tool Web Apps go away.
 
+> **Sign-in has since moved to Entra External ID** (2026-10, `infra/EXTERNAL-ID.md`).
+> The workforce Easy Auth app, its managed-identity federated credential and
+> the deploy workflow's Graph step are gone, so the `AUTH_CLIENT_ID` /
+> `AUTH_APP_OBJECT_ID` secrets and §2a no longer apply; the cutover steps below
+> mention them only as history.
+
 ---
 
 ## 1. GitHub configuration (per environment: `test`, `prod`)
 
-The workflow fails fast if `AUTH_APP_OBJECT_ID` is missing; everything else
-degrades quietly, so check the names carefully.
+The workflow fails fast if `EXTERNAL_TENANT_ID` or `AUTH_EXTERNAL_CLIENT_ID` is
+missing; everything else degrades quietly, so check the names carefully.
 
 ### Secrets — exact names
 
 | Secret | Value | Notes |
 | --- | --- | --- |
 | `AZURE_CLIENT_ID` | deploy service principal (OIDC) | already exists |
-| `AUTH_CLIENT_ID` | Entra app registration **client id** used by Easy Auth | already exists |
-| `AUTH_APP_OBJECT_ID` | that app registration's **object id** (not the client id) | **new** — `az ad app show --id <client-id> --query id -o tsv` |
 | `PROXY_SHARED_SECRET_PLATFORM` | new random secret for the platform Function App | **new** — e.g. `openssl rand -hex 32` |
 | `PROXY_SHARED_SECRET_JUDGEPAPERS` | copy of that tool's existing `PROXY_SHARED_SECRET` | **new here**, same value as in the tool repo |
 | `PROXY_SHARED_SECRET_SCOREMODIFIER` | ditto | **new here** |
 | `PROXY_SHARED_SECRET_PROTOCOLGENERATOR` | ditto | **new here** |
 | `PROXY_SHARED_SECRET_HOVTP` | the secret API Management injects as `X-Proxy-Secret` on forwarded HOVTP calls | **new** — owned by the publishing layer, see below. Test only; leave unset in prod |
-| `AUTH_CLIENT_SECRET` | SWA-era client secret | **delete after cutover** — the FIC replaces it |
 
 Reusing each tool's *existing* proxy secret is deliberate: the old tool Web Apps
 and the new router then work in parallel during the migration. Rotate all four
@@ -48,15 +51,14 @@ after teardown (step 7).
 | `SKIP_CUSTOM_DOMAIN` | `true` during step 3, unset/empty afterwards | **new** |
 | `HOVTP_ENABLED` | `false` to kill the HOVTP listener, unset/empty for the environment default | **new**, optional (test defaults on, prod off) |
 | `RETENTION_PURGE_ENABLED` | `false` = kill switch: the platform `retention_sweep` only logs what it would purge; unset/anything else = it deletes expired competitions | **new**, optional (on by default in both environments) |
-| `ALLOWED_TENANT_IDS` | comma-separated Entra tenant ids whose users may use the site; unset = the deployment tenant only | **new**, optional. Router (403 `tenant_not_allowed`) and platform API both enforce it. The External ID tenant is added automatically from `EXTERNAL_TENANT_ID` — don't list it here |
-| `AUTH_TENANT_MODE` | `workforce` (default) or `external` | **new**, optional. Which tenant Easy Auth's one `aad` provider signs in with; `external` = the External ID tenant with **no credential** (needs the two vars below, or the deploy fails). test runs `external`; prod stays `workforce` until phase C go-live, and switching back is the rollback. See `infra/EXTERNAL-ID.md` |
-| `EXTERNAL_TENANT_ID` | Entra External ID tenant id (`380073b3-804e-4cc7-bfcc-843637630d04`) | **new**, optional. Appended to the allowed tenants (both modes) and written to the router and the platform as `EXTERNAL_TENANT_IDS` (router: e-mail only from the `email` claim; platform: new identities get 503 `migration_pending` unless `EXTERNAL_NEW_USERS_ENABLED`) |
-| `EXTERNAL_NEW_USERS_ENABLED` | `true`/`false` | **new**, optional. May a new External ID identity become a new platform user? Unset = test `true`, prod `false` (set `true` once phase C has linked the existing users) |
-| `AUTH_EXTERNAL_CLIENT_ID` | client id of this environment's External ID app registration (test `16c69665-…`, prod `177abce3-…`); its redirect URI is `https://<host>/.auth/login/aad/callback` | **new**, optional; used in `external` mode |
-| `ADMIN_ROLE` | app role that makes a user an admin (default `Site.Admin`) | **new**, optional. Replaces the old `ADMIN_EMAILS` list, which is gone: assign `Site.Admin` in **both** tenants before deploying to prod, and delete the `ADMIN_EMAILS` GitHub vars only after the prod deploy. See `infra/EXTERNAL-ID.md` → Admins |
+| `ALLOWED_TENANT_IDS` | comma-separated extra Entra tenant ids whose users may use the site; unset = the External ID tenant only | optional. Router (403 `tenant_not_allowed`) and platform API both enforce it. The External ID tenant is always added from `EXTERNAL_TENANT_ID` — don't list it here |
+| `EXTERNAL_TENANT_ID` | Entra External ID tenant id (`380073b3-804e-4cc7-bfcc-843637630d04`) | **required**. Easy Auth signs in through it; always allowed, and written to the router and the platform as `EXTERNAL_TENANT_IDS` (router: e-mail only from the `email` claim; platform: new identities get 503 `migration_pending` when `EXTERNAL_NEW_USERS_ENABLED` is `false`) |
+| `EXTERNAL_NEW_USERS_ENABLED` | `true`/`false` | optional. May a new External ID identity become a new platform user? Unset = `true` in both environments; `false` is the switch for linking users by hand first |
+| `AUTH_EXTERNAL_CLIENT_ID` | client id of this environment's External ID app registration (test `16c69665-…`, prod `177abce3-…`); its redirect URI is `https://<host>/.auth/login/aad/callback` | **required**; the Easy Auth client |
+| `ADMIN_ROLE` | app role that makes a user an admin (default `Site.Admin`) | optional. There is no admin e-mail list. See `infra/EXTERNAL-ID.md` → Admins |
 | `EXTERNAL_ACCESS_ROLE` | app role External ID users need (default `Site.Access`) | **new**, optional. Without it the router sends them to `/no-access/` and answers APIs 403 `access_not_granted`. See `infra/EXTERNAL-ID.md` → Access gate (role first, deploy, then Assignment required = No) |
-| `AUTH_EXTERNAL_AUTHORITY_HOST` | `380073b3-804e-4cc7-bfcc-843637630d04.ciamlogin.com` (later the custom URL domain) | **new**, optional; empty = `<EXTERNAL_TENANT_ID>.ciamlogin.com` |
-| `AUTH_LOGIN_PROVIDER` | `aad` (default) | optional. The router's `/signin` provider segment; stays `aad` in both tenant modes |
+| `AUTH_EXTERNAL_AUTHORITY_HOST` | `login.figureskatingtools.com` (the custom URL domain) | optional; empty = `<EXTERNAL_TENANT_ID>.ciamlogin.com` |
+| `AUTH_LOGIN_PROVIDER` | `aad` (default) | optional. The router's `/signin` provider segment |
 
 There is **no** External ID secret, in GitHub or anywhere else: external mode is
 credential-free by design (`infra/EXTERNAL-ID.md`).
@@ -134,38 +136,12 @@ outright. Neither affects the site or the platform API.
 
 Both are things the deploy principal cannot grant itself.
 
-### a. Entra: deploy SP must own the auth app registration
+### a. Entra: no longer needed
 
-The workflow PATCHes redirect URIs and creates a federated identity credential
-via Microsoft Graph. Mirror how the tool repos' SPs are set up — make the deploy
-SP an **owner** of the app registration (or grant it
-`Application.ReadWrite.OwnedBy` plus ownership):
-
-```bash
-DEPLOY_SP_OBJECT_ID=$(az ad sp show --id <AZURE_CLIENT_ID> --query id -o tsv)
-az ad app owner add --id <AUTH_APP_OBJECT_ID> --owner-object-id "$DEPLOY_SP_OBJECT_ID"
-```
-
-Verify before the first run:
-
-```bash
-az ad app owner list --id <AUTH_APP_OBJECT_ID> --query "[].id" -o tsv
-```
-
-**Fallback if this grant can't be obtained:** delete the
-`Update auth app registration (redirect URIs + FIC)` step from
-`deploy-site.yml`, keep managing redirect URIs by hand, and re-create the FIC
-manually after every test-environment rebuild (the managed identity's principal
-id changes when `rg-fs-site-test` is torn down):
-
-```bash
-az ad app federated-credential create --id <AUTH_APP_OBJECT_ID> --parameters '{
-  "name": "easyauth-managed-identity-fic",
-  "issuer": "https://login.microsoftonline.com/<tenant-id>/v2.0",
-  "subject": "<mi-principal-id>",
-  "audiences": ["api://AzureADTokenExchange"]
-}'
-```
+The deploy SP used to own the workforce Easy Auth app registration so the
+workflow could keep its redirect URIs and federated credential. Both are gone
+with the move to External ID, whose apps' redirect URIs are kept by hand
+(`infra/EXTERNAL-ID.md`).
 
 ### b. Azure RBAC: deploy SP must be able to write role assignments
 
