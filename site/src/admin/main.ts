@@ -1418,7 +1418,7 @@ function routerDiagHtml(): string {
       ${fact('Uptime', esc(formatDuration(r.uptimeSeconds)))}
       ${fact('Node', esc(r.node))}
       ${fact('NODE_ENV', r.nodeEnv ? esc(r.nodeEnv) : badge('not set', 'warn'))}
-      ${fact('Login provider', esc(d.config?.loginProvider))}
+      ${fact('Sign-in route', `<span class="adm-mono">/.auth/login/${esc(d.config?.loginProvider)}</span> <span class="adm-dim">(Easy Auth → Entra External ID, every sign-in method)</span>`)}
       ${fact('External ID tenants', esc(d.config?.externalTenantCount ?? 0))}
       ${fact('Admin role', d.config?.adminRole ? `<span class="adm-mono">${esc(d.config.adminRole)}</span>` : '<span class="adm-dim">unknown</span>')}
       ${fact('DEV_FAKE_USER', d.config?.devFakeUser ? badge('active', 'error') : badge('off', 'ok'))}
