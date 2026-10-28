@@ -68,9 +68,9 @@ param allowedTenantIds string
 param externalTenantIds string = ''
 
 // Lets a new identity of those tenants become a new user (EXTERNAL_NEW_USERS_ENABLED).
-// On in test so testers get in as in production; off in prod until phase C.
+// On in both environments; false is the switch for linking users by hand first.
 @description('true = a new External ID identity becomes a new user; false = 503 migration_pending.')
-param externalNewUsersEnabled bool = false
+param externalNewUsersEnabled bool = true
 
 // Informational only: the admin diagnostics show it. The HOVTP listener has its
 // own copy of the setting, and that one is what switches it.

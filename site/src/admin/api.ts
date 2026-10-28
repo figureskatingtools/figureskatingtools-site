@@ -155,7 +155,6 @@ export interface RouterDiagnostics {
     hovtpHealthUrl?: boolean;
     adminRole?: string;
     loginProvider: string;
-    authTenantMode?: string;
     externalTenantCount?: number;
     devFakeUser: boolean;
   };

@@ -138,7 +138,7 @@ answer).
              "nodeEnv": "production", "changelog": {"entries": [{"branch": "main", "ageSeconds": 12, "stale": false}]}},
   "config": {"targets": {"judgepapers": {"url": true, "secret": true}, "…": {}},
              "hovtpHealthUrl": true, "adminRole": "Site.Admin", "allowedTenantCount": 1,
-             "loginProvider": "aad", "authTenantMode": "workforce", "externalTenantCount": 0,
+             "loginProvider": "aad", "externalTenantCount": 1,
              "devFakeUser": false},
   "backends": [{"name": "platform", "status": "ok", "httpStatus": 200, "latencyMs": 42}, "…"]
 }
@@ -203,8 +203,7 @@ the config object (tests override them).
 | `ADMIN_ROLE` | no | `Site.Admin` | App role that makes an identity an admin (`/admin/*`, `/api/manage/*`, `x-forwarded-user-admin: 1`). Bicep-owned, optional GitHub environment variable `ADMIN_ROLE`. |
 | `EXTERNAL_TENANT_IDS` | no | — | Entra External ID tenant ids: their e-mail only from the `email` claim, and they need `EXTERNAL_ACCESS_ROLE` (else `/no-access/`). Bicep-owned, from `EXTERNAL_TENANT_ID`. |
 | `EXTERNAL_ACCESS_ROLE` | no | `Site.Access` | App role an External ID identity needs to use the site. Bicep-owned, optional GitHub variable. |
-| `AUTH_TENANT_MODE` | no | `workforce` | Which tenant Easy Auth signs in with (`workforce`/`external`); diagnostics only. Bicep-owned. |
-| `ALLOWED_TENANT_IDS` | yes | — | Comma-separated Entra tenant ids (case-insensitive) whose principals may use `/userinfo` and the APIs; anyone else gets `403 tenant_not_allowed`. Empty = nobody. Bicep-owned: the deployment tenant, or the GitHub environment variable `ALLOWED_TENANT_IDS`; the platform app gets the same list. |
+| `ALLOWED_TENANT_IDS` | yes | — | Comma-separated Entra tenant ids (case-insensitive) whose principals may use `/userinfo` and the APIs; anyone else gets `403 tenant_not_allowed`. Empty = nobody. Bicep-owned: the External ID tenant, plus any the GitHub environment variable `ALLOWED_TENANT_IDS` names; the platform app gets the same list. |
 | `HOVTP_HEALTH_URL` | no | — | The HOVTP listener's health URL for the admin diagnostics (a bare base URL gets `/api/health` appended). Unset = `not_configured`. Bicep-owned. |
 | `AUTH_LOGIN_PROVIDER` | no | `aad` | Easy Auth provider segment `/signin` redirects to (`/.auth/login/<provider>`). Bicep-owned: set the GitHub environment variable `AUTH_LOGIN_PROVIDER`, never the app setting by hand (infra deploys replace all app settings). |
 | `DEV_FAKE_USER` | no | — | **Non-production only.** Email returned by `/userinfo` (and forwarded to backends, with a synthetic tid/oid — see [Identity](#identity)) when no Easy Auth headers are present. |
