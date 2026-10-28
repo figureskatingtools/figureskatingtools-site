@@ -195,4 +195,7 @@ export interface GeneratedFile {
   /** When `url` stops working (ISO); null along with `url` */
   expiration?: string | null;
   size: number | string;
+  /** When the protocol was generated (ISO UTC, the PDF's own write time);
+   * null when the backend could not read it */
+  generatedAt?: string | null;
 }

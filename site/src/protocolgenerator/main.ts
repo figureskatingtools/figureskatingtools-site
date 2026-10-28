@@ -70,6 +70,9 @@ let currentId: string | null = null;
 let boundPlatformId: string | null = null;
 /** Label the current binding was resolved with — a same-GUID rename must re-resolve. */
 let boundLabel: string | null = null;
+/** Competition code the current binding was resolved with — it names the generated
+ *  protocol, so a code-only change (e.g. from another tab) must re-resolve too. */
+let boundCode: string | null = null;
 /** Guards against an out-of-order resolve when the selection changes mid-flight. */
 let bindToken = 0;
 let details: CompetitionDetails | null = null;
@@ -150,7 +153,7 @@ const APP_HTML = `
                   <li>Required files (marked <span class="req">•</span>) drive each category's <em>"n/n uploaded"</em> readiness badge.</li>
                   <li>For synchronized skating, import the <strong>DT_PARTIC</strong> team rosters to add team pages.</li>
                   <li>Before generating, <strong>check every auto-tagged file</strong> — automatic placement goes by file name, so confirm each one sits in the right slot. Dragging a file by hand clears its tag.</li>
-                  <li>Press <strong>Generate Protocol</strong> to build the bound PDF; download or delete generated protocols from the list below.</li>
+                  <li>Press <strong>Generate Protocol</strong> to build the bound PDF; generating again replaces it. Download or delete generated protocols from the list below.</li>
                 </ul>
               </span></span>
             </div>
@@ -253,10 +256,11 @@ async function editBoundCompetition(btn: HTMLButtonElement): Promise<void> {
  * Bind this tool to the active platform competition.
  *
  * No selection → the quiet "pick a competition" card. Same GUID *and* the same
- * label as the current binding → nothing to do (the subscription fires on every
- * storage change). A label change on the same GUID — a rename from the header
- * pencil, or one made in another tab and arriving as a storage event — must
- * re-resolve: that is what lets the backend sync this tool's record name.
+ * label and code as the current binding → nothing to do (the subscription fires
+ * on every storage change). A label or code change on the same GUID — an edit
+ * from the header pencil, or one made in another tab and arriving as a storage
+ * event — must re-resolve: that is what lets the backend sync this tool's record
+ * name and the code the protocol PDF is named after.
  * Otherwise resolve the platform GUID into this tool's competition record and
  * open it.
  */
@@ -267,6 +271,7 @@ async function bindActiveCompetition(force = false): Promise<void> {
   if (!active) {
     boundPlatformId = null;
     boundLabel = null;
+    boundCode = null;
     currentId = null;
     details = null;
     poolFiles = null;
@@ -275,7 +280,8 @@ async function bindActiveCompetition(force = false): Promise<void> {
   }
 
   const label = competitionLabel(active);
-  if (!force && active.id === boundPlatformId && label === boundLabel) return;
+  if (!force && active.id === boundPlatformId && label === boundLabel
+    && (active.code || '') === boundCode) return;
   deletedNotice = null;
 
   // Pool availability is per competition (a tool record can be unbound) — a new
@@ -289,6 +295,8 @@ async function bindActiveCompetition(force = false): Promise<void> {
     const resp = await apiJson('/resolve_competition', {
       platformId: active.id,
       name: label,
+      // The competition code names the generated PDF (`<code>_protocol.pdf`)
+      code: active.code || '',
       dates: active.date || '',
       // The platform venue prefills the tool's ice rink (event details)
       venue: active.venue || '',
@@ -302,6 +310,7 @@ async function bindActiveCompetition(force = false): Promise<void> {
         // the stale selection everywhere and say why, instead of a raw error.
         boundPlatformId = null;
         boundLabel = null;
+        boundCode = null;
         deletedNotice = platformErrorMessage(code!, label);
         clearActiveCompetition();   // re-binds → the pick card with the notice
         return;
@@ -315,11 +324,13 @@ async function bindActiveCompetition(force = false): Promise<void> {
     if (!data?.id) throw new Error('The tool API returned no competition id.');
     boundPlatformId = active.id;
     boundLabel = label;
+    boundCode = active.code || '';
     await openCompetition(data.id, data.name || label);
   } catch (e) {
     if (token !== bindToken) return;
     boundPlatformId = null;
     boundLabel = null;
+    boundCode = null;
     showBindError(e instanceof Error ? e.message : 'Network error.');
   }
 }
@@ -1362,12 +1373,24 @@ function wireDetail() {
 }
 
 // ── generated protocols ──
-/** The generated protocols list. A file without a signed link is shown, unlinked, with a hint. */
+/** "28.10.2026 14:05" in the viewer's time zone; '' when unknown. */
+function generatedAtLabel(iso: string | null | undefined): string {
+  const t = iso ? Date.parse(iso) : NaN;
+  if (!Number.isFinite(t)) return '';
+  const d = new Date(t);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** The generated protocols list. A file without a signed link is shown, unlinked, with a hint.
+ *  The file name is fixed per competition; when it was generated is a tag beside it. */
 function generatedListHtml(gen: GeneratedFile[]): string {
   if (!gen.length) return '<p class="section-sub">No protocol generated yet.</p>';
   return gen.map(g => {
     const url = usableDownloadUrl(g.url);
-    const name = `<span>${escapeHtml(g.fileName)}</span>`;
+    const when = generatedAtLabel(g.generatedAt);
+    const tag = when ? `<span class="gen-tag" title="Generated">${escapeHtml(when)}</span>` : '';
+    const name = `<span class="gen-name"><span>${escapeHtml(g.fileName)}</span>${tag}</span>`;
     const size = `<span class="gen-badge">${g.size ? Math.round(Number(g.size) / 1024) + ' KB' : ''}</span>`;
     const link = url
       ? `<a class="gen-file-link" href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer"

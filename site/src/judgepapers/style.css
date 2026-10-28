@@ -1210,6 +1210,33 @@ input[type="checkbox"] {
   line-height: 1.3;
 }
 
+.option-check--hint {
+  align-items: flex-start;
+}
+
+.option-check--hint input {
+  margin-top: 0.15rem;
+}
+
+.option-hint {
+  display: block;
+  margin-top: 0.2rem;
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+  line-height: 1.35;
+}
+
+/* A further group of options below the global settings (e.g. Papers to print) */
+.options-section {
+  border-top: 1px solid var(--line);
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+}
+
+.options-section > .option-row:last-child {
+  margin-bottom: 0;
+}
+
 .option-row-inline {
   display: flex;
   align-items: center;

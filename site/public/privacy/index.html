@@ -32,7 +32,7 @@
       <div class="doc-head">
         <p class="eyebrow eyebrow--gold">figureskatingtools.com</p>
         <h1>Privacy notice</h1>
-        <p class="updated">Last updated <time datetime="2026-10-22" data-version="privacy">22 October 2026</time></p>
+        <p class="updated">Last updated <time datetime="2026-10-28" data-version="privacy">28 October 2026</time></p>
       </div>
     </div>
   </header>
@@ -41,7 +41,7 @@
     <a class="back" href="/">← Back to figureskatingtools.com</a>
 
     <div class="intro">
-      <p>This notice explains how personal data is processed in the figureskatingtools.com service. The service is a set of tools for figure skating result services and competition organisers: tools that produce a competition's documents from FS Manager data, tools that run entirely in your browser, tools that process data in memory without storing it, and a live link that receives competition data from FS Manager. The tools are used by signed-in result service operators and organisers' staff, and access is by invitation.</p>
+      <p>This notice explains how personal data is processed in the figureskatingtools.com service. The service is a set of tools for figure skating result services and competition organisers: tools that produce a competition's documents from FS Manager data, tools that work in your browser, tools that process data in memory without storing it, and a live link that receives competition data from FS Manager. The tools are used by signed-in result service operators and organisers' staff, and access is by invitation.</p>
       <p><strong>figureskatingtools.com does not host or publish results, and no competition data is public here.</strong> The only public pages are the front page, this notice and the <a href="/terms/">terms of use</a>. What the tools produce is downloaded by the operator. Results are published on other sites, and each of those sites is responsible for what it publishes under its own privacy notice.</p>
       <p>This notice is available in English and <a href="/tietosuoja/" hreflang="fi" lang="fi">Finnish</a>; the English text prevails.</p>
     </div>
@@ -106,9 +106,11 @@
       <h3 id="participant-files">FS Manager participant files</h3>
       <p>Participant files from FS Manager use the ODF data format. Dates of birth are removed from a participant file before it is stored, whether FS Manager sends it or someone uploads it, so they are not stored. The rest of the file is kept as FS Manager produced it, because the tools read it. That includes the participants' names, club, gender, nationality, the events they are registered for, their team and FS Manager's own participant codes. Gender is kept because competition rules depend on it, for example in categories and in pair and ice dance couples. Nationality is kept because result documents show it, as is customary in the sport. The tools use names, clubs, teams and events and do not print the rest.</p>
 
+      <h3 id="banner">Competition Banner Generator</h3>
+      <p>The Competition Banner Generator draws its banners in your browser. When a competition is selected, the banner's text, text sizes and club logo are saved with that competition, so that everyone it is shared with finds them there next time. A logo you upload is stored as a copy of the file. All of this is kept until the competition's data is deleted, and is deleted with it. Without a selected competition nothing is saved, and the logos you add stay on your device.</p>
+
       <h3>Tools that store nothing</h3>
       <p>Some tools process data in memory only, for as long as a request runs, and store nothing. The GDPR Removal Tool is one: a result service can use it to redact its own published result files, for example when a skater has asked the publishing site to remove their name. It fetches the already public pages and PDF files from the result sites it is set up for, replaces the person's name with the text “Nimi poistettu pyynnöstä” (name removed on request) and blanks their club, keeps the placements and scores, and returns the changed files to the operator as a ZIP file. Working copies exist on the server only while the request runs. Publishing the changed files is up to the result service.</p>
-      <p>Other tools run entirely in your browser. The Competition Banner Generator is one: the logos you add never leave your device.</p>
 
       <h3>Who can see a competition</h3>
       <p>A competition and everything stored about it is visible only to its owner (normally the user who created it), the users the owner has shared it with, and the administrators. The owner decides whether each of them may only view it or also edit it, and can take the access away again.</p>
@@ -193,7 +195,7 @@
 
     <section id="retention" aria-labelledby="h-retention">
       <h2 id="h-retention"><span class="num">5</span>How long data is kept</h2>
-      <p>Everything stored about a competition is removed after the competition: the uploaded files and the files sent from FS Manager, rosters, photos, the generated judges' papers and protocols, the e-mail send log, the FS Manager sender records and the list of users it is shared with. Each competition has one deletion date that applies to all of its data in every tool, <strong>60 days after the competition is created</strong>. The operator may move the date one week later at a time when there is a reason to, for example when the competition takes place later than that, and the new date applies to every tool alike. An administrator may also set another deletion date, for example when an operator asks for it. The operator may delete the competition earlier, and its data is then removed from every tool the following night.</p>
+      <p>Everything stored about a competition is removed after the competition: the uploaded files and the files sent from FS Manager, rosters, photos, the generated judges' papers and protocols, the e-mail send log, the FS Manager sender records, the banner generator's saved text and club logo, and the list of users it is shared with. Each competition has one deletion date that applies to all of its data in every tool, <strong>60 days after the competition is created</strong>. The operator may move the date one week later at a time when there is a reason to, for example when the competition takes place later than that, and the new date applies to every tool alike. An administrator may also set another deletion date, for example when an operator asks for it. The operator may delete the competition earlier, and its data is then removed from every tool the following night.</p>
       <p>After deletion, only the per-competition statistics described in section 3 remain: the competition's name, dates and usage counts, without any personal data. They are kept indefinitely, and only per competition, never per user.</p>
       <p>When a competition is deleted, the e-mail addresses of the user who created it and of the other users who worked on it are removed from the records of every tool. A tool's record that is not linked to any competition in the service loses those e-mail addresses in the same way once it is older than the 60-day retention period.</p>
       <ul>
@@ -230,8 +232,9 @@
 
     <section id="updates" aria-labelledby="h-updates">
       <h2 id="h-updates"><span class="num">9</span>Changes to this notice</h2>
-      <p>This notice is updated when practices change, and when a tool starts to process a new kind of data. Last updated 22 October 2026.</p>
+      <p>This notice is updated when practices change, and when a tool starts to process a new kind of data. Last updated 28 October 2026.</p>
       <ul>
+        <li>28 October 2026: The Competition Banner Generator saves its text and club logo, including an uploaded logo file, with the selected competition until the competition's data is deleted.</li>
         <li>22 October 2026: The Customer is now the controller of competition data and we are its processor. Dates of birth are no longer stored. Added the sub-processor list, the record of accepted terms, how data is protected, and a Finnish translation. Technical logs are kept 90 days and per-competition statistics indefinitely. Users' e-mail addresses are removed from every tool's records when a competition is deleted. Sub-processor changes are announced by e-mail. Described the copy of the judges' papers e-mail that goes to the result service.</li>
         <li>19 October 2026: Private competitions with sharing, the user directory and 5-day copied judges' papers links.</li>
         <li>15 October 2026: The administrator role and the administrator log.</li>
@@ -251,7 +254,7 @@
           <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m8 7-5 5 5 5"/><path d="m16 7 5 5-5 5"/></svg>
           Open source on GitHub</a>
       </nav>
-      <p class="footer-versions">Privacy notice <time datetime="2026-10-22" data-version="privacy">22 October 2026</time> · Terms of use <time datetime="2026-10-23" data-version="terms">23 October 2026</time></p>
+      <p class="footer-versions">Privacy notice <time datetime="2026-10-28" data-version="privacy">28 October 2026</time> · Terms of use <time datetime="2026-10-23" data-version="terms">23 October 2026</time></p>
     </div>
   </footer>
 </body>

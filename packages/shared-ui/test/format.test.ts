@@ -10,7 +10,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { formatDateFi, formatDateTimeFi, formatFileSize } from '../src/format.js';
+import { formatDateFi, formatDateRangeFi, formatDateTimeFi, formatFileSize } from '../src/format.js';
 
 describe('formatDateFi', () => {
   it('formats an ISO date as dd.MM.yyyy', () => {
@@ -130,5 +130,32 @@ describe('formatFileSize', () => {
   it('switches to megabytes with one decimal at a full MiB', () => {
     expect(formatFileSize(1048576)).toBe('1.0 MB');
     expect(formatFileSize(1468006)).toBe('1.4 MB');
+  });
+});
+
+describe('formatDateRangeFi', () => {
+  it('shares the month and year within one month', () => {
+    expect(formatDateRangeFi('2026-09-11', '2026-09-12')).toBe('11.–12.09.2026');
+  });
+
+  it('shares the year across a month boundary', () => {
+    expect(formatDateRangeFi('2026-09-30', '2026-10-01')).toBe('30.09.–01.10.2026');
+  });
+
+  it('writes both dates in full across a year boundary', () => {
+    expect(formatDateRangeFi('2026-12-30', '2027-01-02')).toBe('30.12.2026–02.01.2027');
+  });
+
+  it('renders one day when the end is missing, the same or earlier', () => {
+    expect(formatDateRangeFi('2026-09-11', '')).toBe('11.09.2026');
+    expect(formatDateRangeFi('2026-09-11', '2026-09-11')).toBe('11.09.2026');
+    expect(formatDateRangeFi('2026-09-11', '2026-09-10')).toBe('11.09.2026');
+    expect(formatDateRangeFi('2026-09-11', '2026-02-31')).toBe('11.09.2026');
+  });
+
+  it('falls back to the end date, or to the start text as it is', () => {
+    expect(formatDateRangeFi('', '2026-09-12')).toBe('12.09.2026');
+    expect(formatDateRangeFi(null, undefined)).toBe('');
+    expect(formatDateRangeFi('TBA', '2026-09-12')).toBe('TBA');
   });
 });

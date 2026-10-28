@@ -968,6 +968,14 @@ input[type="checkbox"] { accent-color: var(--ink); }
 .gen-file-link--unavailable:hover { background: var(--rink-tint); }
 .gen-file-unavailable { font-weight: 400; font-size: 0.75rem; color: var(--ink-muted); white-space: nowrap; }
 .gen-badge { font-family: var(--font-mono); font-size: 0.68rem; color: var(--ink-muted); }
+.gen-name { display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem; min-width: 0; overflow-wrap: anywhere; }
+/* When the protocol was generated — beside its fixed file name */
+.gen-tag {
+  font-family: var(--font-mono); font-size: 0.68rem; font-weight: 500;
+  color: var(--ink-muted); background: var(--paper);
+  border: 1px solid #c8ddee; border-radius: 999px; padding: 0.05rem 0.5rem;
+  white-space: nowrap;
+}
 .btn-generate { min-width: 220px; height: 3.1rem; display: flex; align-items: center; justify-content: center; }
 
 /* ── Hover preview popover ── */

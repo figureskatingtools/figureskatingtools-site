@@ -30,6 +30,36 @@
   max-width: 62ch;
 }
 
+/* ── Competition memory: what is remembered, and where ── */
+.banner-memory {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  margin-top: 1rem;
+}
+
+.banner-memory-status {
+  flex: 1 1 24rem;
+  font-size: 0.9rem;
+  color: var(--ink-muted);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.banner-memory-status:empty {
+  display: none;
+}
+
+.banner-memory-status--error {
+  color: var(--error);
+}
+
+.dropzone[aria-disabled='true'] {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
 /* ── Sticky preview band — content scrolls beneath it ── */
 .banner-sticky {
   position: sticky;
