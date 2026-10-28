@@ -55,26 +55,6 @@ const APP_PATH = '/judgepapers/';
  */
 const API_BASE = '/judgepapers/api';
 
-// Language setting: 'fi' (Finnish, default) or 'en' (English)
-let currentLanguage: 'fi' | 'en' = 'fi';
-
-/**
- * Get the localized category name from file data in the structure.
- * The structure keys are English displayName values. Files within contain
- * categoryFi for Finnish names.
- */
-function getLocalizedCategoryName(categoryKey: string, segments: Record<string, any[]>): string {
-    if (currentLanguage === 'fi') {
-        // Try to find categoryFi from any file in this category
-        for (const segFiles of Object.values(segments)) {
-            for (const file of segFiles) {
-                if (file.categoryFi) return file.categoryFi;
-            }
-        }
-    }
-    return categoryKey;
-}
-
 const appElement = document.querySelector<HTMLDivElement>('#app')!;
 
 // Initial basic layout structure. The site nav (shared across all
@@ -703,6 +683,10 @@ async function init() {
     // and its number of copies per packet.
     let combinedScheduleFor: string | null = null;
     let combinedScheduleCopies = 1;
+    // Same for "Referee's calculation setup in every segment" and "DO, RO
+    // and TS1 papers in Pattern Dance segments" (Papers to print).
+    let calcSetupEverySegmentFor: string | null = null;
+    let patternDanceAllPapersFor: string | null = null;
     const MAX_COMBINED_COPIES = 50;
     // Whole number 1-50 from the copies field; anything else counts as 1.
     const clampCopies = (raw: string | number): number => {
@@ -815,7 +799,9 @@ async function init() {
                  }
             }
             
-            const displayCategory = getLocalizedCategoryName(category, segments) || category || '(Unspecified Category)';
+            // The structure keys are the category names FSM printed on the
+            // uploaded JudgesSheetAll, in the competition's own language.
+            const displayCategory = category || '(Unspecified Category)';
             
             // Judging method for this card. Every file of a category carries the
             // same categoryCode and method (the `#N` split groups included), so the
@@ -1043,6 +1029,8 @@ async function init() {
         const omitToggle = document.getElementById('global-omit-segment-cover') as HTMLInputElement | null;
         const combinedToggle = document.getElementById('global-combined-schedule') as HTMLInputElement | null;
         const combinedCopies = document.getElementById('combined-schedule-copies') as HTMLInputElement | null;
+        const calcSetupToggle = document.getElementById('global-calc-setup-every-segment') as HTMLInputElement | null;
+        const patternDanceToggle = document.getElementById('global-pattern-dance-all-papers') as HTMLInputElement | null;
         
         const options: any = {
             globalSegmentCover: globalToggle ? !globalToggle.checked : false,
@@ -1055,7 +1043,14 @@ async function init() {
             // packets); an add-on, independent of the options above.
             globalCombinedSchedule: combinedToggle ? combinedToggle.checked : false,
             combinedScheduleCopies: combinedCopies ? clampCopies(combinedCopies.value) : 1,
-            language: currentLanguage
+            // Checked = the referee's calculation setup in every segment they
+            // referee; unchecked = once per referee per category, in their
+            // first segment of it.
+            globalCalculationSetupEverySegment: calcSetupToggle ? calcSetupToggle.checked : false,
+            // Checked = Pattern Dance segments keep the Data / Replay
+            // Operators' planned program content and the Technical Specialist
+            // 1 sheet; unchecked = left out (the time schedule stays).
+            globalPatternDanceAllPapers: patternDanceToggle ? patternDanceToggle.checked : false
         };
         
         if (segmentToggles) {
@@ -1158,10 +1153,7 @@ async function init() {
             } else {
                  nameEl.classList.remove('info-field-value--alert');
             }
-            
-            // Set language from competition settings
-            currentLanguage = data.language || 'fi';
-            
+
             updateOptionsView(data);
             renderCompetitionView();
 
@@ -1381,9 +1373,6 @@ async function init() {
             for (const cat in data.structure) {
                 if (cat === 'Uncategorized') continue;
 
-                // Lookup friendly name using localized category name from file data
-                const friendlyCatName = getLocalizedCategoryName(cat, data.structure[cat]);
-
                 for (const seg in data.structure[cat]) {
                     const files = data.structure[cat][seg];
                     const startList = files.find((f: any) => f.suffix.includes('StartListwithTimes'));
@@ -1392,7 +1381,7 @@ async function init() {
                         const prefix = startList.filename.replace('_StartListwithTimes.pdf', '');
                         segments.push({
                             prefix: prefix,
-                            label: `${friendlyCatName} - ${seg}`
+                            label: `${cat} - ${seg}`
                         });
                     }
                 }
@@ -1407,16 +1396,11 @@ async function init() {
         const omitSegmentCover = omitSegmentCoverFor === data.id;
         const combinedSchedule = combinedScheduleFor === data.id;
         if (!combinedSchedule) combinedScheduleCopies = 1;
+        const calcSetupEverySegment = calcSetupEverySegmentFor === data.id;
+        const patternDanceAllPapers = patternDanceAllPapersFor === data.id;
 
         optionsArea.innerHTML = `
             <h3 class="options-title">Global Settings</h3>
-
-            <div class="option-row">
-                <label class="option-check">
-                    <input type="checkbox" id="use-english-names" ${currentLanguage === 'en' ? 'checked' : ''}>
-                    <span>Use English category names</span>
-                </label>
-            </div>
 
             <div class="option-row">
                 <label class="option-check">
@@ -1460,6 +1444,38 @@ async function init() {
                     `).join('')}
                 </div>
             </div>
+
+            <div class="options-section">
+                <h3 class="options-title">Papers to print</h3>
+
+                <div class="option-row">
+                    <label class="option-check option-check--hint">
+                        <input type="checkbox" id="global-calc-setup-every-segment" ${calcSetupEverySegment ? 'checked' : ''}
+                               aria-describedby="calc-setup-hint">
+                        <span>
+                            Referee's calculation setup in every segment
+                            <small class="option-hint" id="calc-setup-hint">
+                                When unchecked, each referee gets a category's calculation setup once,
+                                in their first segment of that category.
+                            </small>
+                        </span>
+                    </label>
+                </div>
+
+                <div class="option-row">
+                    <label class="option-check option-check--hint">
+                        <input type="checkbox" id="global-pattern-dance-all-papers" ${patternDanceAllPapers ? 'checked' : ''}
+                               aria-describedby="pattern-dance-hint">
+                        <span>
+                            Data Operator, Replay Operator and Technical Specialist 1 papers in Pattern Dance segments
+                            <small class="option-hint" id="pattern-dance-hint">
+                                When unchecked, Pattern Dance segments (e.g. PDK1) leave out the planned
+                                program content and the TS1 sheet. The time schedule is printed as usual.
+                            </small>
+                        </span>
+                    </label>
+                </div>
+            </div>
         `;
 
         // Logic for Toggles
@@ -1467,30 +1483,6 @@ async function init() {
         const segmentToggles = document.querySelectorAll('.time-schedule-toggle') as NodeListOf<HTMLInputElement>;
         const listContainer = document.getElementById('segment-options-list')!;
         const toggleBtn = document.getElementById('toggle-advanced-options')!;
-
-        // Language toggle
-        const langToggle = document.getElementById('use-english-names') as HTMLInputElement;
-        langToggle?.addEventListener('change', async () => {
-            currentLanguage = langToggle.checked ? 'en' : 'fi';
-            // Persist language to backend
-            if (currentCompetitionData) {
-                try {
-                    await fetch(`${API_BASE}/save_competition_settings`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            id: currentCompetitionData.id,
-                            settings: { language: currentLanguage }
-                        })
-                    });
-                } catch (_e) {
-                    console.warn('Failed to save language setting');
-                }
-            }
-            // Re-render to reflect new language
-            updateOptionsView(data);
-            renderCompetitionView();
-        });
 
         // "No cover page or time schedule" makes the cover/time-schedule choice moot.
         const omitToggle = document.getElementById('global-omit-segment-cover') as HTMLInputElement;
@@ -1505,6 +1497,15 @@ async function init() {
         omitToggle.addEventListener('change', () => {
             omitSegmentCoverFor = omitToggle.checked ? data.id : null;
             applyOmit();
+        });
+
+        const calcSetupToggle = document.getElementById('global-calc-setup-every-segment') as HTMLInputElement;
+        calcSetupToggle.addEventListener('change', () => {
+            calcSetupEverySegmentFor = calcSetupToggle.checked ? data.id : null;
+        });
+        const patternDanceToggle = document.getElementById('global-pattern-dance-all-papers') as HTMLInputElement;
+        patternDanceToggle.addEventListener('change', () => {
+            patternDanceAllPapersFor = patternDanceToggle.checked ? data.id : null;
         });
 
         const combinedToggle = document.getElementById('global-combined-schedule') as HTMLInputElement;
