@@ -977,6 +977,14 @@ async function loadForCompetition(competition: PlatformCompetition | null): Prom
   const seq = ++loadSeq;
   target = null;
   showRefill(false);
+  setFormEnabled(false);
+  if (competition) setMemoryStatus(`Loading the values saved for ${quoted(competition)}…`);
+
+  // A queued save reads the form when it is sent, so the previous form stays
+  // until every save has gone out — and a save still on its way (A → B → A)
+  // must land before A is read back
+  await lastSave;
+  if (seq !== loadSeq) return;
 
   if (!competition) {
     applyForm(fallbackSettings());
@@ -984,13 +992,6 @@ async function loadForCompetition(competition: PlatformCompetition | null): Prom
     setMemoryStatus('Select a competition in the top bar and these values are remembered for it.');
     return;
   }
-
-  setFormEnabled(false);
-  setMemoryStatus(`Loading the values saved for ${quoted(competition)}…`);
-
-  // A save still on its way (A → B → A) must land before A is read back
-  await lastSave;
-  if (seq !== loadSeq) return;
 
   let saved: BannerSettings | null = null;
   let loadFailed = false;
