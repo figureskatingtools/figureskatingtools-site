@@ -150,7 +150,7 @@ const APP_HTML = `
                   <li>Required files (marked <span class="req">•</span>) drive each category's <em>"n/n uploaded"</em> readiness badge.</li>
                   <li>For synchronized skating, import the <strong>DT_PARTIC</strong> team rosters to add team pages.</li>
                   <li>Before generating, <strong>check every auto-tagged file</strong> — automatic placement goes by file name, so confirm each one sits in the right slot. Dragging a file by hand clears its tag.</li>
-                  <li>Press <strong>Generate Protocol</strong> to build the bound PDF; download or delete generated protocols from the list below.</li>
+                  <li>Press <strong>Generate Protocol</strong> to build the bound PDF; generating again replaces it. Download or delete generated protocols from the list below.</li>
                 </ul>
               </span></span>
             </div>
@@ -289,6 +289,8 @@ async function bindActiveCompetition(force = false): Promise<void> {
     const resp = await apiJson('/resolve_competition', {
       platformId: active.id,
       name: label,
+      // The competition code names the generated PDF (`<code>_protocol.pdf`)
+      code: active.code || '',
       dates: active.date || '',
       // The platform venue prefills the tool's ice rink (event details)
       venue: active.venue || '',
@@ -1362,12 +1364,24 @@ function wireDetail() {
 }
 
 // ── generated protocols ──
-/** The generated protocols list. A file without a signed link is shown, unlinked, with a hint. */
+/** "28.10.2026 14:05" in the viewer's time zone; '' when unknown. */
+function generatedAtLabel(iso: string | null | undefined): string {
+  const t = iso ? Date.parse(iso) : NaN;
+  if (!Number.isFinite(t)) return '';
+  const d = new Date(t);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** The generated protocols list. A file without a signed link is shown, unlinked, with a hint.
+ *  The file name is fixed per competition; when it was generated is a tag beside it. */
 function generatedListHtml(gen: GeneratedFile[]): string {
   if (!gen.length) return '<p class="section-sub">No protocol generated yet.</p>';
   return gen.map(g => {
     const url = usableDownloadUrl(g.url);
-    const name = `<span>${escapeHtml(g.fileName)}</span>`;
+    const when = generatedAtLabel(g.generatedAt);
+    const tag = when ? `<span class="gen-tag" title="Generated">${escapeHtml(when)}</span>` : '';
+    const name = `<span class="gen-name"><span>${escapeHtml(g.fileName)}</span>${tag}</span>`;
     const size = `<span class="gen-badge">${g.size ? Math.round(Number(g.size) / 1024) + ' KB' : ''}</span>`;
     const link = url
       ? `<a class="gen-file-link" href="${escapeAttr(url)}" target="_blank" rel="noopener noreferrer"

@@ -195,4 +195,7 @@ export interface GeneratedFile {
   /** When `url` stops working (ISO); null along with `url` */
   expiration?: string | null;
   size: number | string;
+  /** When the protocol was generated (ISO UTC); null on protocols generated
+   * before the fixed `<code>_protocol.pdf` name, whose name carries the time */
+  generatedAt?: string | null;
 }
