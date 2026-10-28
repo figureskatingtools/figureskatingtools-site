@@ -74,6 +74,11 @@ let sportityPreviewUrl: string | null = null;
 let clubs: ClubEntry[] = [];
 /** Where the current club logo came from — what gets remembered */
 let clubChoice: ClubChoice | null = null;
+/**
+ * Bumped by every logo change: a logo fetch or image decode that finishes
+ * after a newer change (another pick, or another competition's form) is dropped.
+ */
+let logoSeq = 0;
 
 /* ── Small DOM helpers ── */
 function el<T extends HTMLElement>(id: string): T {
@@ -497,8 +502,10 @@ function mimeForFile(file: string): string {
 
 /** Adopt a data URI as the club logo, measuring its intrinsic size first */
 function setClubLogo(dataUri: string): void {
+  const seq = ++logoSeq;
   const probe = new Image();
   probe.onload = () => {
+    if (seq !== logoSeq) return;
     clubLogo = dataUri;
     // SVGs without intrinsic dimensions report 0 — fall back to the bubble ratio
     clubW = probe.naturalWidth || 100;
@@ -506,6 +513,7 @@ function setClubLogo(dataUri: string): void {
     refresh();
   };
   probe.onerror = () => {
+    if (seq !== logoSeq) return;
     setDropzoneText('That file could not be read — try a JPG, PNG or SVG.');
   };
   probe.src = dataUri;
@@ -520,6 +528,7 @@ const DROPZONE_DEFAULT_TEXT = 'Drop your club logo here (or click) — JPG, PNG 
 const ACCEPTED_LOGO_TYPES = ['image/jpeg', 'image/png', 'image/svg+xml'];
 
 function clearClubLogo(): void {
+  logoSeq++;
   clubLogo = null;
   clubW = 0;
   clubH = 0;
@@ -529,13 +538,17 @@ function clearClubLogo(): void {
 
 async function useClubFromManifest(file: string): Promise<void> {
   clubChoice = { file };
+  const seq = ++logoSeq;
   try {
     const resp = await fetch(CLUB_LOGO_BASE + file);
     if (!resp.ok) throw new Error(`Could not load ${file}`);
     const typed = new Blob([await resp.blob()], { type: mimeForFile(file) });
-    setClubLogo(await blobToDataUri(typed));
+    const dataUri = await blobToDataUri(typed);
+    if (seq !== logoSeq) return;
+    setClubLogo(dataUri);
     setDropzoneText(DROPZONE_DEFAULT_TEXT);
   } catch (_e) {
+    if (seq !== logoSeq) return;
     setDropzoneText('That club logo could not be loaded — drop a file instead.');
   }
 }
@@ -561,6 +574,8 @@ async function useCustomFile(file: File): Promise<void> {
     setDropzoneText('Unsupported file type — please use JPG, PNG or SVG.');
     return;
   }
+  // The file belongs to the competition shown when it was dropped
+  const seq = loadSeq;
   let dataUri = await blobToDataUri(file);
   if (dataUri.length > MAX_REMEMBERED_LOGO_CHARS && file.type !== 'image/svg+xml') {
     try {
@@ -569,6 +584,7 @@ async function useCustomFile(file: File): Promise<void> {
       // Not decodable here — setClubLogo below reports the bad file
     }
   }
+  if (seq !== loadSeq || !formEnabled) return;
   clubChoice = { name: file.name, dataUri };
   setClubLogo(dataUri);
   setDropzoneText(file.name);
@@ -683,6 +699,8 @@ export function initGenerator(): void {
 }
 
 async function start(): Promise<void> {
+  // Nothing typed before the competition's values arrive could be kept
+  setFormEnabled(false);
   await loadAssets();
   const active = getActiveCompetition();
   shownCompetitionId = active?.id ?? null;
@@ -910,6 +928,10 @@ async function loadForCompetition(competition: PlatformCompetition | null): Prom
   setFormEnabled(false);
   setMemoryStatus(`Loading the values saved for ${quoted(competition)}…`);
 
+  // A save still on its way (A → B → A) must land before A is read back
+  await lastSave;
+  if (seq !== loadSeq) return;
+
   let saved: BannerSettings | null = null;
   let loadFailed = false;
   try {
@@ -970,8 +992,9 @@ async function refillFromCompetition(): Promise<void> {
   if (!window.confirm(`Replace the banner's text and club logo with the details of ${quoted(t.competition)}?`)) return;
   setFormEnabled(false);
   const settings = await fullPrefill(t.competition, clubs);
-  setFormEnabled(true);
+  // Another competition's load now owns the form lock
   if (target !== t) return;
+  setFormEnabled(true);
   applyForm(settings);
   formChanged();
 }
