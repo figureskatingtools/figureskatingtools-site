@@ -55,8 +55,8 @@ const FALLBACK_CATEGORIES = 'SENIORS  ·  JUNIORS  ·  NOVICES';
 const DATE_VENUE_SEPARATOR = '  |  ';
 const CATEGORY_SEPARATOR = '  ·  ';
 
-/** Longest text kept per field (the banner has room for far less) */
-const MAX_TEXT = 300;
+/** Longest text per field — the inputs' maxlength too, so nothing saved is cut on reload */
+export const MAX_TEXT = 300;
 /** A remembered custom logo must fit the platform's 1 MB settings cap */
 export const MAX_REMEMBERED_LOGO_CHARS = 900_000;
 const LOGO_DATA_URI_RE = /^data:image\/(png|jpeg|svg\+xml);base64,[A-Za-z0-9+/]+=*$/;

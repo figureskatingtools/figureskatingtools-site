@@ -24,6 +24,7 @@ import {
 } from '@figureskatingtools/shared-ui';
 import {
   MAX_REMEMBERED_LOGO_CHARS,
+  MAX_TEXT,
   SIZE_RANGES,
   basePrefill,
   fallbackSettings,
@@ -148,7 +149,7 @@ export function renderGeneratorPage(): string {
 
           <div class="field">
             <label class="field-label" for="title">Title</label>
-            <input type="text" id="title" class="field-input" value="${escAttr(initial.title)}">
+            <input type="text" id="title" class="field-input" maxlength="${MAX_TEXT}" value="${escAttr(initial.title)}">
             <div class="field-size">
               <span class="field-size-label">Size</span>
               <input type="range" id="titleSize" min="${titleSize.min}" max="${titleSize.max}" step="1" value="${initial.titleSize}">
@@ -158,7 +159,7 @@ export function renderGeneratorPage(): string {
 
           <div class="field">
             <label class="field-label" for="dateVenue">Date &amp; venue</label>
-            <input type="text" id="dateVenue" class="field-input" value="${escAttr(initial.dateVenue)}">
+            <input type="text" id="dateVenue" class="field-input" maxlength="${MAX_TEXT}" value="${escAttr(initial.dateVenue)}">
             <div class="field-size">
               <span class="field-size-label">Size</span>
               <input type="range" id="dateVenueSize" min="${dateVenueSize.min}" max="${dateVenueSize.max}" step="1" value="${initial.dateVenueSize}">
@@ -168,7 +169,7 @@ export function renderGeneratorPage(): string {
 
           <div class="field">
             <label class="field-label" for="categories">Categories</label>
-            <input type="text" id="categories" class="field-input" value="${escAttr(initial.categories)}">
+            <input type="text" id="categories" class="field-input" maxlength="${MAX_TEXT}" value="${escAttr(initial.categories)}">
             <div class="field-size">
               <span class="field-size-label">Size</span>
               <input type="range" id="categoriesSize" min="${categoriesSize.min}" max="${categoriesSize.max}" step="1" value="${initial.categoriesSize}">
@@ -549,6 +550,7 @@ async function useClubFromManifest(file: string): Promise<void> {
     setDropzoneText(DROPZONE_DEFAULT_TEXT);
   } catch (_e) {
     if (seq !== logoSeq) return;
+    clearClubLogo();
     setDropzoneText('That club logo could not be loaded — drop a file instead.');
   }
 }
@@ -574,8 +576,10 @@ async function useCustomFile(file: File): Promise<void> {
     setDropzoneText('Unsupported file type — please use JPG, PNG or SVG.');
     return;
   }
-  // The file belongs to the competition shown when it was dropped
+  // The file belongs to the competition shown when it was dropped, and it is
+  // the newest logo choice only until another one is made
   const seq = loadSeq;
+  const logo = ++logoSeq;
   let dataUri = await blobToDataUri(file);
   if (dataUri.length > MAX_REMEMBERED_LOGO_CHARS && file.type !== 'image/svg+xml') {
     try {
@@ -584,7 +588,7 @@ async function useCustomFile(file: File): Promise<void> {
       // Not decodable here — setClubLogo below reports the bad file
     }
   }
-  if (seq !== loadSeq || !formEnabled) return;
+  if (seq !== loadSeq || logo !== logoSeq || !formEnabled) return;
   clubChoice = { name: file.name, dataUri };
   setClubLogo(dataUri);
   setDropzoneText(file.name);
@@ -733,7 +737,7 @@ async function loadAssets(): Promise<void> {
     }
 
     assetsReady = true;
-    setDownloadsEnabled(true);
+    setDownloadsEnabled(formEnabled);
     status.classList.add('hidden');
     el<HTMLElement>('previewWrap').classList.remove('hidden');
     refresh();
@@ -761,6 +765,8 @@ function setFormEnabled(enabled: boolean): void {
     if (control) control.disabled = !enabled;
   }
   el<HTMLElement>('dropZone').setAttribute('aria-disabled', String(!enabled));
+  // A download while another competition loads would export the previous form
+  setDownloadsEnabled(enabled && assetsReady);
 }
 
 /** The form as a settings object (a too-large dropped logo is not remembered) */
@@ -798,6 +804,12 @@ function applyForm(settings: BannerSettings): void {
   input('sportityToggle').checked = settings.sportity;
   el<HTMLElement>('sportityActions').classList.toggle('hidden', !settings.sportity);
 
+  // The previous form's decoded logo goes first: whatever this one's logo
+  // turns out to be, it is never shown in its place
+  clubLogo = null;
+  clubW = 0;
+  clubH = 0;
+
   const select = el<HTMLSelectElement>('clubSelect');
   const club = settings.club;
   if (club && 'file' in club && clubs.some((c) => c.file === club.file)) {
@@ -833,6 +845,73 @@ let shownCompetitionId: string | null = null;
 let loadSeq = 0;
 let saveTimer: number | null = null;
 let lastSave: Promise<void> = Promise.resolve();
+/** The snapshot (JSON) whose PUT is on its way, null when none is */
+let inFlight: string | null = null;
+
+/* ── Changes left behind by a closed page ──
+   A change made while an earlier save is still on its way only goes out once
+   that save returns — too late if the page is closing. Then the newest
+   snapshot is kept in this browser with the one it follows (`base`), and
+   replayed on the next visit only if the competition still holds exactly
+   `base`: had anyone saved since, their values win. */
+
+interface PendingChange {
+  base: string;
+  latest: BannerSettings;
+}
+
+function pendingKey(competitionId: string): string {
+  return `fst:banner-pending:v1:${competitionId}`;
+}
+
+function storePending(competitionId: string, change: PendingChange): void {
+  try {
+    localStorage.setItem(pendingKey(competitionId), JSON.stringify(change));
+  } catch (_e) {
+    // Storage blocked or full — the normal save is all there is
+  }
+}
+
+function readPending(competitionId: string): PendingChange | null {
+  try {
+    const raw = JSON.parse(localStorage.getItem(pendingKey(competitionId)) ?? 'null');
+    return raw && typeof raw.base === 'string' && raw.latest ? raw : null;
+  } catch (_e) {
+    return null;
+  }
+}
+
+function dropPending(competitionId: string): void {
+  try {
+    localStorage.removeItem(pendingKey(competitionId));
+  } catch (_e) {
+    // Nothing to clean up then
+  }
+}
+
+/** Saved settings in one comparable spelling */
+function normalized(raw: unknown): string {
+  const settings = raw && typeof raw === 'object' ? toBannerSettings(raw as Record<string, unknown>) : null;
+  return settings ? JSON.stringify(settings) : '';
+}
+
+/** The change to replay over `saved`, or null (stale ones are dropped) */
+function takePending(competitionId: string, saved: BannerSettings | null): BannerSettings | null {
+  const pending = readPending(competitionId);
+  if (!pending) return null;
+  const savedText = saved ? JSON.stringify(saved) : '';
+  const latest = toBannerSettings(pending.latest as unknown as Record<string, unknown>);
+  let base = '';
+  try {
+    base = normalized(JSON.parse(pending.base));
+  } catch (_e) {
+    // Unreadable base: never replay over anything
+  }
+  // Replay only over exactly what it followed — or over nothing saved at all
+  if (latest && savedText !== JSON.stringify(latest) && (savedText === base || savedText === '')) return latest;
+  dropPending(competitionId);
+  return null;
+}
 
 function setMemoryStatus(text: string, isError = false): void {
   const status = el<HTMLElement>('memoryStatus');
@@ -868,10 +947,13 @@ function formChanged(): void {
 }
 
 /** Save a pending change now (on leaving the page or the competition) */
-function flushSave(): void {
+function flushSave(leaving = false): void {
   if (saveTimer === null) return;
   clearTimeout(saveTimer);
   saveTimer = null;
+  if (leaving && inFlight !== null && target?.writable) {
+    storePending(target.competition.id, { base: inFlight, latest: readForm() });
+  }
   void saveNow();
 }
 
@@ -880,15 +962,21 @@ function saveNow(): Promise<void> {
   const t = target;
   if (!t?.writable) return Promise.resolve();
   const settings = readForm();
-  const keepalive = JSON.stringify(settings).length < KEEPALIVE_MAX_CHARS;
+  const text = JSON.stringify(settings);
+  const keepalive = text.length < KEEPALIVE_MAX_CHARS;
   const previous = lastSave;
   lastSave = (async () => {
     await previous;
+    inFlight = text;
     try {
       await saveToolSettings(t.competition.id, 'banner', { ...settings }, { keepalive });
+      const pending = readPending(t.competition.id);
+      if (pending && normalized(pending.latest) === normalized(settings)) dropPending(t.competition.id);
       if (target === t && saveTimer === null) setMemoryStatus(savedStatus(t));
     } catch (e) {
       if (target === t) onSaveError(t, e);
+    } finally {
+      inFlight = null;
     }
   })();
   return lastSave;
@@ -940,7 +1028,8 @@ async function loadForCompetition(competition: PlatformCompetition | null): Prom
     loadFailed = true;
   }
   if (seq !== loadSeq) return;
-  const settings = saved ?? (await fullPrefill(competition, clubs));
+  const replay = loadFailed || isReadOnlyCompetition(competition) ? null : takePending(competition.id, saved);
+  const settings = replay ?? saved ?? (await fullPrefill(competition, clubs));
   if (seq !== loadSeq) return;
 
   applyForm(settings);
@@ -954,6 +1043,9 @@ async function loadForCompetition(competition: PlatformCompetition | null): Prom
     setMemoryStatus(`The values saved for ${name} couldn't be loaded, so changes aren't saved. Reload the page to try again.`, true);
   } else if (readOnly) {
     setMemoryStatus(`${saved ? `Showing the values saved for ${name}` : `Filled in from ${name}`}. You have view-only access, so your changes aren't saved.`);
+  } else if (replay) {
+    // The page closed before these went out: save them now
+    formChanged();
   } else if (saved) {
     setMemoryStatus(`Showing the values saved for ${name}. Changes are saved automatically.`);
   } else {
@@ -979,9 +1071,10 @@ function onActiveCompetition(next: PlatformCompetition | null): void {
 function bindMemory(): void {
   el<HTMLButtonElement>('btnRefill').addEventListener('click', () => void refillFromCompetition());
   // A change still waiting for its save goes out as the page closes
-  window.addEventListener('pagehide', flushSave);
+  window.addEventListener('pagehide', () => flushSave(true));
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') flushSave();
+    // A hidden tab may be discarded without a pagehide (mobile)
+    if (document.visibilityState === 'hidden') flushSave(true);
   });
 }
 

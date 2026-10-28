@@ -84,9 +84,10 @@ describe('summarizeScheduleXml', () => {
 });
 
 describe('isScheduleXmlName', () => {
-  it('matches FS Manager schedule exports only', () => {
+  it('matches full FS Manager schedule exports only', () => {
     expect(isScheduleXmlName('DT_SCHEDULE_FSK-------------------------------.xml')).toBe(true);
-    expect(isScheduleXmlName('DT_SCHEDULE_UPDATE_FSK.xml')).toBe(true);
+    // An update holds only the changed units
+    expect(isScheduleXmlName('DT_SCHEDULE_UPDATE_FSK.xml')).toBe(false);
     expect(isScheduleXmlName('YL110926HTL_CompetitionSchedule.pdf')).toBe(false);
     expect(isScheduleXmlName('DT_PARTIC_FSK.xml')).toBe(false);
   });

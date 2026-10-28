@@ -141,9 +141,11 @@ export function summarizeScheduleXml(xml: string): ScheduleSummary {
 }
 
 /**
- * Whether a pool file name looks like FS Manager's schedule XML
- * (`DT_SCHEDULE_FSK….xml`, also a `DT_SCHEDULE_UPDATE`).
+ * Whether a pool file name is FS Manager's full schedule XML
+ * (`DT_SCHEDULE_FSK….xml`). A `DT_SCHEDULE_UPDATE` carries only the changed
+ * units, so it never stands in for the schedule — same rule as the Protocol
+ * Generator's `isScheduleCandidate`.
  */
 export function isScheduleXmlName(name: string): boolean {
-  return /DT_SCHEDULE/i.test(name) && /\.xml$/i.test(name);
+  return /^DT_SCHEDULE_[^/]*\.xml$/i.test(name) && !/^DT_SCHEDULE_UPDATE/i.test(name);
 }
