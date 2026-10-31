@@ -14,6 +14,7 @@
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <link rel="stylesheet" href="/fonts/fonts.css">
   <link rel="stylesheet" href="/landing/landing.css">
+  <script src="/landing/landing.js" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to content</a>
@@ -37,6 +38,15 @@
           <a class="btn btn-ghost btn-sm" href="/signin">Sign in</a>
         </nav>
       </header>
+
+      <!-- Shown by landing.js after sign-out (/?signed-out=1). Sign-out ends the
+           site and External ID sessions, but not a Google or Microsoft account's
+           own session, which signs the next "Sign in" straight back in. -->
+      <div class="signed-out-note" role="status" hidden>
+        <p><strong>You've signed out.</strong> If you signed in with Google or a Microsoft account, that account is still signed in in this browser, and signing in here again won't ask for its password. On a shared computer, also sign out of
+          <a href="https://accounts.google.com/Logout" rel="noopener noreferrer">Google</a> or
+          <a href="https://login.live.com/logout.srf" rel="noopener noreferrer">your Microsoft account</a>, or close the browser.</p>
+      </div>
 
       <div class="hero-grid" id="main">
         <div class="hero-copy">

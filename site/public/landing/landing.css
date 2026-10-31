@@ -1,5 +1,5 @@
-/* Public landing page (signed-out "/"). A standalone static document: no JS,
- * no Vite bundle. Tokens mirror the "Protocol" design language in
+/* Public landing page (signed-out "/"). A standalone static document: no Vite
+ * bundle, and only landing.js for the sign-out note. Tokens mirror the "Protocol" design language in
  * site/src/style.css, plus the logo's cyan→violet gradient for thin rules. */
 
 :root {
@@ -121,6 +121,16 @@ h1, h2, h3, p { margin: 0; }
 .topnav-links { display: flex; gap: 28px; font-size: 15px; }
 .topnav-links a { color: #d6e2ec; text-decoration: none; }
 .topnav-links a:hover { color: #fff; }
+
+.signed-out-note {
+  max-width: 46rem; margin-top: 8px; padding: 14px 18px; border-radius: 8px;
+  border: 1px solid rgba(212, 175, 79, .5); background: rgba(10, 24, 40, .72);
+  color: var(--on-dark); font-size: 15px; line-height: 1.55;
+}
+.signed-out-note[hidden] { display: none; }
+.signed-out-note strong { color: #fff; }
+.signed-out-note a { color: var(--gold-bright); }
+.signed-out-note a:hover { color: #fff; }
 
 .hero-grid {
   display: grid; grid-template-columns: repeat(auto-fit, minmax(min(460px, 100%), 1fr));
