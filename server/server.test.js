@@ -625,6 +625,9 @@ test('/ serves the landing page without a principal and the home page with one',
         const garbage = await request(port, '/', { headers: { 'x-ms-client-principal': '%%%' } });
         assert.match(garbage.text, /LANDING/);
 
+        // Sign-out returns to /?signed-out=1: still the landing page.
+        assert.match((await request(port, '/?signed-out=1')).text, /LANDING/);
+
         // Only the root document switches; other root routes and the landing's
         // own files are untouched.
         assert.match((await request(port, '/something/else')).text, /ROOT_INDEX/);
@@ -758,6 +761,20 @@ test('the real privacy and terms pages and fonts.css reference only this origin'
         assert.match(url, /^\.\/[a-z0-9-]+\.v[0-9-]+\.woff2$/, url);
         assert.ok(fs.existsSync(path.join(publicRoot, 'fonts', url)), url);
     }
+});
+
+test('every sign-out returns to the landing page with the signed-out note', () => {
+    const repoRoot = path.join(__dirname, '..');
+    const publicRoot = path.join(repoRoot, 'site', 'public');
+    const landing = fs.readFileSync(path.join(publicRoot, 'landing', 'index.html'), 'utf8');
+    assert.match(landing, /<script src="\/landing\/landing\.js" defer><\/script>/);
+    assert.match(landing, /<div class="signed-out-note" role="status" hidden>/);
+    const script = fs.readFileSync(path.join(publicRoot, 'landing', 'landing.js'), 'utf8');
+    assert.match(script, /params\.has\('signed-out'\)/);
+    const noAccess = fs.readFileSync(path.join(publicRoot, 'no-access', 'index.html'), 'utf8');
+    assert.match(noAccess, /\/\.auth\/logout\?post_logout_redirect_uri=%2F%3Fsigned-out%3D1"/);
+    const shell = fs.readFileSync(path.join(repoRoot, 'site', 'src', 'shell.ts'), 'utf8');
+    assert.match(shell, /export function logoutUrl\(redirectPath = '\/\?signed-out=1'\)/);
 });
 
 test('the privacy notice (English and Finnish) and the terms of use (English only) are public and link to each other', () => {
