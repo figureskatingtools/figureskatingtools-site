@@ -43,8 +43,12 @@ export function loginUrl(appPath = '/'): string {
   return `/signin?return=${encodeURIComponent(appPath)}`;
 }
 
-/** Sign-out URL for App Service Easy Auth */
-export function logoutUrl(redirectPath = '/'): string {
+/**
+ * Sign-out URL for App Service Easy Auth. By default it returns to the landing
+ * page with `?signed-out=1`, which shows the note that a Google or Microsoft
+ * account stays signed in at its provider (landing.js).
+ */
+export function logoutUrl(redirectPath = '/?signed-out=1'): string {
   return `/.auth/logout?post_logout_redirect_uri=${encodeURIComponent(redirectPath)}`;
 }
 
