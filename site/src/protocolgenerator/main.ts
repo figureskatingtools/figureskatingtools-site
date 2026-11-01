@@ -145,7 +145,7 @@ const APP_HTML = `
               <span class="help-icon" tabindex="0" role="button" aria-label="How to use the Protocol Generator">?<span class="help-pop">
                 <strong>How to use the Protocol Generator</strong>
                 <ul>
-                  <li>Upload the competition's <strong>schedule</strong> (PDF or DT_SCHEDULE XML) — it builds the categories and segments automatically.</li>
+                  <li>Upload the competition's <strong>schedule PDF</strong> — it builds the categories and segments automatically.</li>
                   <li>Fill in the <strong>event details</strong> (organiser, venue, dates); they feed the cover and information pages.</li>
                   <li>Drop each category's result PDFs and photos onto their <strong>slots</strong>; drag between slots to fix placements, and hover a file to preview it.</li>
                   <li>Files exported from <strong>Figure Skating Manager</strong> are recognized by their file name and placed into the right category and segment automatically — placed files carry an <strong>auto</strong> tag. <strong>Auto-place files</strong> retries recognition for anything still in Uploads.</li>
@@ -201,7 +201,7 @@ function showPickCompetition() {
     <p class="bind-lead">Choose or create a competition from the selector in the top bar —
       every tool works on the same selected competition.</p>
     <ol class="howto-list">
-      <li>Upload the competition's <strong>schedule</strong> (DT_SCHEDULE XML or PDF).</li>
+      <li>Upload the competition's <strong>schedule PDF</strong>.</li>
       <li>Fill in the event details and drop in the result PDFs and photos — Figure Skating Manager
         exports are recognized by name and placed automatically with an <strong>auto</strong> tag.</li>
       <li>Check the auto-tagged files and drag any file between slots to fix placements; hover to preview.</li>
@@ -927,12 +927,12 @@ function renderDetails() {
     ? `<p class="section-sub">${(s.categories || []).length} categories parsed from the schedule.
          <button class="btn btn-xs btn-ghost" id="btn-reparse">Replace schedule…</button></p>`
     : `<div class="upload-area" id="schedule-drop">
-         <p class="upload-title">Drop the competition schedule (DT_SCHEDULE XML or PDF)</p>
+         <p class="upload-title">Drop the competition schedule PDF</p>
          <p class="upload-or">or</p>
          <button class="btn btn-sm btn-primary" id="schedule-browse">Browse…</button>
-         <input type="file" id="schedule-input" accept=".xml,.pdf" style="display:none;">
+         <input type="file" id="schedule-input" accept=".pdf" style="display:none;">
        </div>
-       <p class="section-sub">An ISU <strong>DT_SCHEDULE</strong> XML is preferred — it carries exact times, disciplines, segments and the ice rink.</p>`;
+       <p class="section-sub">Use the schedule PDF: its category names are the ones you set in FS Manager. The DT_SCHEDULE XML is not used — it always carries FS Manager's standard English names.</p>`;
 
   // The schedule FS Manager pushed into the shared pool is one click away (and
   // is parsed on its own when the competition has no categories yet).
@@ -1328,7 +1328,7 @@ function wireDetail() {
   });
   document.getElementById('btn-reparse')?.addEventListener('click', () => {
     const inp = document.createElement('input');
-    inp.type = 'file'; inp.accept = '.xml,.pdf';
+    inp.type = 'file'; inp.accept = '.pdf';
     inp.onchange = () => { if (inp.files?.[0]) parseSchedule(inp.files[0], true); };
     inp.click();
   });
@@ -1742,22 +1742,19 @@ function pendingPoolFiles(): PoolFile[] {
 /**
  * Is this pool file the competition schedule?
  *
- * FS Manager pushes the ODF schedule as `DT_SCHEDULE_FSK….xml` and its print as
- * `…_CompetitionSchedule.pdf`. The `DT_SCHEDULE_UPDATE_…_<stamp>.xml` increments
- * are *not* schedules — they only carry the changes since the full export, so
- * parsing one would build a structure out of a handful of units.
+ * Only FS Manager's print, `…_CompetitionSchedule.pdf`. Its ODF schedule
+ * (`DT_SCHEDULE_FSK….xml`) is not used: FS Manager writes its standard English
+ * names for international categories into every XML, while its custom name file
+ * rewrites only the PDFs — so the backend refuses anything but the PDF.
  */
 function isScheduleCandidate(name: string): boolean {
-  if (/^DT_SCHEDULE_UPDATE/i.test(name)) return false;
-  return /^DT_SCHEDULE_[^/]*\.xml$/i.test(name) || /_CompetitionSchedule\.pdf$/i.test(name);
+  return /_CompetitionSchedule\.pdf$/i.test(name);
 }
 
-/** Schedules in the pool, best first: the structured XML beats the PDF print,
- * and within a format the newest push wins. */
+/** Schedules in the pool, newest push first. */
 function scheduleCandidates(): PoolFile[] {
-  const isXml = (f: PoolFile) => (/\.xml$/i.test(f.name) ? 0 : 1);
   return (poolFiles || []).filter(f => isScheduleCandidate(f.name)).sort((a, b) =>
-    isXml(a) - isXml(b) || (b.uploadedUtc || '').localeCompare(a.uploadedUtc || ''));
+    (b.uploadedUtc || '').localeCompare(a.uploadedUtc || ''));
 }
 
 /** FS Manager pushes the roster pair as `DT_PARTIC_TEAMS_<code>.xml` and
