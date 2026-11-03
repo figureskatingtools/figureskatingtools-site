@@ -60,6 +60,10 @@ param externalAccessRole = readEnvironmentVariable('EXTERNAL_ACCESS_ROLE', '')
 // identity gets 503 migration_pending instead).
 param externalNewUsersEnabled = readEnvironmentVariable('EXTERNAL_NEW_USERS_ENABLED', 'true') != 'false'
 
+// The synthetic sample datasets are test-only by design: always off in prod,
+// deliberately with no GitHub var override.
+param sampleDataEnabled = false
+
 // System-assigned principal ids of the tool Function Apps, for read access to
 // the shared competition-data container. Empty entries are ignored, so this
 // works before the tool repos have been reduced (workstream 6).

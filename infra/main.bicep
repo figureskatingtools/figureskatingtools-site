@@ -83,6 +83,9 @@ param externalTenantId string
 @description('true = a new External ID identity becomes a new platform user (GitHub var EXTERNAL_NEW_USERS_ENABLED; default on); false = 503 migration_pending.')
 param externalNewUsersEnabled bool = true
 
+@description('true = the platform offers the synthetic sample datasets on competition create (SAMPLE_DATA_ENABLED). Test only: prod.bicepparam hard-codes false.')
+param sampleDataEnabled bool = false
+
 @description('Client id of the Entra External ID app registration (GitHub var AUTH_EXTERNAL_CLIENT_ID), the Easy Auth client.')
 param externalClientId string
 
@@ -214,6 +217,7 @@ module platformFunction 'modules/platform-function.bicep' = {
     allowedTenantIds: effectiveAllowedTenantIds
     externalTenantIds: normalizedExternalTenantId
     externalNewUsersEnabled: externalNewUsersEnabled
+    sampleDataEnabled: sampleDataEnabled
     // Informational copy for the admin diagnostics; the listener's own
     // setting (below) is the one that switches it.
     hovtpEnabled: hovtpEnabled

@@ -72,6 +72,11 @@ param externalTenantIds string = ''
 @description('true = a new External ID identity becomes a new user; false = 503 migration_pending.')
 param externalNewUsersEnabled bool = true
 
+// Offers the synthetic sample datasets (GET /api/sample-datasets, POST
+// /api/competitions/{id}/sample-data) — test only; prod.bicepparam hard-codes false.
+@description('true = the sample-data routes are on (SAMPLE_DATA_ENABLED); false = they answer 404.')
+param sampleDataEnabled bool = false
+
 // Informational only: the admin diagnostics show it. The HOVTP listener has its
 // own copy of the setting, and that one is what switches it.
 @description('The value the HOVTP listener gets for HOVTP_ENABLED.')
@@ -192,6 +197,10 @@ resource functionApp 'Microsoft.Web/sites@2023-12-01' = {
         {
           name: 'EXTERNAL_NEW_USERS_ENABLED'
           value: string(externalNewUsersEnabled)
+        }
+        {
+          name: 'SAMPLE_DATA_ENABLED'
+          value: string(sampleDataEnabled)
         }
       ]
     }

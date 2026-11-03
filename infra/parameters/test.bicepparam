@@ -56,6 +56,11 @@ param externalAccessRole = readEnvironmentVariable('EXTERNAL_ACCESS_ROLE', '')
 // only the literal 'false' turns it off), so testers get in without linking.
 param externalNewUsersEnabled = readEnvironmentVariable('EXTERNAL_NEW_USERS_ENABLED', 'true') != 'false'
 
+// Synthetic sample datasets offered in the create-competition dialog
+// (SAMPLE_DATA_ENABLED). On by default here; the GitHub var
+// SAMPLE_DATA_ENABLED=false turns it off.
+param sampleDataEnabled = readEnvironmentVariable('SAMPLE_DATA_ENABLED', 'true') != 'false'
+
 // System-assigned principal ids of the tool Function Apps, for read access to
 // the shared competition-data container. Empty entries are ignored, so this
 // works before the tool repos have been reduced (workstream 6).
