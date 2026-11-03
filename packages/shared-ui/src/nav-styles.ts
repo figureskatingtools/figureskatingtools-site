@@ -738,6 +738,50 @@ const NAV_STYLES = `
   gap: 0.9rem;
 }
 
+/* Create mode, test environment only: the sample datasets to import */
+.fst-comp-samples {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  margin: 0;
+  padding: 0.7rem 0.8rem 0.8rem;
+  border: 1px dashed #c6d3df;
+  border-radius: 0.4rem;
+}
+
+.fst-comp-samples legend {
+  padding: 0 0.3rem;
+}
+
+.fst-comp-samples .fst-comp-field-note {
+  margin: 0;
+}
+
+.fst-comp-sample {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  font-size: 0.85rem;
+  color: #0d1f33;
+  cursor: pointer;
+}
+
+.fst-comp-sample input {
+  margin: 0.15rem 0 0;
+  accent-color: #1271b5;
+}
+
+.fst-comp-sample-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.fst-comp-sample-desc {
+  font-size: 0.72rem;
+  color: #64798e;
+}
+
 .fst-comp-dialog-error {
   margin: 0;
   padding: 0.55rem 0.7rem;

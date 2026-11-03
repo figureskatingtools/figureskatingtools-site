@@ -121,6 +121,16 @@ export const COMPETITIONS_API = '/api/competitions';
 /** Base path of the platform user directory API (share picker, `me`) */
 export const USERS_API = '/api/users';
 
+/** The platform's sample-dataset list (test environment only; 404 elsewhere) */
+export const SAMPLE_DATASETS_API = '/api/sample-datasets';
+
+/** One synthetic sample dataset the create dialog can import */
+export interface SampleDataset {
+  id: string;
+  label: string;
+  description: string;
+}
+
 /** Shortest query `searchUsers` sends — the API answers 400 below it */
 export const USER_SEARCH_MIN_CHARS = 3;
 
@@ -741,6 +751,52 @@ export async function extendCompetition(id: string): Promise<PlatformCompetition
     throw new CompetitionApiError(resp.status, 'Competitions API returned an unexpected body');
   }
   return extended;
+}
+
+/* ════════════════════════════════════════════════════════════════
+   Sample datasets (test environment only)
+   ════════════════════════════════════════════════════════════════ */
+
+function toSampleDataset(raw: unknown): SampleDataset | null {
+  const row = raw as Partial<Record<keyof SampleDataset, unknown>> | null;
+  if (!row || typeof row.id !== 'string' || !row.id) return null;
+  if (typeof row.label !== 'string' || !row.label.trim()) return null;
+  return {
+    id: row.id,
+    label: row.label,
+    description: typeof row.description === 'string' ? row.description : '',
+  };
+}
+
+/**
+ * `GET /api/sample-datasets` — the synthetic datasets a new competition can
+ * start with. Only the test environment offers them (404 everywhere else), so
+ * this never throws: a 404, any other failure or an odd body resolves to [],
+ * which is the caller's cue to show nothing.
+ */
+export async function listSampleDatasets(): Promise<SampleDataset[]> {
+  try {
+    const resp = await fetch(SAMPLE_DATASETS_API, { headers: { Accept: 'application/json' } });
+    if (!resp.ok) return [];
+    return itemsOf(await resp.json(), toSampleDataset);
+  } catch (_e) {
+    return [];
+  }
+}
+
+/**
+ * `POST /api/competitions/{id}/sample-data` — writes the chosen datasets'
+ * files into the competition's file pool (overwriting same-named files).
+ * Throws `CompetitionApiError` (400 `invalid_dataset`, 403 `read_only`, 404,
+ * 409 `competition_deleted`, 0 when the API is unreachable).
+ */
+export async function importSampleData(id: string, datasets: string[]): Promise<void> {
+  const resp = await callApi(`${COMPETITIONS_API}/${encodeURIComponent(id)}/sample-data`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ datasets }),
+  });
+  if (!resp.ok) throw await errorFromResponse(resp, 'Could not import the sample data');
 }
 
 /* ════════════════════════════════════════════════════════════════

@@ -16,7 +16,9 @@ import {
   createCompetition,
   CompetitionApiError,
   getActiveCompetition,
+  importSampleData,
   listCompetitions,
+  listSampleDatasets,
   normalizeCompetitionCode,
   ownerLabel,
   retentionInfo,
@@ -25,6 +27,7 @@ import {
   syncCompetitionSnapshot,
   updateCompetition,
   type PlatformCompetition,
+  type SampleDataset,
   type UpdateCompetitionInput,
 } from './competition.js';
 import { formatDateFi } from './format.js';
@@ -258,6 +261,29 @@ function deletionNoteHtml(competition: PlatformCompetition | undefined): string 
 }
 
 /**
+ * Create mode: the "Sample data" fieldset, one unticked checkbox per dataset
+ * the platform offers (test environment only). No datasets → no fieldset.
+ */
+export function sampleDatasetsFieldsetHtml(datasets: readonly SampleDataset[]): string {
+  if (datasets.length === 0) return '';
+  const boxes = datasets.map((d) => `
+      <label class="fst-comp-sample">
+        <input type="checkbox" name="sampleDataset" value="${esc(d.id)}">
+        <span class="fst-comp-sample-text">
+          <span class="fst-comp-sample-label">${esc(d.label)}</span>
+          ${d.description ? `<span class="fst-comp-sample-desc">${esc(d.description)}</span>` : ''}
+        </span>
+      </label>`).join('');
+  return `
+    <fieldset class="fst-comp-samples" data-fst-comp-samples>
+      <legend class="fst-comp-field-label">Sample data (test environment only)</legend>
+      <p class="fst-comp-field-note">Synthetic skaters, clubs and officials, imported into the
+        competition's files.</p>
+      ${boxes}
+    </fieldset>`;
+}
+
+/**
  * Open the shared "New competition" dialog.
  *
  * Resolves with the created competition, or null when the user cancels.
@@ -343,11 +369,11 @@ function openCompetitionDialog(
           </label>
         </div>
 
-        ${editing ? deletionNoteHtml(opts.original) : ''}
+        ${editing ? deletionNoteHtml(opts.original) : '<div data-fst-comp-samples-slot></div>'}
 
         <p class="fst-comp-dialog-error" data-fst-comp-error hidden></p>
 
-        <div class="fst-comp-dialog-actions">
+        <div class="fst-comp-dialog-actions" data-fst-comp-actions>
           <button type="button" class="fst-comp-btn-secondary" data-fst-comp-cancel>Cancel</button>
           <button type="submit" class="fst-comp-btn-primary" data-fst-comp-submit>${editing ? 'Save' : 'Create'}</button>
         </div>
@@ -394,6 +420,8 @@ function openCompetitionDialog(
     }
 
     let settled = false;
+    // Once the competition exists, closing the dialog in any way resolves with it
+    let created: PlatformCompetition | null = null;
     const finish = (result: PlatformCompetition | null): void => {
       if (settled) return;
       settled = true;
@@ -402,14 +430,58 @@ function openCompetitionDialog(
       resolve(result);
     };
 
-    dialog.querySelector('[data-fst-comp-cancel]')?.addEventListener('click', () => finish(null));
+    dialog.querySelector('[data-fst-comp-cancel]')?.addEventListener('click', () => finish(created));
     dialog.addEventListener('cancel', (e) => {
       e.preventDefault();
-      finish(null);
+      finish(created);
     });
+
+    // Create mode: offer the sample datasets when the platform has any (test only)
+    const samplesSlot = dialog.querySelector<HTMLElement>('[data-fst-comp-samples-slot]');
+    if (samplesSlot) {
+      void listSampleDatasets().then((datasets) => {
+        if (!settled && !created) samplesSlot.innerHTML = sampleDatasetsFieldsetHtml(datasets);
+      });
+    }
+    const pickedSamples = (): string[] =>
+      Array.from(form.querySelectorAll<HTMLInputElement>('input[name="sampleDataset"]:checked'))
+        .map((box) => box.value);
+
+    // The competition exists but its sample data did not make it: say so and
+    // leave only a Close that resolves with the competition
+    const showImportFailure = (competition: PlatformCompetition, err: unknown): void => {
+      const reason = err instanceof CompetitionApiError ? err.message : 'unknown error';
+      form.querySelectorAll<HTMLInputElement>('input').forEach((input) => { input.disabled = true; });
+      errorEl.hidden = false;
+      errorEl.textContent = `Competition created, but the sample data import failed: ${reason}`;
+      const actions = dialog.querySelector<HTMLElement>('[data-fst-comp-actions]')!;
+      actions.innerHTML =
+        '<button type="button" class="fst-comp-btn-primary" data-fst-comp-close>Close</button>';
+      const close = actions.querySelector<HTMLButtonElement>('[data-fst-comp-close]')!;
+      close.addEventListener('click', () => finish(competition));
+      close.focus();
+    };
+
+    const afterCreate = async (competition: PlatformCompetition): Promise<void> => {
+      created = competition;
+      const samples = pickedSamples();
+      if (samples.length === 0) {
+        finish(competition);
+        return;
+      }
+      submitBtn.textContent = 'Importing sample data…';
+      try {
+        await importSampleData(competition.id, samples);
+      } catch (err) {
+        if (!settled) showImportFailure(competition, err);
+        return;
+      }
+      finish(competition);
+    };
 
     form.addEventListener('submit', (e) => {
       e.preventDefault();
+      if (created) return;
       if (!form.reportValidity()) return;
 
       const original = opts.original;
@@ -455,16 +527,17 @@ function openCompetitionDialog(
         date: dateInput.value,
         venue: venueInput.value,
       })
-        .then((created) => finish(created))
-        .catch((err: unknown) => {
-          submitBtn.disabled = false;
-          submitBtn.textContent = 'Create';
-          errorEl.hidden = false;
-          errorEl.textContent =
-            err instanceof CompetitionApiError
-              ? err.message
-              : 'Could not create the competition. Please try again.';
-        });
+        .then(
+          (competition) => afterCreate(competition),
+          (err: unknown) => {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Create';
+            errorEl.hidden = false;
+            errorEl.textContent =
+              err instanceof CompetitionApiError
+                ? err.message
+                : 'Could not create the competition. Please try again.';
+          });
     });
 
     dialog.showModal();
