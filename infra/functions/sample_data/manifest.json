@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "datasets": [
+    {
+      "id": "synchro",
+      "label": "Synchronized skating",
+      "description": "Placeholder: the synthetic synchronized skating dataset is not generated yet."
+    },
+    {
+      "id": "singles",
+      "label": "Singles",
+      "description": "Placeholder: the synthetic singles dataset is not generated yet."
+    },
+    {
+      "id": "icedance",
+      "label": "Ice dance",
+      "description": "Placeholder: the synthetic ice dance dataset is not generated yet."
+    }
+  ],
+  "combinations": {
+    "synchro": [
+      "datasets/synchro/synchro-placeholder.xml"
+    ],
+    "singles": [
+      "datasets/singles/singles-placeholder.xml"
+    ],
+    "icedance": [
+      "datasets/icedance/icedance-placeholder.xml"
+    ],
+    "singles-synchro": [
+      "datasets/singles/singles-placeholder.xml",
+      "datasets/synchro/synchro-placeholder.xml"
+    ],
+    "icedance-synchro": [
+      "datasets/icedance/icedance-placeholder.xml",
+      "datasets/synchro/synchro-placeholder.xml"
+    ],
+    "icedance-singles": [
+      "datasets/icedance/icedance-placeholder.xml",
+      "datasets/singles/singles-placeholder.xml"
+    ],
+    "icedance-singles-synchro": [
+      "datasets/icedance/icedance-placeholder.xml",
+      "datasets/singles/singles-placeholder.xml",
+      "datasets/synchro/synchro-placeholder.xml"
+    ]
+  }
+}

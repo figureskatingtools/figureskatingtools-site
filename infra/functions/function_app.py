@@ -50,8 +50,8 @@ access on a write route 403 read_only, anything short of owner on an owner
 route 403 owner_required:
 
     read   GET competition, list/download files, list HOVTP sources, GET settings
-    write  PUT/PATCH, extend, upload/delete file, HOVTP accept/reject/revoke,
-           PUT settings
+    write  PUT/PATCH, extend, upload/delete file, import sample data,
+           HOVTP accept/reject/revoke, PUT settings
     owner  DELETE competition, manage access
 
 HTTP contract (Azure Functions' default `api` route prefix makes these the
@@ -98,6 +98,22 @@ competition with, else null with only the masked hint ("a•••@club.fi").
                                                     that cannot be done safely
     GET    /api/competitions/{id}/files/{name}   -> 200 bytes  (?source=upload|fsm)
     DELETE /api/competitions/{id}/files/{name}   -> 200 {"status": "deleted", ...}
+
+    GET    /api/sample-datasets                  -> 200 {"items": [SampleDataset, ...]}
+                                                    404 not_found unless SAMPLE_DATA_ENABLED
+    POST   /api/competitions/{id}/sample-data    -> 201 {"files": [FileInfo, ...]}  (write)
+                                                    {"datasets": ["synchro", ...]};
+                                                    404 not_found unless SAMPLE_DATA_ENABLED,
+                                                    400 invalid_dataset,
+                                                    409 competition_deleted
+
+SampleDataset = {"id", "label", "description"}. Test environment only (prod
+hard-codes SAMPLE_DATA_ENABLED off): synthetic FS Manager-style files from
+sample_data/ (manifest.json), one prebuilt file list per combination of
+datasets, written into the competition's uploads/ like a user upload
+(sourceTool "sample", overwriting same-named files). They are trusted static
+assets, so they skip the upload's birth-date stripping (a test pins that they
+would pass it unchanged).
 
     GET    /api/competitions/{id}/settings/{tool} -> 200 ToolSettings  (read)
     PUT    /api/competitions/{id}/settings/{tool} -> 200 ToolSettings  (write)
@@ -284,6 +300,8 @@ import unicodedata
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from itertools import combinations
+from pathlib import Path
 from uuid import uuid4
 
 from urllib.parse import quote, unquote
@@ -451,6 +469,15 @@ POOL_CONTENT_TYPES = {
 }
 ALLOWED_FILE_EXTENSIONS = frozenset(POOL_CONTENT_TYPES)
 
+# The synthetic sample datasets (test only, SAMPLE_DATA_ENABLED): manifest.json
+# plus the files it lists, shipped in the app package. Tests monkeypatch it.
+SAMPLE_DATA_DIR = Path(__file__).parent / "sample_data"
+SAMPLE_MANIFEST_NAME = "manifest.json"
+SAMPLE_MANIFEST_VERSION = 1
+SOURCE_TOOL_SAMPLE = "sample"
+# Dataset ids join into combination keys with "-", so they cannot contain one.
+_SAMPLE_DATASET_ID_RE = re.compile(r"[a-z0-9]{1,32}")
+
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 # Control chars break HTTP headers; '#?%' break URLs (the blob name travels in
 # the path of /api/competitions/{id}/files/{name}); '"' breaks Content-Disposition.
@@ -575,6 +602,13 @@ def _external_new_users_enabled() -> bool:
     get in as they will in production; off in prod until the phase C linking
     of the existing users is done."""
     return (os.environ.get("EXTERNAL_NEW_USERS_ENABLED") or "").strip().lower() in ("1", "true", "yes")
+
+
+def _sample_data_enabled() -> bool:
+    """SAMPLE_DATA_ENABLED (app setting, Bicep-owned): whether the synthetic
+    sample datasets are offered. Test only — prod.bicepparam hard-codes it off.
+    Bicep's string(bool) writes 'True'/'False'."""
+    return (os.environ.get("SAMPLE_DATA_ENABLED") or "").strip().lower() in ("1", "true", "yes")
 
 
 class MigrationPending(Exception):
@@ -2547,19 +2581,9 @@ def _upload_competition_file(req: func.HttpRequest) -> func.HttpResponse:
     if container is None:
         return _error("storage_unavailable", "Storage configuration invalid.", 500)
 
-    content_type = _pool_content_type(name)
     try:
-        container.upload_blob(
-            name=_pool_prefix(competition_id, SOURCE_UPLOAD) + name,
-            data=body,
-            overwrite=True,
-            metadata={
-                "uploadedBy": _ascii_metadata(user.email),
-                "sourceTool": source_tool,
-                "origName": quote(str(req.params.get("filename") or ""), safe=""),
-            },
-            content_settings=ContentSettings(content_type=content_type),
-        )
+        info = _store_upload(container, competition_id, name, body, user, source_tool,
+                             str(req.params.get("filename") or ""))
     except Exception as e:
         logging.error(f"Error uploading '{name}' for competition '{competition_id}': {e}")
         return _error("internal_error", "Could not store the file.", 500)
@@ -2567,7 +2591,26 @@ def _upload_competition_file(req: func.HttpRequest) -> func.HttpResponse:
     _audit_override(user, role, ROLE_WRITE, "file.upload", entity,
                     changes={"file": [None, name]})
 
-    return _json({
+    return _json(info, 201)
+
+
+def _store_upload(container, competition_id: str, name: str, body: bytes, user: User,
+                  source_tool: str, orig_name: str) -> dict:
+    """Write one file into the competition's uploads/ (overwriting) -> FileInfo.
+    `name` must already be sanitized. Raises whatever the blob client raises."""
+    content_type = _pool_content_type(name)
+    container.upload_blob(
+        name=_pool_prefix(competition_id, SOURCE_UPLOAD) + name,
+        data=body,
+        overwrite=True,
+        metadata={
+            "uploadedBy": _ascii_metadata(user.email),
+            "sourceTool": source_tool,
+            "origName": quote(orig_name, safe=""),
+        },
+        content_settings=ContentSettings(content_type=content_type),
+    )
+    return {
         "name": name,
         "source": SOURCE_UPLOAD,
         "size": len(body),
@@ -2575,7 +2618,204 @@ def _upload_competition_file(req: func.HttpRequest) -> func.HttpResponse:
         "uploadedUtc": _now_utc(),
         "uploadedBy": user.email,
         "sourceTool": source_tool,
-    }, 201)
+    }
+
+
+# ── sample datasets (test only) ───────────────────────────────────────────────
+# sample_data/manifest.json:
+#   {"version": 1,
+#    "datasets": [{"id", "label", "description"}, ...],
+#    "combinations": {"<sorted ids joined by '-'>": ["<path under sample_data/>", ...]}}
+# Every non-empty selection of datasets has its own prebuilt file list (the
+# per-competition ODF files cannot be merged at import time). Each file lands
+# in uploads/ under its basename, so basenames are unique within a list.
+
+class SampleManifestError(Exception):
+    """manifest.json, or a file it lists, breaks the contract above."""
+
+
+_SAMPLE_MANIFEST_CACHE: dict = {}
+
+
+def sample_combination_key(dataset_ids) -> str:
+    return "-".join(sorted(dataset_ids))
+
+
+def _sample_manifest_file(directory: Path, relative) -> tuple[str, Path]:
+    """One manifest path -> (pool name, absolute file). Refuses anything that
+    is not a regular file inside `directory`, or whose basename would not be
+    stored exactly as it is."""
+    if not isinstance(relative, str) or not relative or "\\" in relative:
+        raise SampleManifestError(f"bad path {relative!r}")
+    candidate = Path(relative)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        raise SampleManifestError(f"path escapes the sample data directory: {relative!r}")
+    root = directory.resolve()
+    resolved = (root / candidate).resolve()   # follows symlinks, so they are checked too
+    if resolved == root or not resolved.is_relative_to(root):
+        raise SampleManifestError(f"path escapes the sample data directory: {relative!r}")
+    if not resolved.is_file():
+        raise SampleManifestError(f"missing file {relative!r}")
+    basename = candidate.name
+    name, error = sanitize_pool_filename(basename)
+    if error or name != basename:
+        raise SampleManifestError(f"unusable file name {basename!r}")
+    if os.path.splitext(name)[1].lower() not in POOL_CONTENT_TYPES:
+        raise SampleManifestError(f"unsupported file type {basename!r}")
+    if resolved.stat().st_size > POOL_MAX_FILE_SIZE:
+        raise SampleManifestError(f"file too large {relative!r}")
+    return name, resolved
+
+
+def load_sample_manifest(directory) -> dict:
+    """Read and validate `directory`/manifest.json ->
+    {"datasets": [{id, label, description}], "combinations": {key: [(name, path)]}}.
+    Every non-empty selection of datasets must have its combination. Raises
+    SampleManifestError."""
+    directory = Path(directory)
+    try:
+        raw = json.loads((directory / SAMPLE_MANIFEST_NAME).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise SampleManifestError(f"unreadable manifest: {e}") from e
+    if not isinstance(raw, dict) or raw.get("version") != SAMPLE_MANIFEST_VERSION:
+        raise SampleManifestError("unsupported manifest version")
+
+    raw_datasets = raw.get("datasets")
+    if not isinstance(raw_datasets, list) or not raw_datasets:
+        raise SampleManifestError("no datasets")
+    datasets = []
+    for item in raw_datasets:
+        if not isinstance(item, dict):
+            raise SampleManifestError("a dataset is not an object")
+        dataset_id, label = item.get("id"), item.get("label")
+        description = item.get("description", "")
+        if not isinstance(dataset_id, str) or not _SAMPLE_DATASET_ID_RE.fullmatch(dataset_id):
+            raise SampleManifestError(f"bad dataset id {dataset_id!r}")
+        if not isinstance(label, str) or not label.strip() or not isinstance(description, str):
+            raise SampleManifestError(f"bad label or description for {dataset_id!r}")
+        if any(d["id"] == dataset_id for d in datasets):
+            raise SampleManifestError(f"duplicate dataset id {dataset_id!r}")
+        datasets.append({"id": dataset_id, "label": label, "description": description})
+
+    raw_combinations = raw.get("combinations")
+    if not isinstance(raw_combinations, dict):
+        raise SampleManifestError("combinations is not an object")
+    ids = [d["id"] for d in datasets]
+    expected = {sample_combination_key(subset)
+                for size in range(1, len(ids) + 1) for subset in combinations(ids, size)}
+    if set(raw_combinations) != expected:
+        raise SampleManifestError(
+            f"combinations must be exactly {sorted(expected)}, not {sorted(raw_combinations)}")
+
+    resolved = {}
+    for key, paths in raw_combinations.items():
+        if not isinstance(paths, list) or not paths:
+            raise SampleManifestError(f"combination {key!r} lists no files")
+        files = [_sample_manifest_file(directory, path) for path in paths]
+        names = [name.lower() for name, _path in files]
+        if len(set(names)) != len(names):
+            raise SampleManifestError(f"combination {key!r} repeats a file name")
+        resolved[key] = files
+    return {"datasets": datasets, "combinations": resolved}
+
+
+def _sample_manifest() -> dict:
+    """The validated manifest of SAMPLE_DATA_DIR, loaded once per process."""
+    key = str(SAMPLE_DATA_DIR)
+    manifest = _SAMPLE_MANIFEST_CACHE.get(key)
+    if manifest is None:
+        manifest = load_sample_manifest(SAMPLE_DATA_DIR)
+        _SAMPLE_MANIFEST_CACHE[key] = manifest
+    return manifest
+
+
+def _sample_data_off() -> func.HttpResponse:
+    return _error("not_found", "Not found.", 404)
+
+
+def _sample_data_unavailable(error: Exception) -> func.HttpResponse:
+    logging.error(f"Sample data manifest refused: {error}")
+    return _error("sample_data_unavailable", "The sample data is not available.", 500)
+
+
+def _list_sample_datasets(req: func.HttpRequest) -> func.HttpResponse:
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return user
+    if not _sample_data_enabled():
+        return _sample_data_off()
+    try:
+        manifest = _sample_manifest()
+    except SampleManifestError as e:
+        return _sample_data_unavailable(e)
+    return _json({"items": [dict(d) for d in manifest["datasets"]]})
+
+
+def _requested_datasets(body, known_ids) -> list | None:
+    """{"datasets": [...]} -> its ids, or None unless they are a non-empty list
+    of distinct known ids."""
+    if not isinstance(body, dict):
+        return None
+    requested = body.get("datasets")
+    if not isinstance(requested, list) or not requested:
+        return None
+    if not all(isinstance(item, str) and item in known_ids for item in requested):
+        return None
+    if len(set(requested)) != len(requested):
+        return None
+    return requested
+
+
+def _import_sample_data(req: func.HttpRequest) -> func.HttpResponse:
+    """Write the chosen datasets' files into the competition's uploads/. No
+    birth-date stripping: they are trusted static assets (test_sample_data.py
+    pins that they would pass it unchanged)."""
+    user = _require_user(req)
+    if isinstance(user, func.HttpResponse):
+        return user
+    if not _sample_data_enabled():
+        return _sample_data_off()
+
+    competition_id = _route_competition_id(req)
+    if not competition_id:
+        return _competition_not_found()
+
+    role, error = _require_access(user, competition_id, ROLE_WRITE)
+    if error is not None:
+        return error
+
+    try:
+        manifest = _sample_manifest()
+    except SampleManifestError as e:
+        return _sample_data_unavailable(e)
+
+    requested = _requested_datasets(_read_body(req), {d["id"] for d in manifest["datasets"]})
+    if requested is None:
+        return _error("invalid_dataset", "Choose one or more of the offered sample datasets.", 400)
+    key = sample_combination_key(requested)
+
+    entity, error = _load_competition(competition_id)
+    if error is not None:
+        return error
+    if entity.get("Status") == STATUS_DELETED:
+        return _error("competition_deleted", "This competition has been deleted.", 409)
+
+    container = _get_container_client()
+    if container is None:
+        return _error("storage_unavailable", "Storage configuration invalid.", 500)
+
+    files = []
+    try:
+        for name, path in manifest["combinations"][key]:
+            files.append(_store_upload(container, competition_id, name, path.read_bytes(),
+                                       user, SOURCE_TOOL_SAMPLE, name))
+    except Exception as e:
+        logging.error(f"Error importing sample data '{key}' for competition '{competition_id}': {e}")
+        return _error("internal_error", "Could not store the sample data.", 500)
+
+    _audit_override(user, role, ROLE_WRITE, "file.upload", entity,
+                    changes={"sampleData": [None, key]})
+    return _json({"files": files}, 201)
 
 
 def _download_competition_file(req: func.HttpRequest) -> func.HttpResponse:
@@ -4642,6 +4882,7 @@ def _admin_diagnostics(req: func.HttpRequest) -> func.HttpResponse:
         "allowedTenantCount": len(_allowed_tenant_ids()),
         "externalTenantCount": len(_external_tenant_ids()),
         "externalNewUsersEnabled": _external_new_users_enabled(),
+        "sampleDataEnabled": _sample_data_enabled(),
         "inactiveUserDays": INACTIVE_USER_DAYS,
     }
     by_status = {STATUS_ACTIVE: 0, STATUS_DELETED: 0, STATUS_PURGED: 0}
@@ -4797,6 +5038,17 @@ def competition_file_by_name(req: func.HttpRequest) -> func.HttpResponse:
     if req.method == "DELETE":
         return _delete_competition_file(req)
     return _download_competition_file(req)
+
+
+@app.route(route="competitions/{id}/sample-data", auth_level=func.AuthLevel.ANONYMOUS,
+           methods=["POST"])
+def competition_sample_data(req: func.HttpRequest) -> func.HttpResponse:
+    return _import_sample_data(req)
+
+
+@app.route(route="sample-datasets", auth_level=func.AuthLevel.ANONYMOUS, methods=["GET"])
+def sample_datasets(req: func.HttpRequest) -> func.HttpResponse:
+    return _list_sample_datasets(req)
 
 
 @app.route(route="competitions/{id}/settings/{tool}", auth_level=func.AuthLevel.ANONYMOUS,
