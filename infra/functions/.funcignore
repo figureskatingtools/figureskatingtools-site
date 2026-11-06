@@ -11,3 +11,8 @@ requirements-dev.txt
 __pycache__
 .venv
 .pytest_cache
+sample_data/generate.py
+sample_data/verify_parsers.py
+sample_data/check_leaks.py
+sample_data/requirements-sampledata.txt
+sample_data/README.md

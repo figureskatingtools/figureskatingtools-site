@@ -237,6 +237,11 @@ jobs:
           cd "$BUILD_DIR"
           rm -rf .venv __pycache__ .git .vscode .pytest_cache tests local.settings.json
           rm -f ./*.pyc requirements-dev.txt
+          # The sample data's dev-time tooling stays out; only manifest.json,
+          # datasets/ and combined/ ship.
+          rm -rf sample_data/__pycache__
+          rm -f sample_data/generate.py sample_data/verify_parsers.py sample_data/check_leaks.py \
+                sample_data/requirements-sampledata.txt sample_data/README.md
 
           mkdir -p .python_packages/lib/site-packages
           pip install -r requirements.txt --only-binary=:all: --target .python_packages/lib/site-packages
