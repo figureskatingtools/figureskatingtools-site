@@ -1,0 +1,324 @@
+<?xml version="1.0" encoding="utf-8"?>
+<OdfBody CompetitionCode="SAMPLE171026STSC" DocumentCode="FSK-------------------------------" DocumentType="DT_PARTIC_TEAMS" Version="1" FeedFlag="P" Date="2026-10-14" Time="201500000" LogicalDate="2026-10-17" Source="FSKFSK1">
+  <Competition>
+    <Team Code="5232" Organisation="CRIA" Name="Velvet Comets" ShortName="Velvet Comets" TeamType="CUSTOM" TVTeamName="Velvet Comets" Gender="X" Status="ACTIVE">
+      <Composition>
+        <Athlete Code="69339565" Order="1" />
+        <Athlete Code="42065600" Order="2" />
+        <Athlete Code="10667953" Order="3" />
+        <Athlete Code="98612126" Order="4" />
+        <Athlete Code="48185337" Order="5" />
+        <Athlete Code="87504643" Order="6" />
+        <Athlete Code="11659546" Order="7" />
+        <Athlete Code="45771446" Order="8" />
+        <Athlete Code="27847160" Order="9" />
+        <Athlete Code="50093540" Order="10" />
+        <Athlete Code="32126465" Order="11" />
+        <Athlete Code="92823180" Order="12" />
+        <Athlete Code="41996289" Order="13" />
+        <Athlete Code="84376481" Order="14" />
+        <Athlete Code="34036252" Order="15" />
+        <Athlete Code="94636082" Order="16" />
+        <Athlete Code="76824549" Order="17" />
+        <Athlete Code="27581904" Order="18" />
+        <Athlete Code="30916804" Order="19" />
+        <Athlete Code="56313247" Order="20" />
+      </Composition>
+      <Discipline Code="FSK-------------------------------" IFId="5232">
+        <RegisteredEvent Event="FSKXSYNCHRONJUNIOR----------------" Class="ODF_EXTENDED">
+          <EventEntry Type="ER_EXTENDED" Code="ENTRY_ORDER" Pos="0" Value="1" />
+        </RegisteredEvent>
+      </Discipline>
+    </Team>
+    <Team Code="8533" Organisation="STSC" Name="Aurora Pulse" ShortName="Aurora Pulse" TeamType="CUSTOM" TVTeamName="Aurora Pulse" Gender="X" Status="ACTIVE">
+      <Composition>
+        <Athlete Code="73595028" Order="1" />
+        <Athlete Code="79796550" Order="2" />
+        <Athlete Code="65453293" Order="3" />
+        <Athlete Code="37443610" Order="4" />
+        <Athlete Code="23593360" Order="5" />
+        <Athlete Code="53760065" Order="6" />
+        <Athlete Code="49134736" Order="7" />
+        <Athlete Code="23470457" Order="8" />
+        <Athlete Code="66371300" Order="9" />
+        <Athlete Code="67395186" Order="10" />
+        <Athlete Code="84182351" Order="11" />
+        <Athlete Code="12859558" Order="12" />
+        <Athlete Code="10470187" Order="13" />
+        <Athlete Code="60323514" Order="14" />
+        <Athlete Code="58998895" Order="15" />
+        <Athlete Code="55478026" Order="16" />
+        <Athlete Code="76565927" Order="17" />
+        <Athlete Code="45020160" Order="18" />
+        <Athlete Code="84726610" Order="19" />
+        <Athlete Code="61102989" Order="20" />
+      </Composition>
+      <Discipline Code="FSK-------------------------------" IFId="8533">
+        <RegisteredEvent Event="FSKXSYNCHRONJUNIOR----------------" Class="ODF_EXTENDED">
+          <EventEntry Type="ER_EXTENDED" Code="ENTRY_ORDER" Pos="0" Value="2" />
+        </RegisteredEvent>
+      </Discipline>
+    </Team>
+    <Team Code="1789" Organisation="GFSC" Name="Ember Waves" ShortName="Ember Waves" TeamType="CUSTOM" TVTeamName="Ember Waves" Gender="X" Status="ACTIVE">
+      <Composition>
+        <Athlete Code="62165229" Order="1" />
+        <Athlete Code="61988356" Order="2" />
+        <Athlete Code="82262827" Order="3" />
+        <Athlete Code="80623062" Order="4" />
+        <Athlete Code="32950442" Order="5" />
+        <Athlete Code="66215226" Order="6" />
+        <Athlete Code="66030513" Order="7" />
+        <Athlete Code="45835616" Order="8" />
+        <Athlete Code="77630367" Order="9" />
+        <Athlete Code="31487454" Order="10" />
+        <Athlete Code="63359024" Order="11" />
+        <Athlete Code="44720028" Order="12" />
+        <Athlete Code="78072612" Order="13" />
+        <Athlete Code="42765525" Order="14" />
+        <Athlete Code="67171085" Order="15" />
+        <Athlete Code="41334758" Order="16" />
+        <Athlete Code="91007642" Order="17" />
+        <Athlete Code="84781288" Order="18" />
+        <Athlete Code="89951460" Order="19" />
+        <Athlete Code="93238325" Order="20" />
+      </Composition>
+      <Discipline Code="FSK-------------------------------" IFId="1789">
+        <RegisteredEvent Event="FSKXSYNCHRONJUNIOR----------------" Class="ODF_EXTENDED">
+          <EventEntry Type="ER_EXTENDED" Code="ENTRY_ORDER" Pos="0" Value="3" />
+        </RegisteredEvent>
+      </Discipline>
+    </Team>
+    <Team Code="3405" Organisation="BLSC" Name="Crystal Tide" ShortName="Crystal Tide" TeamType="CUSTOM" TVTeamName="Crystal Tide" Gender="X" Status="ACTIVE">
+      <Composition>
+        <Athlete Code="49928075" Order="1" />
+        <Athlete Code="99171969" Order="2" />
+        <Athlete Code="18018170" Order="3" />
+        <Athlete Code="89854226" Order="4" />
+        <Athlete Code="59975024" Order="5" />
+        <Athlete Code="71651661" Order="6" />
+        <Athlete Code="40261525" Order="7" />
+        <Athlete Code="15507330" Order="8" />
+        <Athlete Code="20990087" Order="9" />
+        <Athlete Code="25426577" Order="10" />
+        <Athlete Code="16188519" Order="11" />
+        <Athlete Code="37116483" Order="12" />
+        <Athlete Code="15662678" Order="13" />
+        <Athlete Code="59643651" Order="14" />
+        <Athlete Code="96255311" Order="15" />
+        <Athlete Code="70557485" Order="16" />
+        <Athlete Code="86053787" Order="17" />
+        <Athlete Code="99433275" Order="18" />
+        <Athlete Code="62379654" Order="19" />
+        <Athlete Code="81594930" Order="20" />
+      </Composition>
+      <Discipline Code="FSK-------------------------------" IFId="3405">
+        <RegisteredEvent Event="FSKXSYNCHRONJUNIOR----------------" Class="ODF_EXTENDED">
+          <EventEntry Type="ER_EXTENDED" Code="ENTRY_ORDER" Pos="0" Value="4" />
+        </RegisteredEvent>
+      </Discipline>
+    </Team>
+    <Team Code="7065" Organisation="SPSK" Name="Harbour Lights" ShortName="Harbour Lights" TeamType="CUSTOM" TVTeamName="Harbour Lights" Gender="X" Status="ACTIVE">
+      <Composition>
+        <Athlete Code="83158219" Order="1" />
+        <Athlete Code="25726000" Order="2" />
+        <Athlete Code="55784407" Order="3" />
+        <Athlete Code="55668740" Order="4" />
+        <Athlete Code="65451571" Order="5" />
+        <Athlete Code="89435124" Order="6" />
+        <Athlete Code="74591107" Order="7" />
+        <Athlete Code="77894854" Order="8" />
+        <Athlete Code="78196754" Order="9" />
+        <Athlete Code="94666912" Order="10" />
+        <Athlete Code="54775333" Order="11" />
+        <Athlete Code="89998237" Order="12" />
+        <Athlete Code="59212110" Order="13" />
+        <Athlete Code="46666143" Order="14" />
+        <Athlete Code="61228154" Order="15" />
+        <Athlete Code="82627714" Order="16" />
+        <Athlete Code="85224166" Order="17" />
+        <Athlete Code="19214149" Order="18" />
+        <Athlete Code="92660271" Order="19" />
+        <Athlete Code="98666681" Order="20" />
+      </Composition>
+      <Discipline Code="FSK-------------------------------" IFId="7065">
+        <RegisteredEvent Event="FSKXSYNCHRONJUNIOR----------------" Class="ODF_EXTENDED">
+          <EventEntry Type="ER_EXTENDED" Code="ENTRY_ORDER" Pos="0" Value="5" />
+        </RegisteredEvent>
+      </Discipline>
+    </Team>
+    <Team Code="8873" Organisation="NWFSC" Name="Nordic Lanterns" ShortName="Nordic Lanterns" TeamType="CUSTOM" TVTeamName="Nordic Lanterns" Gender="X" Status="ACTIVE">
+      <Composition>
+        <Athlete Code="62695342" Order="1" />
+        <Athlete Code="46190349" Order="2" />
+        <Athlete Code="66880067" Order="3" />
+        <Athlete Code="90692038" Order="4" />
+        <Athlete Code="40402380" Order="5" />
+        <Athlete Code="33185576" Order="6" />
+        <Athlete Code="43020186" Order="7" />
+        <Athlete Code="67472100" Order="8" />
+        <Athlete Code="70849273" Order="9" />
+        <Athlete Code="61768579" Order="10" />
+        <Athlete Code="94230659" Order="11" />
+        <Athlete Code="14725900" Order="12" />
+        <Athlete Code="72269634" Order="13" />
+        <Athlete Code="99950145" Order="14" />
+        <Athlete Code="83501719" Order="15" />
+        <Athlete Code="22679871" Order="16" />
+        <Athlete Code="43204175" Order="17" />
+        <Athlete Code="72861391" Order="18" />
+        <Athlete Code="68128019" Order="19" />
+        <Athlete Code="51252943" Order="20" />
+      </Composition>
+      <Discipline Code="FSK-------------------------------" IFId="8873">
+        <RegisteredEvent Event="FSKXSYNCHRONJUNIOR----------------" Class="ODF_EXTENDED">
+          <EventEntry Type="ER_EXTENDED" Code="ENTRY_ORDER" Pos="0" Value="6" />
+        </RegisteredEvent>
+      </Discipline>
+    </Team>
+    <Team Code="9769" Organisation="VDGC" Name="Glacier Pups" ShortName="Glacier Pups" TeamType="CUSTOM" TVTeamName="Glacier Pups" Gender="X" Status="ACTIVE">
+      <Composition>
+        <Athlete Code="91921045" Order="1" />
+        <Athlete Code="44251971" Order="2" />
+        <Athlete Code="91417683" Order="3" />
+        <Athlete Code="50393365" Order="4" />
+        <Athlete Code="51696698" Order="5" />
+        <Athlete Code="51408534" Order="6" />
+        <Athlete Code="67754596" Order="7" />
+        <Athlete Code="25720608" Order="8" />
+        <Athlete Code="43554047" Order="9" />
+        <Athlete Code="94280434" Order="10" />
+        <Athlete Code="19636285" Order="11" />
+        <Athlete Code="26797734" Order="12" />
+        <Athlete Code="76550206" Order="13" />
+        <Athlete Code="85575151" Order="14" />
+        <Athlete Code="91922364" Order="15" />
+        <Athlete Code="27393732" Order="16" />
+        <Athlete Code="77136563" Order="17" />
+        <Athlete Code="46664874" Order="18" />
+        <Athlete Code="21522297" Order="19" />
+        <Athlete Code="69738627" Order="20" />
+      </Composition>
+      <Discipline Code="FSK-------------------------------" IFId="9769">
+        <RegisteredEvent Event="FSKXSYNCHRONADVNOV----------------" Class="ODF_EXTENDED">
+          <EventEntry Type="ER_EXTENDED" Code="ENTRY_ORDER" Pos="0" Value="1" />
+        </RegisteredEvent>
+      </Discipline>
+    </Team>
+    <Team Code="9775" Organisation="ARIC" Name="Tidal Twinkles" ShortName="Tidal Twinkles" TeamType="CUSTOM" TVTeamName="Tidal Twinkles" Gender="X" Status="ACTIVE">
+      <Composition>
+        <Athlete Code="72934581" Order="1" />
+        <Athlete Code="99073441" Order="2" />
+        <Athlete Code="48658177" Order="3" />
+        <Athlete Code="55607803" Order="4" />
+        <Athlete Code="55629263" Order="5" />
+        <Athlete Code="15765097" Order="6" />
+        <Athlete Code="34214426" Order="7" />
+        <Athlete Code="85521733" Order="8" />
+        <Athlete Code="93242620" Order="9" />
+        <Athlete Code="87112428" Order="10" />
+        <Athlete Code="85632810" Order="11" />
+        <Athlete Code="61673081" Order="12" />
+        <Athlete Code="11272017" Order="13" />
+        <Athlete Code="17035247" Order="14" />
+        <Athlete Code="75091150" Order="15" />
+        <Athlete Code="54134006" Order="16" />
+        <Athlete Code="22494551" Order="17" />
+        <Athlete Code="76336819" Order="18" />
+        <Athlete Code="52460324" Order="19" />
+        <Athlete Code="13393790" Order="20" />
+      </Composition>
+      <Discipline Code="FSK-------------------------------" IFId="9775">
+        <RegisteredEvent Event="FSKXSYNCHRONADVNOV----------------" Class="ODF_EXTENDED">
+          <EventEntry Type="ER_EXTENDED" Code="ENTRY_ORDER" Pos="0" Value="2" />
+        </RegisteredEvent>
+      </Discipline>
+    </Team>
+    <Team Code="1685" Organisation="NWFSC" Name="Little Lanterns" ShortName="Little Lanterns" TeamType="CUSTOM" TVTeamName="Little Lanterns" Gender="X" Status="ACTIVE">
+      <Composition>
+        <Athlete Code="78462070" Order="1" />
+        <Athlete Code="41828053" Order="2" />
+        <Athlete Code="28870570" Order="3" />
+        <Athlete Code="56941394" Order="4" />
+        <Athlete Code="73188901" Order="5" />
+        <Athlete Code="21036400" Order="6" />
+        <Athlete Code="15766699" Order="7" />
+        <Athlete Code="20667293" Order="8" />
+        <Athlete Code="31602988" Order="9" />
+        <Athlete Code="38381830" Order="10" />
+        <Athlete Code="15991849" Order="11" />
+        <Athlete Code="30347653" Order="12" />
+        <Athlete Code="15724436" Order="13" />
+        <Athlete Code="62719011" Order="14" />
+        <Athlete Code="89609538" Order="15" />
+        <Athlete Code="95533195" Order="16" />
+        <Athlete Code="11112835" Order="17" />
+        <Athlete Code="40811477" Order="18" />
+        <Athlete Code="53260015" Order="19" />
+        <Athlete Code="60674340" Order="20" />
+      </Composition>
+      <Discipline Code="FSK-------------------------------" IFId="1685">
+        <RegisteredEvent Event="FSKXSYNCHRONADVNOV----------------" Class="ODF_EXTENDED">
+          <EventEntry Type="ER_EXTENDED" Code="ENTRY_ORDER" Pos="0" Value="3" />
+        </RegisteredEvent>
+      </Discipline>
+    </Team>
+    <Team Code="8446" Organisation="RVSC" Name="Snow Finches" ShortName="Snow Finches" TeamType="CUSTOM" TVTeamName="Snow Finches" Gender="X" Status="ACTIVE">
+      <Composition>
+        <Athlete Code="64015632" Order="1" />
+        <Athlete Code="22202722" Order="2" />
+        <Athlete Code="41073299" Order="3" />
+        <Athlete Code="37042167" Order="4" />
+        <Athlete Code="10538832" Order="5" />
+        <Athlete Code="17278521" Order="6" />
+        <Athlete Code="97346978" Order="7" />
+        <Athlete Code="96842423" Order="8" />
+        <Athlete Code="90074734" Order="9" />
+        <Athlete Code="54112274" Order="10" />
+        <Athlete Code="75412240" Order="11" />
+        <Athlete Code="14466652" Order="12" />
+        <Athlete Code="39399011" Order="13" />
+        <Athlete Code="65513253" Order="14" />
+        <Athlete Code="45138312" Order="15" />
+        <Athlete Code="33537168" Order="16" />
+        <Athlete Code="87633496" Order="17" />
+        <Athlete Code="78310886" Order="18" />
+        <Athlete Code="91885559" Order="19" />
+        <Athlete Code="51827280" Order="20" />
+      </Composition>
+      <Discipline Code="FSK-------------------------------" IFId="8446">
+        <RegisteredEvent Event="FSKXSYNCHRONADVNOV----------------" Class="ODF_EXTENDED">
+          <EventEntry Type="ER_EXTENDED" Code="ENTRY_ORDER" Pos="0" Value="4" />
+        </RegisteredEvent>
+      </Discipline>
+    </Team>
+    <Team Code="5126" Organisation="STSC" Name="Frost Sparks" ShortName="Frost Sparks" TeamType="CUSTOM" TVTeamName="Frost Sparks" Gender="X" Status="ACTIVE">
+      <Composition>
+        <Athlete Code="34758630" Order="1" />
+        <Athlete Code="72542587" Order="2" />
+        <Athlete Code="91716632" Order="3" />
+        <Athlete Code="50224488" Order="4" />
+        <Athlete Code="68476354" Order="5" />
+        <Athlete Code="85055505" Order="6" />
+        <Athlete Code="16709254" Order="7" />
+        <Athlete Code="17286382" Order="8" />
+        <Athlete Code="59708000" Order="9" />
+        <Athlete Code="34417146" Order="10" />
+        <Athlete Code="25644217" Order="11" />
+        <Athlete Code="45485057" Order="12" />
+        <Athlete Code="69914246" Order="13" />
+        <Athlete Code="14333689" Order="14" />
+        <Athlete Code="48179386" Order="15" />
+        <Athlete Code="48098037" Order="16" />
+        <Athlete Code="50307066" Order="17" />
+        <Athlete Code="60167290" Order="18" />
+        <Athlete Code="97274715" Order="19" />
+        <Athlete Code="85907079" Order="20" />
+      </Composition>
+      <Discipline Code="FSK-------------------------------" IFId="5126">
+        <RegisteredEvent Event="FSKXSYNCHRONADVNOV----------------" Class="ODF_EXTENDED">
+          <EventEntry Type="ER_EXTENDED" Code="ENTRY_ORDER" Pos="0" Value="5" />
+        </RegisteredEvent>
+      </Discipline>
+    </Team>
+  </Competition>
+</OdfBody>

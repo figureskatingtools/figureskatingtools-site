@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<OdfBody CompetitionCode="SAMPLE171026STSC" DocumentCode="FSK-------------------------------" DocumentType="DT_SCHEDULE" Version="1" FeedFlag="P" Date="2026-10-14" Time="201500000" LogicalDate="2026-10-17" Source="FSKFSK1">
+  <Competition>
+    <Session SessionCode="FSK01" StartDate="2026-10-17T09:00:00+02:00" EndDate="2026-10-18T14:35:00+02:00" Venue="FSK" VenueName="Sampleton Ice Arena" Medal="3">
+      <SessionName Language="ENG" Value="Junior Women Short Program / Junior Men Short Program / Junior Ice Dance Rhythm Dance / Junior Synchronized Skating Short Program / Advanced Novice Synchronized Skating Free Skating / Junior Women Free Skating / Junior Men Free Skating / Junior Ice Dance Free Dance / Junior Synchronized Skating Free Skating" />
+    </Session>
+    <Unit Code="FSKWSINGLES-JUNIOR----QUAL000100--" PhaseType="3" ScheduleStatus="SCHEDULED" StartDate="2026-10-17T09:00:00+02:00" EndDate="2026-10-17T10:15:20+02:00" Venue="FSK" Location="FSR" SessionCode="FSK01">
+      <ItemName Language="ENG" Value="Junior Women Short Program" />
+      <VenueDescription VenueName="Sampleton Ice Arena" LocationName="Sampleton Ice Arena" />
+    </Unit>
+    <Unit Code="FSKMSINGLES-JUNIOR----QUAL000100--" PhaseType="3" ScheduleStatus="SCHEDULED" StartDate="2026-10-17T10:35:00+02:00" EndDate="2026-10-17T11:11:05+02:00" Venue="FSK" Location="FSR" SessionCode="FSK01">
+      <ItemName Language="ENG" Value="Junior Men Short Program" />
+      <VenueDescription VenueName="Sampleton Ice Arena" LocationName="Sampleton Ice Arena" />
+    </Unit>
+    <Unit Code="FSKXICEDANCEJUNIOR----QUAL000100--" PhaseType="3" ScheduleStatus="SCHEDULED" StartDate="2026-10-17T11:30:00+02:00" EndDate="2026-10-17T12:07:10+02:00" Venue="FSK" Location="FSR" SessionCode="FSK01">
+      <ItemName Language="ENG" Value="Junior Ice Dance Rhythm Dance" />
+      <VenueDescription VenueName="Sampleton Ice Arena" LocationName="Sampleton Ice Arena" />
+    </Unit>
+    <Unit Code="FSKXSYNCHRONJUNIOR----QUAL000100--" PhaseType="3" ScheduleStatus="SCHEDULED" StartDate="2026-10-17T12:25:00+02:00" EndDate="2026-10-17T13:21:00+02:00" Venue="FSK" Location="FSR" SessionCode="FSK01">
+      <ItemName Language="ENG" Value="Junior Synchronized Skating Short Program" />
+      <VenueDescription VenueName="Sampleton Ice Arena" LocationName="Sampleton Ice Arena" />
+    </Unit>
+    <Unit Code="FSKXSYNCHRONADVNOV----FNL-000100--" PhaseType="3" ScheduleStatus="SCHEDULED" StartDate="2026-10-18T09:00:00+02:00" EndDate="2026-10-18T09:35:00+02:00" Medal="1" Venue="FSK" Location="FSR" SessionCode="FSK01">
+      <ItemName Language="ENG" Value="Advanced Novice Synchronized Skating Free Skating" />
+      <VenueDescription VenueName="Sampleton Ice Arena" LocationName="Sampleton Ice Arena" />
+    </Unit>
+    <Unit Code="FSKWSINGLES-JUNIOR----FNL-000100--" PhaseType="3" ScheduleStatus="SCHEDULED" StartDate="2026-10-18T09:50:00+02:00" EndDate="2026-10-18T11:12:40+02:00" Medal="1" Venue="FSK" Location="FSR" SessionCode="FSK01">
+      <ItemName Language="ENG" Value="Junior Women Free Skating" />
+      <VenueDescription VenueName="Sampleton Ice Arena" LocationName="Sampleton Ice Arena" />
+    </Unit>
+    <Unit Code="FSKMSINGLES-JUNIOR----FNL-000100--" PhaseType="3" ScheduleStatus="SCHEDULED" StartDate="2026-10-18T11:30:00+02:00" EndDate="2026-10-18T12:10:40+02:00" Medal="1" Venue="FSK" Location="FSR" SessionCode="FSK01">
+      <ItemName Language="ENG" Value="Junior Men Free Skating" />
+      <VenueDescription VenueName="Sampleton Ice Arena" LocationName="Sampleton Ice Arena" />
+    </Unit>
+    <Unit Code="FSKXICEDANCEJUNIOR----FNL-000100--" PhaseType="3" ScheduleStatus="SCHEDULED" StartDate="2026-10-18T12:30:00+02:00" EndDate="2026-10-18T13:13:00+02:00" Medal="1" Venue="FSK" Location="FSR" SessionCode="FSK01">
+      <ItemName Language="ENG" Value="Junior Ice Dance Free Dance" />
+      <VenueDescription VenueName="Sampleton Ice Arena" LocationName="Sampleton Ice Arena" />
+    </Unit>
+    <Unit Code="FSKXSYNCHRONJUNIOR----FNL-000100--" PhaseType="3" ScheduleStatus="SCHEDULED" StartDate="2026-10-18T13:30:00+02:00" EndDate="2026-10-18T14:35:00+02:00" Medal="1" Venue="FSK" Location="FSR" SessionCode="FSK01">
+      <ItemName Language="ENG" Value="Junior Synchronized Skating Free Skating" />
+      <VenueDescription VenueName="Sampleton Ice Arena" LocationName="Sampleton Ice Arena" />
+    </Unit>
+  </Competition>
+</OdfBody>

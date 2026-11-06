@@ -1,0 +1,13 @@
+# Dev-time only: generate.py, verify_parsers.py and check_leaks.py.
+# Never part of the Functions runtime (requirements.txt) or the deployed zip.
+#
+#   python3 -m venv .venv && .venv/bin/pip install -r requirements-sampledata.txt
+#
+# generate.py: reportlab's output is byte-stable for one version, so keep the
+# pin when regenerating, or the committed PDFs all change.
+reportlab==5.1.0
+# verify_parsers.py / check_leaks.py: the tool repos' parser dependencies.
+pypdf~=6.21
+pymupdf>=2.0,<3
+pdfminer.six==20260107
+pillow~=13.0

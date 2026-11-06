@@ -439,3 +439,35 @@ def test_every_file_under_the_dataset_dirs_is_listed():
     on_disk = {p.resolve() for sub in ("datasets", "combined")
                for p in (COMMITTED_DIR / sub).rglob("*") if p.is_file()}
     assert on_disk == _committed_files()
+
+
+def test_the_committed_files_are_what_generate_py_writes(tmp_path):
+    """Regenerating gives the committed bytes. Needs reportlab (not a runtime
+    or CI dependency, so CI skips this) at the version pinned in
+    requirements-sampledata.txt: reportlab's output is byte-stable per version."""
+    reportlab = pytest.importorskip("reportlab")
+    pinned = next(line.split("==", 1)[1].strip()
+                  for line in (COMMITTED_DIR / "requirements-sampledata.txt").read_text().splitlines()
+                  if line.startswith("reportlab=="))
+    if reportlab.Version != pinned:
+        pytest.skip(f"reportlab {reportlab.Version} is not the pinned {pinned}")
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("sample_generate", COMMITTED_DIR / "generate.py")
+    generate = importlib.util.module_from_spec(spec)
+    import sys
+    sys.modules[spec.name] = generate  # dataclasses resolve their module by name
+    try:
+        spec.loader.exec_module(generate)
+        generate.generate(tmp_path)
+    finally:
+        sys.modules.pop(spec.name, None)
+
+    def tree(root):
+        files = {str(p.relative_to(root)): p.read_bytes() for sub in ("datasets", "combined")
+                 for p in (root / sub).rglob("*") if p.is_file()}
+        files["manifest.json"] = (root / "manifest.json").read_bytes()
+        return files
+
+    fresh, committed = tree(tmp_path), tree(COMMITTED_DIR)
+    assert sorted(fresh) == sorted(committed)
+    assert [name for name in fresh if fresh[name] != committed[name]] == []

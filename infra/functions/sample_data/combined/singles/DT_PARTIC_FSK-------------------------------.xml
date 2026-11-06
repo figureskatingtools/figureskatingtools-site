@@ -1,0 +1,125 @@
+<?xml version="1.0" encoding="utf-8"?>
+<OdfBody CompetitionCode="SAMPLE171026STSC" DocumentCode="FSK-------------------------------" DocumentType="DT_PARTIC" Version="3" FeedFlag="P" Date="2026-10-14" Time="201500000" LogicalDate="2026-10-17" Source="FSKFSK1">
+  <Competition>
+    <Participant Code="94000020" Parent="94000020" Status="ACTIVE" GivenName="Bianca" FamilyName="Bellamy" PrintName="Bianca BELLAMY" PrintInitialName="B. BELLAMY" TVName="Bianca BELLAMY" TVInitialName="B. BELLAMY" TVFamilyName="BELLAMY" PSCBLongName="Bianca BELLAMY" PSCBName="B. BELLAMY" PSCBShortName="B. BELLAMY" Gender="F" Organisation="EVMB" Nationality="AUT" MainFunctionId="AA01">
+      <Discipline Code="FSK-------------------------------" IFId="94000020" />
+    </Participant>
+    <Participant Code="69674785" Parent="69674785" Status="ACTIVE" GivenName="Josefine" FamilyName="Sokolov" PrintName="Josefine SOKOLOV" PrintInitialName="J. SOKOLOV" TVName="Josefine SOKOLOV" TVInitialName="J. SOKOLOV" TVFamilyName="SOKOLOV" PSCBLongName="Josefine SOKOLOV" PSCBName="J. SOKOLOV" PSCBShortName="J. SOKOLOV" Gender="F" Organisation="RVSC" Nationality="USA" MainFunctionId="AA01">
+      <Discipline Code="FSK-------------------------------" IFId="69674785" />
+    </Participant>
+    <Participant Code="76100982" Parent="76100982" Status="ACTIVE" GivenName="Amelie" FamilyName="Danvers" PrintName="Amelie DANVERS" PrintInitialName="A. DANVERS" TVName="Amelie DANVERS" TVInitialName="A. DANVERS" TVFamilyName="DANVERS" PSCBLongName="Amelie DANVERS" PSCBName="A. DANVERS" PSCBShortName="A. DANVERS" Gender="F" Organisation="NWFSC" Nationality="SWE" MainFunctionId="AA01">
+      <Discipline Code="FSK-------------------------------" IFId="76100982" />
+    </Participant>
+    <Participant Code="59544124" Parent="59544124" Status="ACTIVE" GivenName="Lucia" FamilyName="Skovgaard" PrintName="Lucia SKOVGAARD" PrintInitialName="L. SKOVGAARD" TVName="Lucia SKOVGAARD" TVInitialName="L. SKOVGAARD" TVFamilyName="SKOVGAARD" PSCBLongName="Lucia SKOVGAARD" PSCBName="L. SKOVGAARD" PSCBShortName="L. SKOVGAARD" Gender="F" Organisation="STSC" Nationality="FIN" MainFunctionId="AA01">
+      <Discipline Code="FSK-------------------------------" IFId="59544124" />
+    </Participant>
+    <Participant Code="63187273" Parent="63187273" Status="ACTIVE" GivenName="Marta" FamilyName="Falkenrath" PrintName="Marta FALKENRATH" PrintInitialName="M. FALKENRATH" TVName="Marta FALKENRATH" TVInitialName="M. FALKENRATH" TVFamilyName="FALKENRATH" PSCBLongName="Marta FALKENRATH" PSCBName="M. FALKENRATH" PSCBShortName="M. FALKENRATH" Gender="F" Organisation="GFSC" Nationality="GBR" MainFunctionId="AA01">
+      <Discipline Code="FSK-------------------------------" IFId="63187273" />
+    </Participant>
+    <Participant Code="99111165" Parent="99111165" Status="ACTIVE" GivenName="Jolene" FamilyName="Rinaldi" PrintName="Jolene RINALDI" PrintInitialName="J. RINALDI" TVName="Jolene RINALDI" TVInitialName="J. RINALDI" TVFamilyName="RINALDI" PSCBLongName="Jolene RINALDI" PSCBName="J. RINALDI" PSCBShortName="J. RINALDI" Gender="F" Organisation="HVSK" Nationality="NOR" MainFunctionId="AA01">
+      <Discipline Code="FSK-------------------------------" IFId="99111165" />
+    </Participant>
+    <Participant Code="11355575" Parent="11355575" Status="ACTIVE" GivenName="Sofia" FamilyName="Ainsworth" PrintName="Sofia AINSWORTH" PrintInitialName="S. AINSWORTH" TVName="Sofia AINSWORTH" TVInitialName="S. AINSWORTH" TVFamilyName="AINSWORTH" PSCBLongName="Sofia AINSWORTH" PSCBName="S. AINSWORTH" PSCBShortName="S. AINSWORTH" Gender="F" Organisation="NWFSC" Nationality="SWE" MainFunctionId="AA01">
+      <Discipline Code="FSK-------------------------------" IFId="11355575" />
+    </Participant>
+    <Participant Code="78450493" Parent="78450493" Status="ACTIVE" GivenName="Agnes" FamilyName="Vauclair" PrintName="Agnes VAUCLAIR" PrintInitialName="A. VAUCLAIR" TVName="Agnes VAUCLAIR" TVInitialName="A. VAUCLAIR" TVFamilyName="VAUCLAIR" PSCBLongName="Agnes VAUCLAIR" PSCBName="A. VAUCLAIR" PSCBShortName="A. VAUCLAIR" Gender="F" Organisation="LCPG" Nationality="FRA" MainFunctionId="AA01">
+      <Discipline Code="FSK-------------------------------" IFId="78450493" />
+    </Participant>
+    <Participant Code="80003600" Parent="80003600" Status="ACTIVE" GivenName="Kasper" FamilyName="Skovgaard" PrintName="Kasper SKOVGAARD" PrintInitialName="K. SKOVGAARD" TVName="Kasper SKOVGAARD" TVInitialName="K. SKOVGAARD" TVFamilyName="SKOVGAARD" PSCBLongName="Kasper SKOVGAARD" PSCBName="K. SKOVGAARD" PSCBShortName="K. SKOVGAARD" Gender="M" Organisation="RVSC" Nationality="USA" MainFunctionId="AA01">
+      <Discipline Code="FSK-------------------------------" IFId="80003600" />
+    </Participant>
+    <Participant Code="13386842" Parent="13386842" Status="ACTIVE" GivenName="Linus" FamilyName="Steinhauer" PrintName="Linus STEINHAUER" PrintInitialName="L. STEINHAUER" TVName="Linus STEINHAUER" TVInitialName="L. STEINHAUER" TVFamilyName="STEINHAUER" PSCBLongName="Linus STEINHAUER" PSCBName="L. STEINHAUER" PSCBShortName="L. STEINHAUER" Gender="M" Organisation="VDGC" Nationality="ITA" MainFunctionId="AA01">
+      <Discipline Code="FSK-------------------------------" IFId="13386842" />
+    </Participant>
+    <Participant Code="41202346" Parent="41202346" Status="ACTIVE" GivenName="Teo" FamilyName="Skovgaard" PrintName="Teo SKOVGAARD" PrintInitialName="T. SKOVGAARD" TVName="Teo SKOVGAARD" TVInitialName="T. SKOVGAARD" TVFamilyName="SKOVGAARD" PSCBLongName="Teo SKOVGAARD" PSCBName="T. SKOVGAARD" PSCBShortName="T. SKOVGAARD" Gender="M" Organisation="EVMB" Nationality="AUT" MainFunctionId="AA01">
+      <Discipline Code="FSK-------------------------------" IFId="41202346" />
+    </Participant>
+    <Participant Code="94310207" Parent="94310207" Status="ACTIVE" GivenName="Casper" FamilyName="Kesselring" PrintName="Casper KESSELRING" PrintInitialName="C. KESSELRING" TVName="Casper KESSELRING" TVInitialName="C. KESSELRING" TVFamilyName="KESSELRING" PSCBLongName="Casper KESSELRING" PSCBName="C. KESSELRING" PSCBShortName="C. KESSELRING" Gender="M" Organisation="ARIC" Nationality="NOR" MainFunctionId="AA01">
+      <Discipline Code="FSK-------------------------------" IFId="94310207" />
+    </Participant>
+    <Participant Code="49297025" Parent="49297025" Status="ACTIVE" GivenName="Linus" FamilyName="Dunmore" PrintName="Linus DUNMORE" PrintInitialName="L. DUNMORE" TVName="Linus DUNMORE" TVInitialName="L. DUNMORE" TVFamilyName="DUNMORE" PSCBLongName="Linus DUNMORE" PSCBName="L. DUNMORE" PSCBShortName="L. DUNMORE" Gender="M" Organisation="VDGC" Nationality="ITA" MainFunctionId="AA01">
+      <Discipline Code="FSK-------------------------------" IFId="49297025" />
+    </Participant>
+    <Participant Code="10746744" Parent="10746744" Status="ACTIVE" GivenName="Livia" FamilyName="Brandauer" PrintName="Livia BRANDAUER" PrintInitialName="L. BRANDAUER" TVName="Livia BRANDAUER" TVInitialName="L. BRANDAUER" TVFamilyName="BRANDAUER" PSCBLongName="Livia BRANDAUER" PSCBName="L. BRANDAUER" PSCBShortName="L. BRANDAUER" Gender="F" Organisation="EST" Nationality="EST" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="10746744" />
+    </Participant>
+    <Participant Code="15186197" Parent="15186197" Status="ACTIVE" GivenName="Ella" FamilyName="Imhof" PrintName="Ella IMHOF" PrintInitialName="E. IMHOF" TVName="Ella IMHOF" TVInitialName="E. IMHOF" TVFamilyName="IMHOF" PSCBLongName="Ella IMHOF" PSCBName="E. IMHOF" PSCBShortName="E. IMHOF" Gender="F" Organisation="SWE" Nationality="SWE" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="15186197" />
+    </Participant>
+    <Participant Code="17770465" Parent="17770465" Status="ACTIVE" GivenName="Sven" FamilyName="Netherby" PrintName="Sven NETHERBY" PrintInitialName="S. NETHERBY" TVName="Sven NETHERBY" TVInitialName="S. NETHERBY" TVFamilyName="NETHERBY" PSCBLongName="Sven NETHERBY" PSCBName="S. NETHERBY" PSCBShortName="S. NETHERBY" Gender="M" Organisation="SUI" Nationality="SUI" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="17770465" />
+    </Participant>
+    <Participant Code="20094819" Parent="20094819" Status="ACTIVE" GivenName="Freya" FamilyName="Fenwick" PrintName="Freya FENWICK" PrintInitialName="F. FENWICK" TVName="Freya FENWICK" TVInitialName="F. FENWICK" TVFamilyName="FENWICK" PSCBLongName="Freya FENWICK" PSCBName="F. FENWICK" PSCBShortName="F. FENWICK" Gender="F" Organisation="CAN" Nationality="CAN" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="20094819" />
+    </Participant>
+    <Participant Code="20987718" Parent="20987718" Status="ACTIVE" GivenName="Joel" FamilyName="Nordby" PrintName="Joel NORDBY" PrintInitialName="J. NORDBY" TVName="Joel NORDBY" TVInitialName="J. NORDBY" TVFamilyName="NORDBY" PSCBLongName="Joel NORDBY" PSCBName="J. NORDBY" PSCBShortName="J. NORDBY" Gender="M" Organisation="DEN" Nationality="DEN" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="20987718" />
+    </Participant>
+    <Participant Code="21820641" Parent="21820641" Status="ACTIVE" GivenName="Teo" FamilyName="Hartigan" PrintName="Teo HARTIGAN" PrintInitialName="T. HARTIGAN" TVName="Teo HARTIGAN" TVInitialName="T. HARTIGAN" TVFamilyName="HARTIGAN" PSCBLongName="Teo HARTIGAN" PSCBName="T. HARTIGAN" PSCBShortName="T. HARTIGAN" Gender="M" Organisation="GER" Nationality="GER" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="21820641" />
+    </Participant>
+    <Participant Code="30660828" Parent="30660828" Status="ACTIVE" GivenName="Rosa" FamilyName="Lazarev" PrintName="Rosa LAZAREV" PrintInitialName="R. LAZAREV" TVName="Rosa LAZAREV" TVInitialName="R. LAZAREV" TVFamilyName="LAZAREV" PSCBLongName="Rosa LAZAREV" PSCBName="R. LAZAREV" PSCBShortName="R. LAZAREV" Gender="F" Organisation="GBR" Nationality="GBR" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="30660828" />
+    </Participant>
+    <Participant Code="32029779" Parent="32029779" Status="ACTIVE" GivenName="Marta" FamilyName="Kesselring" PrintName="Marta KESSELRING" PrintInitialName="M. KESSELRING" TVName="Marta KESSELRING" TVInitialName="M. KESSELRING" TVFamilyName="KESSELRING" PSCBLongName="Marta KESSELRING" PSCBName="M. KESSELRING" PSCBShortName="M. KESSELRING" Gender="F" Organisation="FRA" Nationality="FRA" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="32029779" />
+    </Participant>
+    <Participant Code="33622151" Parent="33622151" Status="ACTIVE" GivenName="Josefine" FamilyName="Lindenau" PrintName="Josefine LINDENAU" PrintInitialName="J. LINDENAU" TVName="Josefine LINDENAU" TVInitialName="J. LINDENAU" TVFamilyName="LINDENAU" PSCBLongName="Josefine LINDENAU" PSCBName="J. LINDENAU" PSCBShortName="J. LINDENAU" Gender="F" Organisation="NED" Nationality="NED" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="33622151" />
+    </Participant>
+    <Participant Code="33945873" Parent="33945873" Status="ACTIVE" GivenName="Fabian" FamilyName="Wexford" PrintName="Fabian WEXFORD" PrintInitialName="F. WEXFORD" TVName="Fabian WEXFORD" TVInitialName="F. WEXFORD" TVFamilyName="WEXFORD" PSCBLongName="Fabian WEXFORD" PSCBName="F. WEXFORD" PSCBShortName="F. WEXFORD" Gender="M" Organisation="GER" Nationality="GER" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="33945873" />
+    </Participant>
+    <Participant Code="43931395" Parent="43931395" Status="ACTIVE" GivenName="Olivia" FamilyName="Quarrington" PrintName="Olivia QUARRINGTON" PrintInitialName="O. QUARRINGTON" TVName="Olivia QUARRINGTON" TVInitialName="O. QUARRINGTON" TVFamilyName="QUARRINGTON" PSCBLongName="Olivia QUARRINGTON" PSCBName="O. QUARRINGTON" PSCBShortName="O. QUARRINGTON" Gender="F" Organisation="NED" Nationality="NED" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="43931395" />
+    </Participant>
+    <Participant Code="53081459" Parent="53081459" Status="ACTIVE" GivenName="Teo" FamilyName="Steinhauer" PrintName="Teo STEINHAUER" PrintInitialName="T. STEINHAUER" TVName="Teo STEINHAUER" TVInitialName="T. STEINHAUER" TVFamilyName="STEINHAUER" PSCBLongName="Teo STEINHAUER" PSCBName="T. STEINHAUER" PSCBShortName="T. STEINHAUER" Gender="M" Organisation="POL" Nationality="POL" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="53081459" />
+    </Participant>
+    <Participant Code="53300981" Parent="53300981" Status="ACTIVE" GivenName="Wilma" FamilyName="Tornabene" PrintName="Wilma TORNABENE" PrintInitialName="W. TORNABENE" TVName="Wilma TORNABENE" TVInitialName="W. TORNABENE" TVFamilyName="TORNABENE" PSCBLongName="Wilma TORNABENE" PSCBName="W. TORNABENE" PSCBShortName="W. TORNABENE" Gender="F" Organisation="ESP" Nationality="ESP" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="53300981" />
+    </Participant>
+    <Participant Code="53396662" Parent="53396662" Status="ACTIVE" GivenName="Greta" FamilyName="Eichhorn" PrintName="Greta EICHHORN" PrintInitialName="G. EICHHORN" TVName="Greta EICHHORN" TVInitialName="G. EICHHORN" TVFamilyName="EICHHORN" PSCBLongName="Greta EICHHORN" PSCBName="G. EICHHORN" PSCBShortName="G. EICHHORN" Gender="F" Organisation="CAN" Nationality="CAN" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="53396662" />
+    </Participant>
+    <Participant Code="53872057" Parent="53872057" Status="ACTIVE" GivenName="Gustav" FamilyName="Bellamy" PrintName="Gustav BELLAMY" PrintInitialName="G. BELLAMY" TVName="Gustav BELLAMY" TVInitialName="G. BELLAMY" TVFamilyName="BELLAMY" PSCBLongName="Gustav BELLAMY" PSCBName="G. BELLAMY" PSCBShortName="G. BELLAMY" Gender="M" Organisation="SUI" Nationality="SUI" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="53872057" />
+    </Participant>
+    <Participant Code="54265752" Parent="54265752" Status="ACTIVE" GivenName="Dominic" FamilyName="Gosling" PrintName="Dominic GOSLING" PrintInitialName="D. GOSLING" TVName="Dominic GOSLING" TVInitialName="D. GOSLING" TVFamilyName="GOSLING" PSCBLongName="Dominic GOSLING" PSCBName="D. GOSLING" PSCBShortName="D. GOSLING" Gender="M" Organisation="DEN" Nationality="DEN" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="54265752" />
+    </Participant>
+    <Participant Code="57296384" Parent="57296384" Status="ACTIVE" GivenName="Jonas" FamilyName="Kittredge" PrintName="Jonas KITTREDGE" PrintInitialName="J. KITTREDGE" TVName="Jonas KITTREDGE" TVInitialName="J. KITTREDGE" TVFamilyName="KITTREDGE" PSCBLongName="Jonas KITTREDGE" PSCBName="J. KITTREDGE" PSCBShortName="J. KITTREDGE" Gender="M" Organisation="FIN" Nationality="FIN" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="57296384" />
+    </Participant>
+    <Participant Code="59120514" Parent="59120514" Status="ACTIVE" GivenName="Ida" FamilyName="Salvatori" PrintName="Ida SALVATORI" PrintInitialName="I. SALVATORI" TVName="Ida SALVATORI" TVInitialName="I. SALVATORI" TVFamilyName="SALVATORI" PSCBLongName="Ida SALVATORI" PSCBName="I. SALVATORI" PSCBShortName="I. SALVATORI" Gender="F" Organisation="CZE" Nationality="CZE" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="59120514" />
+    </Participant>
+    <Participant Code="68767506" Parent="68767506" Status="ACTIVE" GivenName="Nils" FamilyName="Ellery" PrintName="Nils ELLERY" PrintInitialName="N. ELLERY" TVName="Nils ELLERY" TVInitialName="N. ELLERY" TVFamilyName="ELLERY" PSCBLongName="Nils ELLERY" PSCBName="N. ELLERY" PSCBShortName="N. ELLERY" Gender="M" Organisation="FIN" Nationality="FIN" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="68767506" />
+    </Participant>
+    <Participant Code="74104691" Parent="74104691" Status="ACTIVE" GivenName="Jolene" FamilyName="Upshaw" PrintName="Jolene UPSHAW" PrintInitialName="J. UPSHAW" TVName="Jolene UPSHAW" TVInitialName="J. UPSHAW" TVFamilyName="UPSHAW" PSCBLongName="Jolene UPSHAW" PSCBName="J. UPSHAW" PSCBShortName="J. UPSHAW" Gender="F" Organisation="EST" Nationality="EST" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="74104691" />
+    </Participant>
+    <Participant Code="75950209" Parent="75950209" Status="ACTIVE" GivenName="Signe" FamilyName="Bartos" PrintName="Signe BARTOS" PrintInitialName="S. BARTOS" TVName="Signe BARTOS" TVInitialName="S. BARTOS" TVFamilyName="BARTOS" PSCBLongName="Signe BARTOS" PSCBName="S. BARTOS" PSCBShortName="S. BARTOS" Gender="F" Organisation="LAT" Nationality="LAT" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="75950209" />
+    </Participant>
+    <Participant Code="80003410" Parent="80003410" Status="ACTIVE" GivenName="Beatrix" FamilyName="Ashcombe" PrintName="Beatrix ASHCOMBE" PrintInitialName="B. ASHCOMBE" TVName="Beatrix ASHCOMBE" TVInitialName="B. ASHCOMBE" TVFamilyName="ASHCOMBE" PSCBLongName="Beatrix ASHCOMBE" PSCBName="B. ASHCOMBE" PSCBShortName="B. ASHCOMBE" Gender="F" Organisation="NOR" Nationality="NOR" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="80003410" />
+    </Participant>
+    <Participant Code="83813549" Parent="83813549" Status="ACTIVE" GivenName="Romy" FamilyName="Rademaker" PrintName="Romy RADEMAKER" PrintInitialName="R. RADEMAKER" TVName="Romy RADEMAKER" TVInitialName="R. RADEMAKER" TVFamilyName="RADEMAKER" PSCBLongName="Romy RADEMAKER" PSCBName="R. RADEMAKER" PSCBShortName="R. RADEMAKER" Gender="F" Organisation="LAT" Nationality="LAT" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="83813549" />
+    </Participant>
+    <Participant Code="84500542" Parent="84500542" Status="ACTIVE" GivenName="Nora" FamilyName="Bramley" PrintName="Nora BRAMLEY" PrintInitialName="N. BRAMLEY" TVName="Nora BRAMLEY" TVInitialName="N. BRAMLEY" TVFamilyName="BRAMLEY" PSCBLongName="Nora BRAMLEY" PSCBName="N. BRAMLEY" PSCBShortName="N. BRAMLEY" Gender="F" Organisation="GBR" Nationality="GBR" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="84500542" />
+    </Participant>
+    <Participant Code="85800910" Parent="85800910" Status="ACTIVE" GivenName="Thea" FamilyName="Kvale" PrintName="Thea KVALE" PrintInitialName="T. KVALE" TVName="Thea KVALE" TVInitialName="T. KVALE" TVFamilyName="KVALE" PSCBLongName="Thea KVALE" PSCBName="T. KVALE" PSCBShortName="T. KVALE" Gender="F" Organisation="AUT" Nationality="AUT" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="85800910" />
+    </Participant>
+    <Participant Code="86801732" Parent="86801732" Status="ACTIVE" GivenName="Freya" FamilyName="Kendrick" PrintName="Freya KENDRICK" PrintInitialName="F. KENDRICK" TVName="Freya KENDRICK" TVInitialName="F. KENDRICK" TVFamilyName="KENDRICK" PSCBLongName="Freya KENDRICK" PSCBName="F. KENDRICK" PSCBShortName="F. KENDRICK" Gender="F" Organisation="HUN" Nationality="HUN" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="86801732" />
+    </Participant>
+    <Participant Code="97321140" Parent="97321140" Status="ACTIVE" GivenName="Juno" FamilyName="Whitlock" PrintName="Juno WHITLOCK" PrintInitialName="J. WHITLOCK" TVName="Juno WHITLOCK" TVInitialName="J. WHITLOCK" TVFamilyName="WHITLOCK" PSCBLongName="Juno WHITLOCK" PSCBName="J. WHITLOCK" PSCBShortName="J. WHITLOCK" Gender="F" Organisation="AUT" Nationality="AUT" MainFunctionId="JU">
+      <Discipline Code="FSK-------------------------------" IFId="97321140" />
+    </Participant>
+  </Competition>
+</OdfBody>
