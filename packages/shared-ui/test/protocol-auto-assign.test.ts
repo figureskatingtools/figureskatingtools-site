@@ -366,6 +366,45 @@ describe('category matching', () => {
     ).toEqual({ action: 'tray', reason: 'unrecognized' });
   });
 
+  it('routes a block file whose number is glued to the phase to its block', () => {
+    // FS Manager's real shape: `--01FNL-000100--`, block number glued to the
+    // phase field. The bare code must not swallow it once the block has a code.
+    const structure: StructureLike = {
+      files: {},
+      categories: [
+        category('l2', 'SM-Noviisit L2', 'FSKXSYNCHRONADVNOV', [segment('l2-fs', 'Free Skating', 1)]),
+        category('l1', 'SM-Noviisit L1', 'FSKXSYNCHRONADVNOV--01', [segment('l1-fs', 'Free Skating', 1)]),
+      ],
+    };
+    expect(
+      planAutoAssignment(
+        'FSKXSYNCHRONADVNOV--01FNL-000100--_SegmentResults.pdf',
+        CATEGORIES,
+        structure
+      )
+    ).toMatchObject({
+      action: 'assign',
+      target: { kind: 'segment', categoryId: 'l1', segmentId: 'l1-fs', role: 'results', matchedBy: 'code' },
+    });
+  });
+
+  it('never lets a bare file land in a sibling block that carries a block code', () => {
+    const structure: StructureLike = {
+      files: {},
+      categories: [
+        category('l2', 'SM-Noviisit L2', 'FSKXSYNCHRONADVNOV', [segment('l2-fs', 'Free Skating', 1)]),
+        category('l1', 'SM-Noviisit L1', 'FSKXSYNCHRONADVNOV--01', [segment('l1-fs', 'Free Skating', 1)]),
+      ],
+    };
+    expect(
+      planAutoAssignment(
+        'FSKXSYNCHRONADVNOV----FNL-000100--_SegmentResults.pdf',
+        CATEGORIES,
+        structure
+      )
+    ).toMatchObject({ action: 'assign', target: { categoryId: 'l2', segmentId: 'l2-fs' } });
+  });
+
   it('reports ambiguity when two categories share a code', () => {
     const structure: StructureLike = {
       files: {},
@@ -645,6 +684,22 @@ describe('title pages', () => {
         matchedBy: 'code',
       },
     });
+  });
+
+  it('routes a block head page to its block when the block carries a code', () => {
+    const structure: StructureLike = {
+      files: {},
+      categories: [
+        category('l2', 'SM-Noviisit L2', 'FSKXSYNCHRONADVNOV', []),
+        category('l1', 'SM-Noviisit L1', 'FSKXSYNCHRONADVNOV--01', []),
+      ],
+    };
+    expect(
+      planAutoAssignment('FSKXSYNCHRONADVNOV--01------------_ProtocolHeadPage.pdf', CATEGORIES, structure)
+    ).toMatchObject({ action: 'assign', target: { kind: 'categoryTitle', categoryId: 'l1', matchedBy: 'code' } });
+    expect(
+      planAutoAssignment('FSKXSYNCHRONADVNOV----------------_ProtocolHeadPage.pdf', CATEGORIES, structure)
+    ).toMatchObject({ action: 'assign', target: { kind: 'categoryTitle', categoryId: 'l2', matchedBy: 'code' } });
   });
 
   it('leaves the title slot alone when it already holds a manual file', () => {
@@ -1082,6 +1137,18 @@ describe('categories the Judge Papers table does not know', () => {
     expect(rscTokens('fskwsingles-debytw----')).toEqual(['FSKWSINGLES', 'DEBYTW']);
     expect(rscTokens('-------------------------')).toEqual([]);
     expect(rscTokens(undefined)).toEqual([]);
+  });
+
+  it('peels a block number glued to the phase field off into its own token', () => {
+    expect(rscTokens('FSKXSYNCHRONADVNOV--01FNL-000100--')).toEqual([
+      'FSKXSYNCHRONADVNOV', '01', 'FNL', '000100',
+    ]);
+    expect(rscTokens('FSKXSYNCHRONADVNOV--01QUAL0001PK--')).toEqual([
+      'FSKXSYNCHRONADVNOV', '01', 'QUAL0001PK',
+    ]);
+    expect(rscTokens('FSKXSYNCHRONADVNOV--01')).toEqual(['FSKXSYNCHRONADVNOV', '01']);
+    // digits + phase letters that continue as a word are a category token
+    expect(rscTokens('FSKX-01FSTEAM')).toEqual(['FSKX', '01FSTEAM']);
   });
 
   it('places the segment results sheet in the DEBYTANTTI free-skating slot', () => {
