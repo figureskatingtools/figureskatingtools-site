@@ -22,7 +22,6 @@ import {
   uploadCompetitionFile,
   CompetitionApiError,
   sortCategoriesForMatching,
-  matchCategory,
   planAutoAssignment,
   applyOutcomeLocally,
   classifyRosterXml,
@@ -98,6 +97,9 @@ const autoParsedSchedules = new Set<string>();
 /** Same guard for the roster pair imported from the pool on open, keyed on the
  * DT_PARTIC_TEAMS file. */
 const autoImportedRosters = new Set<string>();
+/** Same guard for the backend's code learning from the pool's FSM report PDFs,
+ * keyed on the newest such file — a new push is a new chance to learn. */
+const autoLearnedCodes = new Set<string>();
 const openCats = new Set<string>();
 /** Collapsed-by-default state of the "Team rosters" per-category groups. */
 const openRosterCats = new Set<string>();
@@ -148,7 +150,7 @@ const APP_HTML = `
                   <li>Upload the competition's <strong>schedule PDF</strong> — it builds the categories and segments automatically.</li>
                   <li>Fill in the <strong>event details</strong> (organiser, venue, dates); they feed the cover and information pages.</li>
                   <li>Drop each category's result PDFs and photos onto their <strong>slots</strong>; drag between slots to fix placements, and hover a file to preview it.</li>
-                  <li>Files exported from <strong>Figure Skating Manager</strong> are recognized by their file name and placed into the right category and segment automatically — placed files carry an <strong>auto</strong> tag. <strong>Auto-place files</strong> retries recognition for anything still in Uploads.</li>
+                  <li>Files exported from <strong>Figure Skating Manager</strong> are recognized by their file name and placed into the right category and segment automatically — placed files carry an <strong>auto</strong> tag. <strong>Auto-place files</strong> retries recognition for anything still in Uploads. Each category's ISU code and discipline are read from those file names and from the FSM files in the competition files, whatever the category is called.</li>
                   <li><strong>Competition files</strong> are shared between the tools: PDFs uploaded for the same competition in Judge Paper Creator can be imported from the Uploads section without re-uploading.</li>
                   <li>Required files (marked <span class="req">•</span>) drive each category's <em>"n/n uploaded"</em> readiness badge.</li>
                   <li>For synchronized skating, import the <strong>DT_PARTIC</strong> team rosters to add team pages.</li>
@@ -470,8 +472,11 @@ async function openCompetition(id: string, name: string) {
   // The pool listing is fresh now (loadDetails refreshes it), so this is the
   // first moment we can tell whether the schedule is already sitting there.
   await autoParsePoolSchedule();
-  // After the schedule, so a freshly parsed competition has its synchro
-  // categories to place the teams into.
+  // The categories' ISU codes (and with them their disciplines) come from the
+  // FSM report PDFs in the pool; learn them before the teams are placed.
+  await autoLearnPoolCodes();
+  // After the schedule, so a freshly parsed competition has its categories to
+  // place the teams into.
   await autoImportPoolRosters();
 }
 
@@ -486,8 +491,13 @@ async function loadDetails() {
     renderDetails();
   } catch {
     document.getElementById('detail-body')!.innerHTML = '<p class="text-error">Failed to load competition.</p>';
+    return;
   }
+  // A refreshed listing may hold FSM files that were not there before; the
+  // guard set makes this a no-op until one does.
+  await autoLearnPoolCodes();
 }
+
 
 function fileMeta(fileId: string | null): FileMeta | null {
   if (!fileId || !details) return null;
@@ -1034,8 +1044,14 @@ function renderDetails() {
         <h3>Team rosters<span class="help-icon" tabindex="0" role="button" aria-label="Team roster help">?<span class="help-pop">
           <strong>Importing the teams</strong>
           <ul>
-            <li>Assign each category's <strong>Total Results</strong> PDF first — teams register per
-              event but compete per block, and the result sheets are the only place that mapping exists.</li>
+            <li>Teams are placed by the ISU code FS Manager registered them in. Each category learns
+              its code from the FSM files in the competition files (start lists, judges' sheets,
+              results, head pages) and from any FSM file assigned to it — the names printed on them
+              are matched to the schedule's, so the category can be called whatever the organizer
+              calls it.</li>
+            <li>When an event is split into blocks the schedule prints once, the code cannot tell
+              them apart: assign each block's <strong>Total Results</strong> PDF and the team is
+              placed from the result sheet.</li>
             <li>Then select the competition's <strong>DT_PARTIC_TEAMS</strong> and <strong>DT_PARTIC</strong>
               XML files together; one pair covers the whole competition and every team is placed
               into the right block automatically. When FS Manager has sent the pair to the
@@ -1076,8 +1092,8 @@ function renderDetails() {
         </div>
       </div>
       <p class="section-sub">Everything team-related lives here: names, rosters and both pictures.
-        Assign the <strong>Total Results</strong> PDFs first, then import the DT_PARTIC XML pair —
-        see <span class="help-hint">?</span> for the full flow and the colour codes.</p>
+        Import the DT_PARTIC XML pair; a <strong>Total Results</strong> PDF settles any block the
+        codes cannot — see <span class="help-hint">?</span> for the full flow and the colour codes.</p>
       ${poolRostersHtml(s)}
       ${rosterGroupsHtml(s)}
       ${rosterReportHtml(s)}
@@ -1495,28 +1511,8 @@ async function assignFile(fileId: string, target: SlotTarget) {
   try {
     const resp = await apiJson('/assign_file', { id: currentId, fileId, target });
     if (!resp.ok) { alert('Could not move file: ' + (await failureText(resp))); return; }
-    await learnFromManualAssign(fileId, target);
     await loadDetails();
   } catch { alert('Network error moving file.'); }
-}
-
-/** Category-scoped slots: dropping into one names the file's category. */
-const LEARNABLE_KINDS: ReadonlySet<SlotTarget['kind']> = new Set(['categoryTitle', 'totalResults', 'segment']);
-
-/**
- * One manual drag teaches the category. The user just told us this file belongs
- * to this category, so its filename's abbreviation is the category's code —
- * stamp it and every sibling file matches by code from then on. Silent when
- * recognition is unavailable or the filename says nothing.
- */
-async function learnFromManualAssign(fileId: string, target: SlotTarget): Promise<void> {
-  if (!LEARNABLE_KINDS.has(target.kind) || !categoryNeedsCode(target.categoryId)) return;
-  const filename = fileMeta(fileId)?.filename;
-  if (!filename) return;
-  const categories = await loadJpCategories();
-  if (!categories) return;
-  const matched = matchCategory(filename, categories);
-  if (matched?.abbreviation) await stampCategoryCode(target.categoryId!, matched.abbreviation);
 }
 
 /* ── filename recognition → automatic slot placement ──
@@ -1608,42 +1604,6 @@ function applyAutoParams(params: URLSearchParams, outcome: AutoAssignOutcome | u
   if (t.segmentId) params.set('segmentId', t.segmentId);
   if (t.role) params.set('role', t.role);
   params.set('autoAssigned', '1');
-}
-
-/* ── learned category codes ──
-   A schedule PDF gives its categories no ISU code, so the very first file of
-   each has to be recognized by *name*. Stamping the abbreviation that match
-   proved onto the code-less category turns every sibling file into a cheap,
-   unambiguous code match — a category learns its code once, from whichever
-   file (or manual drag) got there first. Failing to stamp costs nothing: the
-   next batch simply matches by name again. */
-
-/** Does this category still have no ISU code? (`----` padding counts as none,
- * exactly as the planner's own code matching reads it.) */
-function categoryNeedsCode(categoryId: string | undefined): boolean {
-  if (!categoryId || !details) return false;
-  const cat = details.structure.categories?.find(c => c.id === categoryId);
-  return !!cat && !stripTrailingDashes(cat.code);
-}
-
-/** Write a learned code; never fatal, so callers don't guard it. */
-async function stampCategoryCode(categoryId: string, code: string): Promise<void> {
-  if (!currentId) return;
-  try {
-    await apiJson('/edit_structure', { id: currentId, op: 'set_category', categoryId, code });
-  } catch { /* ignore — recognition keeps working by name */ }
-}
-
-/** Stamp the codes a planned batch learned: one call per category, at most. */
-async function stampLearnedCodes(outcomes: (AutoAssignOutcome | undefined)[]): Promise<void> {
-  const learned = new Map<string, string>();
-  outcomes.forEach(o => {
-    if (!o || o.action !== 'assign') return;
-    const { categoryId, categoryCode, matchedBy } = o.target;
-    if (matchedBy !== 'name' || !categoryCode || learned.has(categoryId)) return;
-    if (categoryNeedsCode(categoryId)) learned.set(categoryId, categoryCode);
-  });
-  for (const [categoryId, code] of learned) await stampCategoryCode(categoryId, code);
 }
 
 /** The wire shape `assign_file` expects — `categoryCode`/`matchedBy` are the
@@ -1893,7 +1853,6 @@ async function importPoolFiles(): Promise<void> {
     } catch { failed++; }
   }
 
-  if (outcomes) await stampLearnedCodes(outcomes);
   await loadDetails();
   const parts = [`Imported ${chosen.length - failed} of ${chosen.length} competition file(s)`];
   const summary = outcomes ? summarizeBatch(outcomes) : null;
@@ -1939,7 +1898,6 @@ async function autoPlaceTrayFiles(): Promise<void> {
     } catch { failed++; }
   }
 
-  await stampLearnedCodes(outcomes);
   await loadDetails();
   const parts = [summarizeBatch(outcomes) ?? 'Nothing recognized — every file stayed in Uploads'];
   if (failed) parts.push(`${failed} could not be moved`);
@@ -2012,7 +1970,6 @@ async function uploadFiles(files: FileList, target?: SlotTarget) {
     }
     await uploadOneFile(file, params);
   }
-  if (outcomes) await stampLearnedCodes(outcomes);
   await loadDetails();
 
   const summary = outcomes ? summarizeBatch(outcomes) : null;
@@ -2138,13 +2095,64 @@ async function autoParsePoolSchedule(): Promise<void> {
   await parseScheduleFromPool(candidate);
 }
 
+/** FSM report PDFs whose first page prints the category as FS Manager prints
+ * it — what the backend reads a category's ISU code from. */
+function isCodedReportFile(name: string): boolean {
+  return /_(StartListwithTimes|JudgesSheetAll|Results|ProtocolHeadPage)\.pdf$/i.test(name);
+}
+
+/** Does some category still lack an ISU code, or do two share one? The
+ * backend's `categories_needing_codes`, padding stripped on this side too. */
+function categoriesNeedCodes(s: Structure): boolean {
+  const seen = new Set<string>();
+  for (const c of s.categories || []) {
+    const code = stripTrailingDashes(c.code);
+    if (!code || seen.has(code)) return true;
+    seen.add(code);
+  }
+  return false;
+}
+
+/**
+ * Let the backend learn category codes from the FSM report PDFs in the
+ * competition files.
+ *
+ * A schedule PDF gives its categories no ISU code; the start lists, judges'
+ * sheets, results and head pages FS Manager pushes carry the code in their
+ * file name and the category as printed on page 1, which is how the backend
+ * ties them together (`learn_pool_codes`). Runs once per (competition, newest
+ * such file) while a category lacks a code or two share one; nothing to
+ * learn, an older backend without the route, or a pool that is off all end
+ * silently — placement by name keeps working as before.
+ */
+async function autoLearnPoolCodes(): Promise<void> {
+  if (!currentId || !details || details.structure.id !== currentId) return;
+  if (viewOnly()) return;   // never write on behalf of a view-only user
+  const s = details.structure;
+  if (!(s.categories || []).length || !categoriesNeedCodes(s)) return;
+  const newest = newestPoolFile(isCodedReportFile);
+  if (!newest) return;
+  const key = `${currentId}::${newest.name}::${newest.uploadedUtc || ''}`;
+  if (autoLearnedCodes.has(key)) return;
+  autoLearnedCodes.add(key);
+  try {
+    const resp = await apiJson('/learn_pool_codes', { id: currentId });
+    if (!resp.ok) return;
+    // The response carries the structure too, but the roster re-match the
+    // route may have run is best read back with everything else.
+    await loadDetails();
+  } catch { /* best-effort */ }
+}
+
 /**
  * Import the roster pair straight out of the competition files.
  *
  * Runs once per (competition, TEAMS file) after a competition is opened, and
  * only while there is no roster import at all — later pushes are offered, not
- * applied — and only when some category is synchro, so a singles competition
- * never gets teams placed into it.
+ * applied. FS Manager exports a DT_PARTIC_TEAMS file for synchronized skating
+ * only, and placing a team marks its category synchro, so the discipline the
+ * schedule parse guessed is no gate: a Finnish-named schedule carries no
+ * "synchro" word at all.
  */
 async function autoImportPoolRosters(): Promise<void> {
   // A details response for the previously opened competition may still be what
@@ -2152,7 +2160,7 @@ async function autoImportPoolRosters(): Promise<void> {
   if (!currentId || !details || details.structure.id !== currentId) return;
   if (viewOnly()) return;   // never write on behalf of a view-only user
   const s = details.structure;
-  if (s.rosterImport || !(s.categories || []).some(c => c.discipline === 'synchro')) return;
+  if (s.rosterImport || !(s.categories || []).length) return;
   const plan = poolRosterPlan(s);
   if (!plan?.teams) return;
   const key = `${currentId}::${plan.teams.name}::${plan.teams.uploadedUtc || ''}`;
