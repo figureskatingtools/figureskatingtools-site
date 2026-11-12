@@ -271,7 +271,25 @@ export function matchNameTokens(
  * of the Judge Papers `categories` table knowing this category at all.
  */
 export function rscTokens(value: string | null | undefined): string[] {
-  return String(value ?? '').trim().toUpperCase().split('-').filter(Boolean);
+  return String(value ?? '')
+    .trim()
+    .toUpperCase()
+    .split('-')
+    .filter(Boolean)
+    .flatMap(splitGluedBlock);
+}
+
+/**
+ * A real FSM split-block file glues the block number to the phase field —
+ * `FSKXSYNCHRONADVNOV--01FNL-000100--` — so a plain dash split reads `01FNL`
+ * as one token and a `…ADVNOV--01` category code (tokens `…ADVNOV`, `01`) can
+ * never match it. Peel the two-digit block off a known phase code; a category
+ * token that merely starts with digits and phase letters (`01FSTEAM`) is left
+ * alone, exactly as `PHASE_TOKEN` reads it.
+ */
+function splitGluedBlock(token: string): string[] {
+  const glued = /^(\d{2})((?:QUAL|FNL|SP|FS|RD|FD|SEG)(?![A-Z])[A-Z0-9]*)$/.exec(token);
+  return glued ? [glued[1]!, glued[2]!] : [token];
 }
 
 /** A filename's RSC prefix (everything before the last underscore) + its suffix */
