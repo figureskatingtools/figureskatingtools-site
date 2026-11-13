@@ -10,6 +10,7 @@ import {
   formatDateTimeFi,
   formatFileSize,
   getActiveCompetition,
+  getCompetition,
   getMe,
   initCompetitionSelector,
   initSiteNav,
@@ -994,6 +995,11 @@ function bindDetail(root: HTMLElement, detail: DetailState, c: AdminCompetition)
 
   root.querySelector('[data-action="open"]')?.addEventListener('click', () => {
     setActiveCompetition(toPlatform(c, detail.data ? ownerOf(detail.data.access) : undefined));
+    // Then the platform's own view of it for this admin — its `adminOverride`
+    // gives the nav its "Admin" badge (the tools refresh it on open anyway)
+    void getCompetition(c.id).then((fresh) => {
+      if (fresh && getActiveCompetition()?.id === fresh.id) setActiveCompetition(fresh);
+    }, () => { /* keep the panel's copy */ });
     detail.notice = {
       kind: 'ok',
       text: `“${c.name || c.code}” is now the active competition in every tool: `,

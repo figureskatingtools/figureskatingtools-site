@@ -94,6 +94,12 @@ export interface PlatformCompetition {
   access?: CompetitionAccess;
   /** The owner, or null for a legacy competition nobody has claimed yet */
   owner?: UserRef | null;
+  /**
+   * True when the caller reaches it only as an admin (no grant of their own):
+   * someone else's competition, opened from the admin panel. Never in the
+   * caller's own list; the nav badges it "Admin".
+   */
+  adminOverride?: boolean;
 }
 
 /** Fields accepted when creating a competition */
@@ -234,7 +240,8 @@ export function isPlatformCompetition(value: unknown): value is PlatformCompetit
     (c.createdUtc === undefined || typeof c.createdUtc === 'string') &&
     (c.deletionDate === undefined || typeof c.deletionDate === 'string') &&
     (c.access === undefined || isCompetitionAccess(c.access)) &&
-    (c.owner === undefined || c.owner === null || isUserRefShape(c.owner))
+    (c.owner === undefined || c.owner === null || isUserRefShape(c.owner)) &&
+    (c.adminOverride === undefined || typeof c.adminOverride === 'boolean')
   );
 }
 
@@ -269,6 +276,7 @@ export function toPlatformCompetition(raw: unknown): PlatformCompetition | null 
     const owner = toUserRef(r.owner);
     if (owner) competition.owner = owner;
   }
+  if (r.adminOverride === true) competition.adminOverride = true;
   return competition;
 }
 
@@ -286,17 +294,19 @@ export function parseActiveCompetition(raw: string | null): PlatformCompetition 
 /**
  * Serialize for storage — only the known fields, never stray keys.
  * `deletionDate` is included so an extend in one tab reaches every other tab
- * through the `storage` event; `access` and `owner` likewise, so a role the
- * owner changes reaches every open tool once the selection is refreshed.
+ * through the `storage` event; `access`, `owner` and `adminOverride` likewise,
+ * so a role the owner changes reaches every open tool once the selection is
+ * refreshed.
  */
 export function serializeActiveCompetition(competition: PlatformCompetition): string {
-  const { id, code, name, date, venue, createdBy, deletionDate, access, owner } = competition;
+  const { id, code, name, date, venue, createdBy, deletionDate, access, owner, adminOverride } = competition;
   const stored: Record<string, unknown> = { id, code, name, date, venue };
   if (createdBy !== undefined) stored.createdBy = createdBy;
   if (deletionDate !== undefined) stored.deletionDate = deletionDate;
   if (access !== undefined) stored.access = access;
   if (owner === null) stored.owner = null;
   else if (owner) stored.owner = { userId: owner.userId, name: owner.name, email: owner.email };
+  if (adminOverride) stored.adminOverride = true;
   return JSON.stringify(stored);
 }
 
@@ -552,6 +562,23 @@ export async function listCompetitions(): Promise<PlatformCompetition[]> {
     throw new CompetitionApiError(resp.status, 'Competitions API returned a non-JSON body');
   }
   return extractCompetitionList(payload);
+}
+
+/**
+ * `GET /api/competitions/{id}` — one competition the caller can read (an
+ * admin can read every one). Null when it is gone for the caller: 404 (no
+ * access, or unknown) or `status: "deleted"`.
+ * Throws `CompetitionApiError` for anything else (0 when unreachable).
+ */
+export async function getCompetition(id: string): Promise<PlatformCompetition | null> {
+  const resp = await callApi(`${COMPETITIONS_API}/${encodeURIComponent(id)}`);
+  if (resp.status === 404) return null;
+  if (!resp.ok) throw await errorFromResponse(resp, 'Could not read the competition');
+  const payload = await jsonBody(resp);
+  if ((payload as { status?: unknown })?.status === 'deleted') return null;
+  const competition = toPlatformCompetition(payload);
+  if (!competition) throw new CompetitionApiError(resp.status, 'Competitions API returned an unexpected body');
+  return competition;
 }
 
 /**
@@ -931,19 +958,20 @@ export function platformErrorMessage(code: PlatformErrorCode, label = ''): strin
  * renamed competition current — its `access` and `owner` too, so a role the
  * owner changed takes effect — and drops one that has been deleted or is no
  * longer shared with the caller.
- * Silently does nothing when the API is unavailable.
+ * Reads it by id, not from the caller's list, so a competition an admin
+ * opened from the admin panel (not in their own list) stays selected.
+ * Silently does nothing when the API is unavailable or failing.
  */
 export async function refreshActiveCompetition(): Promise<PlatformCompetition | null> {
   const current = getActiveCompetition();
   if (!current) return null;
-  let all: PlatformCompetition[];
+  let fresh: PlatformCompetition | null;
   try {
-    all = await listCompetitions();
+    fresh = await getCompetition(current.id);
   } catch (_e) {
-    // Offline or API not deployed — keep whatever we have
+    // Offline, API not deployed or a server error — keep whatever we have
     return current;
   }
-  const fresh = all.find((c) => c.id === current.id) ?? null;
   if (!fresh) {
     clearActiveCompetition();
     return null;

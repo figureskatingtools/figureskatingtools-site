@@ -98,7 +98,13 @@ export async function initCompetitionSelector(container: HTMLElement): Promise<v
   };
 
   const render = (): void => {
-    container.innerHTML = buildSelectorHtml(competitions, getActiveCompetition(), loadError);
+    const active = getActiveCompetition();
+    // An admin's pick from the admin panel isn't in their own list: show it
+    // on top while it is selected, never adding it to the list for good
+    const shown = active?.adminOverride && !competitions.some((c) => c.id === active.id)
+      ? [active, ...competitions]
+      : competitions;
+    container.innerHTML = buildSelectorHtml(shown, active, loadError);
     wire(container, competitions, render, () => void refresh());
   };
 
@@ -120,11 +126,17 @@ function closeMenu(container: HTMLElement): void {
   container.querySelector('[data-fst-comp-menu]')?.classList.remove('fst-comp-menu--open');
 }
 
+const ADMIN_BADGE_HTML =
+  '<span class="fst-comp-item-badge fst-comp-item-badge--admin" ' +
+  'title="Not shared with you: you are working on it as an admin">Admin</span>';
+
 /**
  * "Shared" badge for a competition someone else owns, "View only" when the
- * caller may not change it. Nothing for your own.
+ * caller may not change it, "Admin" for one only the admin role reaches.
+ * Nothing for your own.
  */
 function accessBadgeHtml(c: PlatformCompetition): string {
+  if (c.adminOverride) return ADMIN_BADGE_HTML;
   const access = competitionAccess(c);
   if (access === 'owner') return '';
   const owner = ownerLabel(c.owner);
@@ -171,6 +183,7 @@ function buildSelectorHtml(
     <button type="button" class="fst-comp-btn${activeClass}" data-fst-comp-toggle aria-expanded="false" aria-haspopup="true">
       <span class="fst-comp-dot"></span>
       <span class="fst-comp-btn-label">${esc(label)}</span>
+      ${active?.adminOverride ? ADMIN_BADGE_HTML : ''}
       ${CHEVRON_SVG}
     </button>
     <div class="fst-comp-menu" data-fst-comp-menu>
@@ -211,6 +224,8 @@ function wire(
       const id = btn.getAttribute('data-competition-id');
       const picked = competitions.find((c) => c.id === id) ?? null;
       close();
+      // Only the admin-opened one is missing from the list; it is already active
+      if (!picked) return;
       setActiveCompetition(picked); // re-renders through the subscription
     });
   });

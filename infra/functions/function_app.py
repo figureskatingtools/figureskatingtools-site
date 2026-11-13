@@ -133,7 +133,8 @@ Competition JSON (both directions; server-owned fields are ignored on input):
       "deletionDate":"2026-03-04T00:00:00Z",  server-owned, see "Retention"
       "status":    "active" | "deleted",
       "access":    "owner" | "write" | "read",   the caller's (admin = owner)
-      "owner":     {"userId", "name", "email"} | null
+      "owner":     {"userId", "name", "email"} | null,
+      "adminOverride": true          only when an admin has no grant of their own
     }
 
 FileInfo JSON (the shared competition file pool):
@@ -1140,10 +1141,14 @@ def _self_ref(user: User) -> dict:
 
 
 def _competition_json(entity, user: User, role: str, owner_cache=None) -> dict:
-    """entity_to_competition + the caller's `access` and the `owner`."""
+    """entity_to_competition + the caller's `access` and the `owner`, plus
+    `adminOverride: true` when the access comes from the admin role alone
+    (no grant of their own), so the nav can mark someone else's competition."""
     competition = entity_to_competition(entity)
     competition["access"] = role
     competition["owner"] = _owner_ref(entity.get("RowKey", ""), cache=owner_cache)
+    if user.is_admin and isinstance(role, _Role) and role.own is None:
+        competition["adminOverride"] = True
     return competition
 
 
