@@ -39,7 +39,7 @@ import {
   usableDownloadUrl,
 } from '@figureskatingtools/shared-ui';
 import type { CompetitionDetails, GeneratedFile, Structure, Category, Segment, SlotTarget, FileMeta,
-  NameMode, TeamPageSettings, TeamTextField } from './types';
+  NameMode, RosterFileRef, TeamPageSettings, TeamTextField } from './types';
 import { attachPreview } from './preview';
 import { escapeAttr, escapeHtml, fetchUser, renderSignInView, setupUserMenu, type UserInfo } from '../shell.js';
 
@@ -1784,7 +1784,9 @@ interface PoolRosterPlan {
  * newest PARTIC — the backend never joins a fresh TEAMS file with the archived
  * DT_PARTIC, so leaving it out would drop the skater names — and a PARTIC that
  * is newer alone (or the first one at all) is offered on its own, which
- * re-matches the archived teams.
+ * re-matches the archived teams. An uploaded TEAMS file is also offered,
+ * whatever its age, while the roster in use has no members or came from FS
+ * Manager (whose export has none).
  */
 function poolRosterPlan(s: Structure): PoolRosterPlan | null {
   const teams = preferredTeamsFile();
@@ -1793,15 +1795,22 @@ function poolRosterPlan(s: Structure): PoolRosterPlan | null {
   if (!r) return teams ? { teams, partic, update: false } : null;
   // Reports written before `files` existed only know when the last pass ran. A
   // TEAMS file is always in use once there is a report; a DT_PARTIC may not be.
-  const teamsInUse = r.files?.teams ?? { at: r.at };
+  const teamsInUse: RosterFileRef = r.files?.teams ?? { at: r.at };
   const particInUse = r.files ? r.files.partic : { at: r.at };
   const newer = (f: PoolFile | undefined, ref?: { at: string }) =>
     !!f && (!ref || stampTime(f.uploadedUtc) > stampTime(ref.at));
-  // A TEAMS file without team members that the backend already passed over
-  // (it kept the members it had) is not offered again.
-  const skipped = r.files?.skippedTeams;
-  const teamsSeen = skipped && stampTime(skipped.at) > stampTime(teamsInUse.at) ? skipped : teamsInUse;
-  if (newer(teams, teamsSeen)) return { teams, partic, update: true };
+  const sameFile = (f: PoolFile, ref?: RosterFileRef) =>
+    !!ref?.poolName && ref.poolName === f.name && (ref.source || 'upload') === f.source;
+  if (teams) {
+    // The very file the backend already passed over (no team members; it kept
+    // the members it had) is not offered again until a newer copy arrives.
+    const passedOver = sameFile(teams, r.files?.skippedTeams) && !newer(teams, r.files?.skippedTeams);
+    // An uploaded TEAMS file (Taikkari's, with the members) is offered while the
+    // roster in use came from FS Manager or has no members, however old it is.
+    const fillsMembers = teams.source !== 'fsm' && !sameFile(teams, teamsInUse)
+      && (!!r.noMembers || teamsInUse.source === 'fsm');
+    if (!passedOver && (fillsMembers || newer(teams, teamsInUse))) return { teams, partic, update: true };
+  }
   if (newer(partic, particInUse)) return { partic, update: true };
   return null;
 }
