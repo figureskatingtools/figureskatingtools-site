@@ -39,7 +39,7 @@ import {
   usableDownloadUrl,
 } from '@figureskatingtools/shared-ui';
 import type { CompetitionDetails, GeneratedFile, Structure, Category, Segment, SlotTarget, FileMeta,
-  NameMode, TeamPageSettings, TeamTextField } from './types';
+  NameMode, RosterFileRef, TeamPageSettings, TeamTextField } from './types';
 import { attachPreview } from './preview';
 import { escapeAttr, escapeHtml, fetchUser, renderSignInView, setupUserMenu, type UserInfo } from '../shell.js';
 
@@ -710,7 +710,7 @@ function teamRowHtml(cat: Category, team: TeamRow, s: Structure): string {
   const nameMode = teamNameMode(s, cat, team);
   const roster = count
     ? `<ul class="roster-skaters">${team.members.map(m => `<li>${escapeHtml(m)}</li>`).join('')}</ul>`
-    : '<span class="team-roster-empty">No roster yet — import the DT_PARTIC XML pair or take it from the competition files.</span>';
+    : '<span class="team-roster-empty">No roster yet — import the DT_PARTIC XML pair from Taikkari or take it from the competition files.</span>';
   return `<div class="team-row ${status === 'red' && !skipped ? 'team-row--alert' : ''} ${skipped ? 'team-row--skipped' : ''}"
          data-team-row="${team.id}" data-cat="${cat.id}">
       <div class="team-row-main">
@@ -803,6 +803,21 @@ function rosterGroupsHtml(s: Structure): string {
 /** Persistent status panel for the last roster import (or automatic re-match).
  * The backend stores the report in metadata.json, so it survives reloads and is
  * refreshed silently whenever a Total Results PDF is assigned. */
+/** FS Manager's DT_PARTIC_TEAMS lists the teams but nobody in them; only the
+ * federation registry's (Taikkari) export says who skates in which team. */
+const NO_MEMBERS_NOTE = 'This team file has no team members — FS Manager’s export never lists them. '
+  + 'Import the <strong>DT_PARTIC_TEAMS</strong> exported from <strong>Taikkari</strong> '
+  + '(or upload it to the competition files) to add the skaters.';
+
+/** The flash line after an import: the counts, plus what happened to members. */
+function rosterImportFlash(data: { imported: number; moved?: number; skippedTeams?: boolean; noMembers?: boolean },
+    from = ''): string {
+  const base = `Imported ${data.imported} team(s)${from}${data.moved ? `, ${data.moved} moved` : ''}`;
+  if (data.skippedTeams) return `${base} — the new team file had no team members, so the members already imported were kept.`;
+  if (data.noMembers) return `${base} — but the team file has no team members: import Taikkari’s DT_PARTIC_TEAMS to add them.`;
+  return `${base} — see the Team rosters section for details.`;
+}
+
 function rosterReportHtml(s: Structure): string {
   const r = s.rosterImport;
   if (!r) return '';
@@ -840,6 +855,7 @@ function rosterReportHtml(s: Structure): string {
   return `<div class="roster-report">
       <p class="roster-report-sum">Imported ${r.imported} team(s)${r.moved ? ` · ${r.moved} moved` : ''}${
         when ? ` <span class="roster-report-when">${escapeHtml(when)}</span>` : ''}</p>
+      ${r.noMembers ? `<p class="roster-report-warn">${NO_MEMBERS_NOTE}</p>` : ''}
       ${from}
       ${blocks.join('')}
     </div>`;
@@ -1054,9 +1070,11 @@ function renderDetails() {
               placed from the result sheet.</li>
             <li>Then select the competition's <strong>DT_PARTIC_TEAMS</strong> and <strong>DT_PARTIC</strong>
               XML files together; one pair covers the whole competition and every team is placed
-              into the right block automatically. When FS Manager has sent the pair to the
-              competition files, it is imported on its own the first time the competition is opened,
-              and newer files are offered here.</li>
+              into the right block automatically. Only the <strong>Taikkari</strong> export says who
+              skates in which team: FS Manager's team file lists the teams without their members, so
+              it never replaces members already imported. When the pair is in the competition files,
+              it is imported on its own the first time the competition is opened (an uploaded team
+              file before FS Manager's), and newer files are offered here.</li>
             <li>Assign a missing results PDF later and the teams are <strong>re-matched
               automatically</strong> — no need to import again.</li>
             <li>Accreditation pictures import in bulk from one <strong>ZIP</strong>: files named
@@ -1718,19 +1736,30 @@ function scheduleCandidates(): PoolFile[] {
 }
 
 /** FS Manager pushes the roster pair as `DT_PARTIC_TEAMS_<code>.xml` and
- * `DT_PARTIC_<code>.xml` (a hand upload may be the bare `DT_PARTIC.xml`) — the
- * TEAMS name starts with the PARTIC prefix, so the PARTIC test excludes it. */
+ * `DT_PARTIC_<code>.xml` (a hand upload may be the bare `DT_PARTIC.xml`); the
+ * federation registry's exports are named `TAIKKARI_DT_PARTIC…`, so one leading
+ * `<WORD>_` is allowed. The TEAMS name starts with the PARTIC prefix, so the
+ * PARTIC test excludes it. */
 function isRosterTeamsFile(name: string): boolean {
-  return /^DT_PARTIC_TEAMS[^/]*\.xml$/i.test(name) && !/^DT_PARTIC_TEAMS_UPDATE/i.test(name);
+  return /^(?:[a-z0-9]+_)?DT_PARTIC_TEAMS(?!_UPDATE)[^/]*\.xml$/i.test(name);
 }
 function isRosterParticFile(name: string): boolean {
-  return /^DT_PARTIC(?!_TEAMS)(_[^/]*)?\.xml$/i.test(name) && !/^DT_PARTIC_UPDATE/i.test(name);
+  return /^(?:[a-z0-9]+_)?DT_PARTIC(?!_TEAMS|_UPDATE)(_[^/]*)?\.xml$/i.test(name);
 }
 
 /** The newest pool file passing `test`, whichever folder (FSM or upload) it is in. */
 function newestPoolFile(test: (name: string) => boolean): PoolFile | undefined {
   return (poolFiles || []).filter(f => test(f.name))
     .sort((a, b) => (b.uploadedUtc || '').localeCompare(a.uploadedUtc || ''))[0];
+}
+
+/** The TEAMS file to use: the newest uploaded one, else the newest from FS
+ * Manager. FS Manager's export never says who is in a team, so any uploaded
+ * one (the federation's, with the compositions) beats it however new. */
+function preferredTeamsFile(): PoolFile | undefined {
+  const teams = (poolFiles || []).filter(f => isRosterTeamsFile(f.name))
+    .sort((a, b) => (b.uploadedUtc || '').localeCompare(a.uploadedUtc || ''));
+  return teams.find(f => f.source !== 'fsm') ?? teams[0];
 }
 
 /** Milliseconds of an ISO stamp; the backend writes microseconds, which not
@@ -1755,20 +1784,33 @@ interface PoolRosterPlan {
  * newest PARTIC — the backend never joins a fresh TEAMS file with the archived
  * DT_PARTIC, so leaving it out would drop the skater names — and a PARTIC that
  * is newer alone (or the first one at all) is offered on its own, which
- * re-matches the archived teams.
+ * re-matches the archived teams. An uploaded TEAMS file is also offered,
+ * whatever its age, while the roster in use has no members or came from FS
+ * Manager (whose export has none).
  */
 function poolRosterPlan(s: Structure): PoolRosterPlan | null {
-  const teams = newestPoolFile(isRosterTeamsFile);
+  const teams = preferredTeamsFile();
   const partic = newestPoolFile(isRosterParticFile);
   const r = s.rosterImport;
   if (!r) return teams ? { teams, partic, update: false } : null;
   // Reports written before `files` existed only know when the last pass ran. A
   // TEAMS file is always in use once there is a report; a DT_PARTIC may not be.
-  const teamsInUse = r.files?.teams ?? { at: r.at };
+  const teamsInUse: RosterFileRef = r.files?.teams ?? { at: r.at };
   const particInUse = r.files ? r.files.partic : { at: r.at };
   const newer = (f: PoolFile | undefined, ref?: { at: string }) =>
     !!f && (!ref || stampTime(f.uploadedUtc) > stampTime(ref.at));
-  if (newer(teams, teamsInUse)) return { teams, partic, update: true };
+  const sameFile = (f: PoolFile, ref?: RosterFileRef) =>
+    !!ref?.poolName && ref.poolName === f.name && (ref.source || 'upload') === f.source;
+  if (teams) {
+    // The very file the backend already passed over (no team members; it kept
+    // the members it had) is not offered again until a newer copy arrives.
+    const passedOver = sameFile(teams, r.files?.skippedTeams) && !newer(teams, r.files?.skippedTeams);
+    // An uploaded TEAMS file (Taikkari's, with the members) is offered while the
+    // roster in use came from FS Manager or has no members, however old it is.
+    const fillsMembers = teams.source !== 'fsm' && !sameFile(teams, teamsInUse)
+      && (!!r.noMembers || teamsInUse.source === 'fsm');
+    if (!passedOver && (fillsMembers || newer(teams, teamsInUse))) return { teams, partic, update: true };
+  }
   if (newer(partic, particInUse)) return { partic, update: true };
   return null;
 }
@@ -2196,7 +2238,7 @@ async function importRostersFromPool(plan: PoolRosterPlan, auto = false): Promis
     }
     const data = await resp.json();
     await loadDetails();
-    flash(`Imported ${data.imported} team(s) from competition files${data.moved ? `, ${data.moved} moved` : ''} — see the Team rosters section for details.`);
+    flash(rosterImportFlash(data, ' from competition files'));
   } catch {
     if (!auto) alert('Network error importing rosters.');
   }
@@ -2238,7 +2280,7 @@ async function importRosters(teamsXml: string, particXml: string) {
     const data = await resp.json();
     await loadDetails();
     // Details (withdrawn / not placed) live in the persistent panel, not here.
-    flash(`Imported ${data.imported} team(s)${data.moved ? `, ${data.moved} moved` : ''} — see the Team rosters section for details.`);
+    flash(rosterImportFlash(data));
   } catch { alert('Network error importing rosters.'); }
 }
 

@@ -944,6 +944,15 @@ input[type="checkbox"] { accent-color: var(--ink); }
 .roster-report-list ul { margin: 0.3rem 0 0; padding-left: 1.1rem; font-size: 0.78rem; color: var(--ink-soft); }
 .roster-report-list li { margin-bottom: 0.15rem; }
 .roster-report-org { color: var(--ink-faint); }
+/* The TEAMS file in use names no team members (FS Manager's export) */
+.roster-report-warn {
+  margin: 0.6rem 0 0;
+  padding: 0.45rem 0.7rem;
+  border-left: 2px solid var(--gold);
+  background-color: var(--gold-tint);
+  font-size: 0.8rem;
+  color: var(--ink);
+}
 
 /* ── Generate / download ── */
 .action-bar { display: flex; align-items: center; justify-content: space-between; gap: 1.5rem; border-top: 1px solid var(--line); padding-top: 1.5rem; margin-top: 1.5rem; }
