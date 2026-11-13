@@ -370,6 +370,8 @@ export function syncCompetitionSnapshot(
   if (index < 0) return false;
   // Spread keeps what the stored copy lacks (createdUtc) from the list entry
   const merged = { ...list[index], ...active };
+  // ...but the admin mark is the active copy's alone: a spread never drops it
+  if (!active.adminOverride) delete merged.adminOverride;
   if (JSON.stringify(merged) === JSON.stringify(list[index])) return false;
   list[index] = merged;
   return true;

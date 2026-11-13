@@ -672,6 +672,18 @@ describe('syncCompetitionSnapshot', () => {
     expect(getActiveCompetition()?.deletionDate).toBe('2026-12-07T00:00:00Z');
   });
 
+  it('drops a stale admin mark once the active copy has none (shared with the admin since)', () => {
+    const list: PlatformCompetition[] = [{ ...COMP, access: 'owner' }];
+    syncCompetitionSnapshot(list, { ...COMP, access: 'owner', adminOverride: true });
+    expect(list[0].adminOverride).toBe(true);
+
+    expect(syncCompetitionSnapshot(list, { ...COMP, access: 'owner' })).toBe(true);
+    expect(list[0]).not.toHaveProperty('adminOverride');
+
+    setActiveCompetition(list[0]);   // re-picking it must not bring the mark back
+    expect(getActiveCompetition()).not.toHaveProperty('adminOverride');
+  });
+
   it('reports no change for null, an unknown id or identical data', () => {
     const list: PlatformCompetition[] = [{ ...COMP }];
     expect(syncCompetitionSnapshot(list, null)).toBe(false);
