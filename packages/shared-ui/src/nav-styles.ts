@@ -74,6 +74,17 @@ const NAV_STYLES = `
   color: #64798e;
 }
 
+/* Someone else's competition, opened through the admin panel */
+.fst-comp-item-badge--admin {
+  background-color: #fff7e6;
+  color: #8a5a00;
+}
+
+.fst-comp-btn .fst-comp-item-badge {
+  flex-shrink: 0;
+  margin-left: 0;
+}
+
 /* ── Share dialog ── */
 .fst-share-dialog {
   width: min(34rem, calc(100vw - 2rem));

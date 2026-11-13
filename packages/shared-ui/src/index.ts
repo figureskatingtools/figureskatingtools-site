@@ -29,6 +29,7 @@ export {
   extendCompetition,
   extractCompetitionList,
   getActiveCompetition,
+  getCompetition,
   getMe,
   isCompetitionAccess,
   isGoneCompetitionError,

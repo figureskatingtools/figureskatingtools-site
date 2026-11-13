@@ -175,6 +175,20 @@ def test_every_competition_response_carries_access_and_owner(world):
         assert got["owner"] == {"userId": USER_ID, "name": "Skater Person", "email": USER_EMAIL}
 
 
+def test_only_an_admin_without_a_grant_gets_admin_override(world, table):
+    def get(email):
+        return payload(fa._get_competition(make_request(
+            "GET", route_params={"id": world["id"]}, user_email=email)))
+
+    assert get(ADMIN_EMAIL)["adminOverride"] is True
+    for email in (READER, WRITER, USER_EMAIL):
+        assert "adminOverride" not in get(email), email
+    # An admin the competition is shared with works on it as a grantee
+    table.grant(world["id"], world["ids"][ADMIN_EMAIL], "read")
+    assert "adminOverride" not in get(ADMIN_EMAIL)
+    assert "adminOverride" not in listing(user_email=ADMIN_EMAIL)[0]
+
+
 def test_a_reader_can_download_but_not_upload_or_extend(world, blobs):
     download = fa._download_competition_file(make_request(
         "GET", route_params={"id": world["id"], "name": "a.pdf"}, user_email=READER))

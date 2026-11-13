@@ -19,6 +19,7 @@ import {
   createCompetition,
   extractCompetitionList,
   getActiveCompetition,
+  getCompetition,
   listCompetitions,
   isPlatformCompetition,
   normalizeCompetitionCode,
@@ -671,6 +672,18 @@ describe('syncCompetitionSnapshot', () => {
     expect(getActiveCompetition()?.deletionDate).toBe('2026-12-07T00:00:00Z');
   });
 
+  it('drops a stale admin mark once the active copy has none (shared with the admin since)', () => {
+    const list: PlatformCompetition[] = [{ ...COMP, access: 'owner' }];
+    syncCompetitionSnapshot(list, { ...COMP, access: 'owner', adminOverride: true });
+    expect(list[0].adminOverride).toBe(true);
+
+    expect(syncCompetitionSnapshot(list, { ...COMP, access: 'owner' })).toBe(true);
+    expect(list[0]).not.toHaveProperty('adminOverride');
+
+    setActiveCompetition(list[0]);   // re-picking it must not bring the mark back
+    expect(getActiveCompetition()).not.toHaveProperty('adminOverride');
+  });
+
   it('reports no change for null, an unknown id or identical data', () => {
     const list: PlatformCompetition[] = [{ ...COMP }];
     expect(syncCompetitionSnapshot(list, null)).toBe(false);
@@ -707,6 +720,16 @@ describe('access and owner', () => {
     expect(parseActiveCompetition(serializeActiveCompetition({ ...COMP, owner: null }))?.owner).toBeNull();
   });
 
+  it('keeps adminOverride only when the API says true', () => {
+    expect(toPlatformCompetition({ ...COMP, adminOverride: true })?.adminOverride).toBe(true);
+    expect(toPlatformCompetition({ ...COMP, adminOverride: 'yes' })).not.toHaveProperty('adminOverride');
+    expect(toPlatformCompetition(COMP)).not.toHaveProperty('adminOverride');
+    const stored = serializeActiveCompetition({ ...COMP, access: 'owner', adminOverride: true });
+    expect(parseActiveCompetition(stored)?.adminOverride).toBe(true);
+    expect(serializeActiveCompetition({ ...COMP, adminOverride: false })).not.toContain('adminOverride');
+    expect(isPlatformCompetition({ ...COMP, adminOverride: 1 })).toBe(false);
+  });
+
   it('reads a missing role as owner (pre-sharing selection or API)', () => {
     expect(competitionAccess(COMP)).toBe('owner');
     expect(competitionAccess(null)).toBe('owner');
@@ -722,26 +745,92 @@ describe('access and owner', () => {
     expect(ownerLabel(null)).toBe('');
   });
 
+  describe('getCompetition', () => {
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('GETs the competition by its encoded id', async () => {
+      const fetchMock = vi.fn(async () => response(200, { ...COMP, access: 'owner', adminOverride: true }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      expect(await getCompetition('a/b')).toEqual({ ...COMP, access: 'owner', adminOverride: true });
+      expect(fetchMock.mock.calls[0][0]).toBe(`${COMPETITIONS_API}/a%2Fb`);
+    });
+
+    it('is null for a 404 or a deleted competition, and throws for other failures', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => response(404, { error: 'not_found' })));
+      expect(await getCompetition(COMP.id)).toBeNull();
+
+      vi.stubGlobal('fetch', vi.fn(async () => response(200, { ...COMP, status: 'deleted' })));
+      expect(await getCompetition(COMP.id)).toBeNull();
+
+      vi.stubGlobal('fetch', vi.fn(async () => response(500, { error: 'internal_error', message: 'Boom' })));
+      await expect(getCompetition(COMP.id)).rejects.toMatchObject({ status: 500, code: 'internal_error' });
+    });
+  });
+
   describe('refreshActiveCompetition', () => {
     afterEach(() => {
       vi.unstubAllGlobals();
     });
 
-    it('picks up a role change for the active competition', async () => {
+    it('reads the active competition by id and picks up a role change', async () => {
       setActiveCompetition({ ...COMP, access: 'write', owner: OWNER });
-      vi.stubGlobal('fetch', vi.fn(async () => response(200, [{ ...COMP, access: 'read', owner: OWNER }])));
+      const fetchMock = vi.fn(async () => response(200, { ...COMP, access: 'read', owner: OWNER }));
+      vi.stubGlobal('fetch', fetchMock);
 
       await refreshActiveCompetition();
 
+      expect(fetchMock.mock.calls[0][0]).toBe(`${COMPETITIONS_API}/${COMP.id}`);
       expect(getActiveCompetition()?.access).toBe('read');
     });
 
-    it('drops a competition that is no longer shared with the caller', async () => {
+    it('drops a competition that is no longer shared with the caller (404)', async () => {
       setActiveCompetition({ ...COMP, access: 'read', owner: OWNER });
-      vi.stubGlobal('fetch', vi.fn(async () => response(200, [])));
+      vi.stubGlobal('fetch', vi.fn(async () => response(404, { error: 'not_found' })));
 
       expect(await refreshActiveCompetition()).toBeNull();
       expect(getActiveCompetition()).toBeNull();
+    });
+
+    it('drops a deleted competition', async () => {
+      setActiveCompetition({ ...COMP, access: 'owner' });
+      vi.stubGlobal('fetch', vi.fn(async () => response(200, { ...COMP, access: 'owner', status: 'deleted' })));
+
+      expect(await refreshActiveCompetition()).toBeNull();
+      expect(getActiveCompetition()).toBeNull();
+    });
+
+    it("keeps an admin's competition that is not in their own list, marked adminOverride", async () => {
+      setActiveCompetition({ ...COMP, access: 'owner', owner: OWNER });
+      vi.stubGlobal('fetch', vi.fn(async () => response(200, {
+        ...COMP, access: 'owner', owner: OWNER, adminOverride: true,
+      })));
+
+      const fresh = await refreshActiveCompetition();
+
+      expect(fresh?.adminOverride).toBe(true);
+      expect(getActiveCompetition()).toEqual({ ...COMP, access: 'owner', owner: OWNER, adminOverride: true });
+    });
+
+    it('drops the admin mark once the competition is shared with the admin', async () => {
+      setActiveCompetition({ ...COMP, access: 'owner', owner: OWNER, adminOverride: true });
+      vi.stubGlobal('fetch', vi.fn(async () => response(200, { ...COMP, access: 'owner', owner: OWNER })));
+
+      await refreshActiveCompetition();
+
+      expect(getActiveCompetition()).not.toHaveProperty('adminOverride');
+    });
+
+    it('keeps the selection when the API fails or is unreachable', async () => {
+      setActiveCompetition({ ...COMP, access: 'write' });
+      vi.stubGlobal('fetch', vi.fn(async () => response(500, { error: 'internal_error' })));
+      expect((await refreshActiveCompetition())?.id).toBe(COMP.id);
+
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch'); }));
+      expect((await refreshActiveCompetition())?.id).toBe(COMP.id);
+      expect(getActiveCompetition()?.access).toBe('write');
     });
   });
 });
