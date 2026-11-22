@@ -1013,11 +1013,84 @@ input[type="checkbox"] {
   align-items: flex-start;
 }
 
-.generated-files-list {
+/* Generated files with their shared links underneath */
+.generated-column {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.generated-files-list {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+}
+
+/* ── Shared links (e-mailed / copied) with Revoke ── */
+.share-links[hidden] { display: none; }
+
+.share-links-title {
+  margin: 0 0 0.35rem;
+}
+
+.share-links-note {
+  margin: 0 0 0.6rem;
+  font-size: 0.8rem;
+  color: var(--ink-muted);
+}
+
+.share-link-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.share-link {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.55rem 0.75rem;
+  background: var(--paper-tint);
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+}
+
+.share-link-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.share-link-file {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.share-link-how {
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+  margin-top: 0.15rem;
+  overflow-wrap: anywhere;
+}
+
+.share-link-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.9rem;
+  margin-top: 0.2rem;
+  font-size: 0.74rem;
+  color: var(--ink-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.share-link-revoke {
+  flex-shrink: 0;
 }
 
 /* Verify-before-generate reminder above the Generate button. */

@@ -173,8 +173,12 @@ appElement.innerHTML = `
             </div>
 
             <div id="action-container" class="action-container">
-                 <div id="generated-files-list" class="generated-files-list">
-                      <!-- Generated files injected here -->
+                 <div class="generated-column">
+                      <div id="generated-files-list" class="generated-files-list">
+                           <!-- Generated files injected here -->
+                      </div>
+                      <!-- Live e-mailed / copied links of the generated files -->
+                      <section id="share-links" class="share-links" aria-labelledby="share-links-title" hidden></section>
                  </div>
 
                  <div id="right-panel" class="right-panel">
@@ -536,6 +540,26 @@ interface GeneratedPaperFile {
     /** When `url` stops working (ISO); null along with `url` */
     expiration?: string | null;
     size?: number | string | null;
+}
+
+/**
+ * One live e-mailed or copied link in `get_competition_details` (`shareLinks`).
+ * A view-only user gets only their own links and never the recipients.
+ */
+interface ShareLink {
+    /** Opaque id for `revoke_download_link` (never the link itself) */
+    linkId: string;
+    fileName: string;
+    channel: 'email' | 'link';
+    created?: string | null;
+    expiration?: string | null;
+    downloadCount?: number | null;
+    createdByMe?: boolean;
+    /** The creator's name or e-mail */
+    createdBy?: string | null;
+    /** E-mail recipients — only for users with write access */
+    to?: string | null;
+    cc?: string | null;
 }
 
 /**
@@ -1160,6 +1184,7 @@ async function init() {
             // Render Generated Files
             generatedFetchedAt = Date.now();
             renderGeneratedFiles(data.generatedFiles || []);
+            renderShareLinks(data.shareLinks);
 
             // Shared-pool files this tool has not imported yet (renders nothing
             // when the pool is unavailable or everything is already here).
@@ -1272,7 +1297,9 @@ async function init() {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
                 const fileName = btn.dataset.filename!;
-                if (user && currentCompetitionData) openSendDialog(API_BASE, currentCompetitionData.id, fileName, user);
+                if (!user || !currentCompetitionData) return;
+                const competitionId: string = currentCompetitionData.id;
+                openSendDialog(API_BASE, competitionId, fileName, user, () => void refreshShareLinks(competitionId));
             });
         });
 
@@ -1297,6 +1324,7 @@ async function init() {
             await writeClipboard(link.then(l => l.url));
             const { expiration } = await link;
             confirmCopied(btn, expiration);
+            void refreshShareLinks(competitionId);
         } catch (err) {
             // Another competition was opened meanwhile: this click no longer applies
             if (currentCompetitionData?.id !== competitionId) return;
@@ -1338,7 +1366,110 @@ async function init() {
         currentCompetitionData.generatedFiles = files;
         generatedFetchedAt = Date.now();
         renderGeneratedFiles(files);
+        renderShareLinks(data.shareLinks);
         return files;
+    }
+
+    /**
+     * Re-read the competition for its list of shared links only (after a link
+     * was copied, e-mailed or revoked). The generated papers list is left
+     * alone, so a "Link copied" confirmation on its button stays visible.
+     */
+    async function refreshShareLinks(id: string): Promise<void> {
+        if (currentCompetitionData?.id !== id) return;
+        try {
+            const resp = await fetch(`${API_BASE}/get_competition_details?id=${encodeURIComponent(id)}`);
+            if (!resp.ok) return;
+            const data = await resp.json();
+            if (currentCompetitionData?.id !== id) return;
+            reportPoolRefresh(data.refreshedFromPool);
+            renderShareLinks(data.shareLinks);
+        } catch (_e) {
+            // The list just stays as it was; the next load shows the change.
+        }
+    }
+
+    /** "3 downloads" — counted on every click, mail scanners included */
+    function downloadCountText(count: number): string {
+        return count === 1 ? '1 download' : `${count} downloads`;
+    }
+
+    /** How a link was shared, with the recipients when the backend gave them */
+    function shareChannelText(link: ShareLink): string {
+        if (link.channel === 'link') return 'Copied link';
+        const to = (link.to ?? '').trim();
+        const cc = (link.cc ?? '').trim();
+        if (!to) return 'E-mail';
+        return cc ? `E-mail to ${to}, cc ${cc}` : `E-mail to ${to}`;
+    }
+
+    /**
+     * The live share links of the generated papers, with Revoke. The backend
+     * decides what is listed: everything (with recipients) for write access,
+     * only the user's own links for view-only access. `null` = the list could
+     * not be read.
+     */
+    function renderShareLinks(raw: unknown) {
+        const section = document.getElementById('share-links');
+        if (!section || !currentCompetitionData) return;
+        currentCompetitionData.shareLinks = raw;
+        const ro = viewOnly();
+        const title = ro ? 'Your shared links' : 'Shared links';
+        if (raw === null) {
+            section.innerHTML = `
+                <h3 id="share-links-title" class="micro-label share-links-title">${escapeHtml(title)}</h3>
+                <p class="share-links-note text-muted">Shared links could not be loaded. Reload the page to try again.</p>`;
+            section.hidden = false;
+            return;
+        }
+        const links: ShareLink[] = Array.isArray(raw)
+            ? raw.filter((l): l is ShareLink => Boolean(l) && typeof l.linkId === 'string')
+            : [];
+        if (!links.length) {
+            section.innerHTML = '';
+            section.hidden = true;
+            return;
+        }
+        section.innerHTML = `
+            <h3 id="share-links-title" class="micro-label share-links-title">${escapeHtml(title)}</h3>
+            <p class="share-links-note">Anyone with one of these links can download the file until it expires.
+               Revoke a link to stop it working at once.</p>
+            <ul class="share-link-list">
+                ${links.map(link => {
+                    const by = link.createdByMe ? 'you' : (link.createdBy || 'someone else');
+                    const created = link.created ? formatLinkExpiry(link.created) : '-';
+                    const expires = link.expiration ? formatLinkExpiry(link.expiration) : '-';
+                    const count = Number(link.downloadCount) || 0;
+                    const canRevoke = !ro || link.createdByMe === true;
+                    return `
+                    <li class="share-link">
+                        <div class="share-link-main">
+                            <div class="share-link-file">${escapeHtml(link.fileName)}</div>
+                            <div class="share-link-how">${escapeHtml(shareChannelText(link))}</div>
+                            <div class="share-link-meta">
+                                <span>Shared by ${escapeHtml(by)}</span>
+                                <span>Created ${escapeHtml(created)}</span>
+                                <span>Expires ${escapeHtml(expires)}</span>
+                                <span title="Link previews and mail scanners count too">${escapeHtml(downloadCountText(count))}</span>
+                            </div>
+                        </div>
+                        ${canRevoke ? `
+                        <button type="button" class="btn btn-ghost btn-ghost--danger btn-sm share-link-revoke"
+                                data-link-id="${escapeAttr(link.linkId)}" data-file="${escapeAttr(link.fileName)}"
+                                data-channel="${escapeAttr(link.channel)}">Revoke</button>` : ''}
+                    </li>`;
+                }).join('')}
+            </ul>`;
+        section.hidden = false;
+
+        section.querySelectorAll<HTMLButtonElement>('.share-link-revoke').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const competitionId = currentCompetitionData?.id;
+                if (!competitionId) return;
+                openRevokeLinkModal(competitionId, btn.dataset.linkId!, btn.dataset.file || '',
+                    btn.dataset.channel === 'email' ? 'email' : 'link');
+            });
+        });
     }
 
     /**
@@ -1841,10 +1972,44 @@ async function init() {
     const modalConfirm = document.getElementById('modal-confirm')!;
 
     // Only files are deletable from the app now — competitions come and go with
-    // the platform registry and auto-delete on their retention date.
-    type DeleteAction = { type: 'FILE', filename: string, competition: string };
+    // the platform registry and auto-delete on their retention date. Shared
+    // links can be revoked.
+    type ModalAction =
+        | { type: 'FILE', filename: string, competition: string }
+        | { type: 'LINK', linkId: string, competition: string };
 
-    let pendingAction: DeleteAction | null = null;
+    let pendingAction: ModalAction | null = null;
+
+    function openRevokeLinkModal(competition: string, linkId: string, fileName: string, channel: 'email' | 'link') {
+        pendingAction = { type: 'LINK', linkId, competition };
+        modalTitle.textContent = 'Revoke link?';
+        const what = channel === 'email' ? 'The e-mailed link' : 'The copied link';
+        modalMessage.innerHTML = `${what} to <strong>${escapeHtml(fileName)}</strong> stops working at once. `
+            + 'Anyone who still needs the file has to get a new link.';
+        modalExtra.innerHTML = '';
+
+        modalCancel.classList.remove('hidden');
+        modalConfirm.textContent = 'Revoke';
+        modalConfirm.classList.remove('btn-primary');
+        modalConfirm.classList.add('btn-danger');
+        (modalConfirm as HTMLButtonElement).disabled = false;
+
+        modalOverlay.classList.remove('hidden');
+    }
+
+    /** POST revoke_download_link; true when the link is gone (also when it already was) */
+    async function revokeLink(action: { linkId: string, competition: string }): Promise<boolean> {
+        const resp = await fetch(`${API_BASE}/revoke_download_link`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: action.competition, linkId: action.linkId }),
+        });
+        if (resp.ok) return true;
+        const body = await resp.text().catch(() => '');
+        if (resp.status === 404 && body.startsWith('link_not_found')) return true;
+        alert(readOnlyRefusal(resp.status, body) ?? 'Could not revoke the link. Try again.');
+        return false;
+    }
 
     function openDeleteFileModal(filename: string, competition: string) {
         pendingAction = { type: 'FILE', filename, competition };
@@ -1892,9 +2057,27 @@ async function init() {
         
         const btn = modalConfirm as HTMLButtonElement;
         const originalText = btn.textContent;
-        btn.textContent = 'Deleting...';
         btn.disabled = true;
 
+        if (pendingAction.type === 'LINK') {
+            const action = pendingAction;
+            btn.textContent = 'Revoking...';
+            try {
+                if (await revokeLink(action)) {
+                    modalOverlay.classList.add('hidden');
+                    pendingAction = null;
+                    void refreshShareLinks(action.competition);
+                }
+            } catch (_error) {
+                alert('Could not revoke the link. Check your connection and try again.');
+            } finally {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }
+            return;
+        }
+
+        btn.textContent = 'Deleting...';
         try {
             const resp = await fetch(`${API_BASE}/delete_file?competition=${encodeURIComponent(pendingAction.competition)}&filename=${encodeURIComponent(pendingAction.filename)}`, {
                 method: 'DELETE'

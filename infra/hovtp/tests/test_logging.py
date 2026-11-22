@@ -83,3 +83,12 @@ def test_an_unexpected_failure_is_a_500_not_a_crash(table, blobs, caplog, monkey
     assert response.status_code == 500
     record = _records(caplog)[-1]
     assert (record["outcome"], record["reason"]) == ("error", "internal error")
+
+
+def test_the_sdk_http_logging_policy_logs_warnings_only():
+    """The Azure SDK's per-request lines (blob paths with sender IPs, table
+    keys) stay out of the logs; the one hovtp line above is the record."""
+    logger = logging.getLogger("azure.core.pipeline.policies.http_logging_policy")
+    assert fa.HTTP_LOGGING_POLICY_LOGGER == logger.name
+    assert logger.level == logging.WARNING
+    assert not logger.isEnabledFor(logging.INFO)

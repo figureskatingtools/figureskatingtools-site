@@ -92,6 +92,12 @@ from azure.data.tables import TableClient, UpdateMode
 from azure.identity import DefaultAzureCredential
 from azure.storage.blob import BlobServiceClient, ContentSettings
 
+# The Azure SDK logs every storage request URL at INFO: blob paths (file and
+# competition names, FSM sender IPs) and table keys would land in the 90-day
+# logs. host.json log levels don't reach Python logger names, so raise it here.
+HTTP_LOGGING_POLICY_LOGGER = "azure.core.pipeline.policies.http_logging_policy"
+logging.getLogger(HTTP_LOGGING_POLICY_LOGGER).setLevel(logging.WARNING)
+
 app = func.FunctionApp(http_auth_level=func.AuthLevel.ANONYMOUS)
 
 # ── shared contract with infra/functions/function_app.py ──────────────────────
