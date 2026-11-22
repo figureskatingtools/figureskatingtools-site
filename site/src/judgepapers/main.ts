@@ -94,9 +94,9 @@ appElement.innerHTML = `
     </div>
 
     <div id="main-content" class="hidden">
-      <!-- Modal Container -->
-      <div id="modal-overlay" class="modal-overlay hidden">
-        <div class="modal">
+      <!-- Confirmation / error dialog (native <dialog>, opened with showModal) -->
+      <dialog id="modal-overlay" class="modal confirm-dialog"
+              aria-labelledby="modal-title" aria-describedby="modal-message">
             <h3 id="modal-title">Confirm Action</h3>
             <p id="modal-message" class="modal-message">Are you sure?</p>
 
@@ -105,11 +105,10 @@ appElement.innerHTML = `
             </div>
 
             <div class="modal-actions">
-                <button id="modal-cancel" class="btn btn-ghost btn-sm">Cancel</button>
-                <button id="modal-confirm" class="btn btn-primary btn-sm">Confirm</button>
+                <button type="button" id="modal-cancel" class="btn btn-ghost btn-sm">Cancel</button>
+                <button type="button" id="modal-confirm" class="btn btn-primary btn-sm">Confirm</button>
             </div>
-        </div>
-      </div>
+      </dialog>
 
       <div id="view-pick-competition" class="hidden">
         <div class="card reveal bind-card">
@@ -692,10 +691,24 @@ async function init() {
         renderRetention();
         // The owner may have changed this user's role
         applyViewOnly();
+        // ... which also decides which shared links are listed (all of them for
+        // write, only the user's own for view-only): drop the stale rows and
+        // fetch the list again for the new role.
+        const active = getActiveCompetition();
+        const openId: string | undefined = currentCompetitionData?.id;
+        if (active && openId && active.id === boundPlatformId
+            && shareLinksAccess !== null && shareLinksAccess !== currentAccess()) {
+            renderShareLinks([]);
+            void refreshShareLinks(openId);
+        }
     });
 
     // List Details Logic
     let currentCompetitionData: any = null;
+    /** The role the Shared links list was last rendered for (null: not yet) */
+    let shareLinksAccess: string | null = null;
+    /** The user's role on the bound competition, as the nav selection has it */
+    const currentAccess = (): string => getActiveCompetition()?.access ?? 'owner';
     /** When `currentCompetitionData` was fetched (epoch ms) — its download links live 15 minutes */
     let generatedFetchedAt = 0;
     let isGlobalValid = false;
@@ -1320,11 +1333,13 @@ async function init() {
     async function copyShareLink(btn: HTMLElement, competitionId: string, fileName: string) {
         btn.setAttribute('aria-busy', 'true');
         const link = createShareLink(competitionId, fileName);
+        // The link exists once the backend made it — list it even when the
+        // clipboard write fails, so it can still be revoked from here.
+        link.then(() => void refreshShareLinks(competitionId), () => {});
         try {
             await writeClipboard(link.then(l => l.url));
             const { expiration } = await link;
             confirmCopied(btn, expiration);
-            void refreshShareLinks(competitionId);
         } catch (err) {
             // Another competition was opened meanwhile: this click no longer applies
             if (currentCompetitionData?.id !== competitionId) return;
@@ -1413,6 +1428,7 @@ async function init() {
         const section = document.getElementById('share-links');
         if (!section || !currentCompetitionData) return;
         currentCompetitionData.shareLinks = raw;
+        shareLinksAccess = currentAccess();
         const ro = viewOnly();
         const title = ro ? 'Your shared links' : 'Shared links';
         if (raw === null) {
@@ -1963,13 +1979,15 @@ async function init() {
     // at the end of init(), once every listener below is attached).
     openBoundCompetition = openCompetition;
 
-    // Modal Logic
-    const modalOverlay = document.getElementById('modal-overlay')!;
+    // Modal Logic: one native <dialog> (showModal) for confirmations and
+    // errors — focus moves in and is trapped, Escape cancels, and focus goes
+    // back to whatever opened it.
+    const modalDialog = document.getElementById('modal-overlay') as HTMLDialogElement;
     const modalTitle = document.getElementById('modal-title')!;
     const modalMessage = document.getElementById('modal-message')!;
     const modalExtra = document.getElementById('modal-extra-content')!;
-    const modalCancel = document.getElementById('modal-cancel')!;
-    const modalConfirm = document.getElementById('modal-confirm')!;
+    const modalCancel = document.getElementById('modal-cancel') as HTMLButtonElement;
+    const modalConfirm = document.getElementById('modal-confirm') as HTMLButtonElement;
 
     // Only files are deletable from the app now — competitions come and go with
     // the platform registry and auto-delete on their retention date. Shared
@@ -1979,22 +1997,59 @@ async function init() {
         | { type: 'LINK', linkId: string, competition: string };
 
     let pendingAction: ModalAction | null = null;
+    /** A delete/revoke request is running: the dialog stays open until it ends */
+    let modalBusy = false;
+    /** Where focus goes back to when the dialog closes */
+    let modalReturnFocus: HTMLElement | null = null;
 
-    function openRevokeLinkModal(competition: string, linkId: string, fileName: string, channel: 'email' | 'link') {
-        pendingAction = { type: 'LINK', linkId, competition };
-        modalTitle.textContent = 'Revoke link?';
-        const what = channel === 'email' ? 'The e-mailed link' : 'The copied link';
-        modalMessage.innerHTML = `${what} to <strong>${escapeHtml(fileName)}</strong> stops working at once. `
-            + 'Anyone who still needs the file has to get a new link.';
+    /** Open the dialog (or keep it open with new content) and focus `initial` */
+    function showModal(initial: HTMLElement) {
+        if (!modalDialog.open) {
+            const active = document.activeElement;
+            modalReturnFocus = active instanceof HTMLElement && active !== document.body ? active : null;
+            modalDialog.showModal();
+        }
+        initial.focus();
+    }
+
+    function closeModal() {
+        if (modalDialog.open) modalDialog.close();
+    }
+
+    // Escape while a request runs would hide its outcome: ignore it then
+    modalDialog.addEventListener('cancel', (e) => {
+        if (modalBusy) e.preventDefault();
+    });
+    modalDialog.addEventListener('close', () => {
+        pendingAction = null;
+        modalCancel.classList.remove('hidden');   // the error variant hides it
+        const target = modalReturnFocus;
+        modalReturnFocus = null;
+        if (target?.isConnected) target.focus();
+    });
+
+    /** The destructive variant: Cancel + a red confirm button, Cancel focused */
+    function openConfirmModal(action: ModalAction, title: string, messageHtml: string, confirmLabel: string) {
+        pendingAction = action;
+        modalTitle.textContent = title;
+        modalMessage.innerHTML = messageHtml;
         modalExtra.innerHTML = '';
 
         modalCancel.classList.remove('hidden');
-        modalConfirm.textContent = 'Revoke';
+        modalCancel.disabled = false;
+        modalConfirm.textContent = confirmLabel;
         modalConfirm.classList.remove('btn-primary');
         modalConfirm.classList.add('btn-danger');
-        (modalConfirm as HTMLButtonElement).disabled = false;
+        modalConfirm.disabled = false;
 
-        modalOverlay.classList.remove('hidden');
+        showModal(modalCancel);
+    }
+
+    function openRevokeLinkModal(competition: string, linkId: string, fileName: string, channel: 'email' | 'link') {
+        const what = channel === 'email' ? 'The e-mailed link' : 'The copied link';
+        openConfirmModal({ type: 'LINK', linkId, competition }, 'Revoke link?',
+            `${what} to <strong>${escapeHtml(fileName)}</strong> stops working at once. `
+            + 'Anyone who still needs the file has to get a new link.', 'Revoke');
     }
 
     /** POST revoke_download_link; true when the link is gone (also when it already was) */
@@ -2012,87 +2067,79 @@ async function init() {
     }
 
     function openDeleteFileModal(filename: string, competition: string) {
-        pendingAction = { type: 'FILE', filename, competition };
-        modalTitle.textContent = `Delete File?`;
-        modalMessage.innerHTML = `Are you sure you want to delete <strong>${escapeHtml(filename)}</strong>?`;
-        modalExtra.innerHTML = ''; // No checkbox for single file
-
-        modalConfirm.textContent = 'Delete';
-        modalConfirm.classList.remove('btn-primary');
-        modalConfirm.classList.add('btn-danger');
-        (modalConfirm as HTMLButtonElement).disabled = false;
-
-        modalOverlay.classList.remove('hidden');
+        openConfirmModal({ type: 'FILE', filename, competition }, 'Delete File?',
+            `Are you sure you want to delete <strong>${escapeHtml(filename)}</strong>?`, 'Delete');
     }
 
     function openErrorModal(title: string, message: string) {
+        pendingAction = null; // No action to take on confirm
         modalTitle.textContent = title;
         modalMessage.innerHTML = message;
         modalExtra.innerHTML = '';
-        
+
         modalCancel.classList.add('hidden'); // Hide cancel
         modalConfirm.textContent = 'OK';
-        modalConfirm.classList.remove('btn-danger', 'btn-primary'); 
+        modalConfirm.classList.remove('btn-danger', 'btn-primary');
         modalConfirm.classList.add('btn-primary');
-        (modalConfirm as HTMLButtonElement).disabled = false;
-        
-        pendingAction = null; // No action to take on confirm
-        
-        modalOverlay.classList.remove('hidden');
+        modalConfirm.disabled = false;
+
+        showModal(modalConfirm);
     }
 
     modalCancel.addEventListener('click', () => {
-        modalOverlay.classList.add('hidden');
-        pendingAction = null;
+        if (!modalBusy) closeModal();
     });
 
     modalConfirm.addEventListener('click', async () => {
-        if (!pendingAction) {
+        const action = pendingAction;
+        if (!action) {
             // Just close if no action (e.g. Alert mode)
-            modalOverlay.classList.add('hidden');
-            // Restore Cancel button capability
-            modalCancel.classList.remove('hidden'); 
+            closeModal();
             return;
         }
-        
-        const btn = modalConfirm as HTMLButtonElement;
-        const originalText = btn.textContent;
-        btn.disabled = true;
+        if (modalBusy) return;
 
-        if (pendingAction.type === 'LINK') {
-            const action = pendingAction;
-            btn.textContent = 'Revoking...';
+        const btn = modalConfirm;
+        const originalText = btn.textContent;
+        modalBusy = true;
+        btn.disabled = true;
+        modalCancel.disabled = true;
+
+        try {
+            if (action.type === 'LINK') {
+                btn.textContent = 'Revoking...';
+                try {
+                    if (await revokeLink(action)) {
+                        modalBusy = false;
+                        closeModal();
+                        void refreshShareLinks(action.competition);
+                    }
+                } catch (_error) {
+                    alert('Could not revoke the link. Check your connection and try again.');
+                }
+                return;
+            }
+
+            btn.textContent = 'Deleting...';
             try {
-                if (await revokeLink(action)) {
-                    modalOverlay.classList.add('hidden');
-                    pendingAction = null;
-                    void refreshShareLinks(action.competition);
+                const resp = await fetch(`${API_BASE}/delete_file?competition=${encodeURIComponent(action.competition)}&filename=${encodeURIComponent(action.filename)}`, {
+                    method: 'DELETE'
+                });
+                if (resp.ok) {
+                    modalBusy = false;
+                    closeModal();
+                    if (currentCompetitionData) loadCompetitionDetails(currentCompetitionData.id);
+                } else {
+                    alert(readOnlyRefusal(resp.status, await resp.text()) ?? 'Failed to delete file.');
                 }
             } catch (_error) {
-                alert('Could not revoke the link. Check your connection and try again.');
-            } finally {
-                btn.textContent = originalText;
-                btn.disabled = false;
+                alert('Error deleting item');
             }
-            return;
-        }
-
-        btn.textContent = 'Deleting...';
-        try {
-            const resp = await fetch(`${API_BASE}/delete_file?competition=${encodeURIComponent(pendingAction.competition)}&filename=${encodeURIComponent(pendingAction.filename)}`, {
-                method: 'DELETE'
-            });
-            if (resp.ok) {
-                modalOverlay.classList.add('hidden');
-                if (currentCompetitionData) loadCompetitionDetails(currentCompetitionData.id);
-            } else {
-                alert(readOnlyRefusal(resp.status, await resp.text()) ?? 'Failed to delete file.');
-            }
-        } catch (_error) {
-            alert('Error deleting item');
         } finally {
+            modalBusy = false;
             btn.textContent = originalText;
             btn.disabled = false;
+            modalCancel.disabled = false;
         }
     });
 
