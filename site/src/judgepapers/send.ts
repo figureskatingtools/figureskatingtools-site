@@ -43,7 +43,12 @@ function defaultSenderName(user: UserInfo): string {
         .join(' ');
 }
 
-export function openSendDialog(apiBase: string, competitionId: string, fileName: string, user: UserInfo): void {
+/**
+ * `onSent` runs after a successful send (the e-mail's link now exists), so the
+ * caller can refresh its list of shared links.
+ */
+export function openSendDialog(apiBase: string, competitionId: string, fileName: string, user: UserInfo,
+                               onSent?: () => void): void {
     document.getElementById(DIALOG_ID)?.remove();
 
     const userEmail = isValidEmail(user.userDetails || '') ? user.userDetails.trim() : '';
@@ -258,6 +263,7 @@ export function openSendDialog(apiBase: string, competitionId: string, fileName:
                 const data = await resp.json();
                 sent = true;
                 showSent(dialog, to, ccInput.value.trim(), data.expiryDisplay, Boolean(data.dryRun), close);
+                onSent?.();
                 return;
             }
             const text = resp.status === 401
