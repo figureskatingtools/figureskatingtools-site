@@ -694,21 +694,38 @@ async function init() {
         // ... which also decides which shared links are listed (all of them for
         // write, only the user's own for view-only): drop the stale rows and
         // fetch the list again for the new role.
-        const active = getActiveCompetition();
-        const openId: string | undefined = currentCompetitionData?.id;
-        if (active && openId && active.id === boundPlatformId
-            && shareLinksAccess !== null && shareLinksAccess !== currentAccess()) {
-            renderShareLinks([]);
-            void refreshShareLinks(openId);
+        const access = currentAccess();
+        const accessChanged = knownAccess !== null && access !== knownAccess;
+        knownAccess = access;
+        if (accessChanged) {
+            shareLinksEpoch++;   // responses requested under the old role are dropped
+            const active = getActiveCompetition();
+            const openId: string | undefined = currentCompetitionData?.id;
+            if (active && openId && active.id === boundPlatformId) {
+                renderShareLinks([]);
+                void refreshShareLinks(openId);
+            }
         }
     });
 
     // List Details Logic
     let currentCompetitionData: any = null;
-    /** The role the Shared links list was last rendered for (null: not yet) */
-    let shareLinksAccess: string | null = null;
     /** The user's role on the bound competition, as the nav selection has it */
     const currentAccess = (): string => getActiveCompetition()?.access ?? 'owner';
+    /** The role last seen by the selection subscription (null: none yet) */
+    let knownAccess: string | null = null;
+    /**
+     * Bumped whenever the role or the open competition changes. Every details
+     * request that will render Shared links takes a ticket first and renders
+     * only while the ticket is still current: a response fetched under write
+     * access must never be shown after a downgrade to view-only (or the reverse).
+     */
+    let shareLinksEpoch = 0;
+    type ShareLinksTicket = { epoch: number, access: string, id: string };
+    const shareLinksTicket = (id: string): ShareLinksTicket =>
+        ({ epoch: shareLinksEpoch, access: currentAccess(), id });
+    const shareLinksTicketValid = (t: ShareLinksTicket): boolean =>
+        t.epoch === shareLinksEpoch && t.access === currentAccess() && currentCompetitionData?.id === t.id;
     /** When `currentCompetitionData` was fetched (epoch ms) — its download links live 15 minutes */
     let generatedFetchedAt = 0;
     let isGlobalValid = false;
@@ -1150,6 +1167,9 @@ async function init() {
         const container = document.getElementById('comp-files-container')!;
         container.innerHTML = '<p class="text-muted">Scanning files...</p>';
 
+        shareLinksEpoch++;   // a (re)load supersedes every earlier list request
+        knownAccess = currentAccess();
+        const ticket = shareLinksTicket(id);
         try {
             const resp = await fetch(`${API_BASE}/get_competition_details?id=${encodeURIComponent(id)}`);
             if (!resp.ok) throw new Error('Failed to load details');
@@ -1197,7 +1217,13 @@ async function init() {
             // Render Generated Files
             generatedFetchedAt = Date.now();
             renderGeneratedFiles(data.generatedFiles || []);
-            renderShareLinks(data.shareLinks);
+            if (shareLinksTicketValid(ticket)) {
+                renderShareLinks(data.shareLinks);
+            } else {
+                // The role changed while this was loading: fetch the list for the new one
+                renderShareLinks([]);
+                void refreshShareLinks(id);
+            }
 
             // Shared-pool files this tool has not imported yet (renders nothing
             // when the pool is unavailable or everything is already here).
@@ -1371,6 +1397,7 @@ async function init() {
      */
     async function refreshGeneratedFiles(id: string): Promise<GeneratedPaperFile[] | null> {
         if (currentCompetitionData?.id !== id) return null;
+        const ticket = shareLinksTicket(id);
         const resp = await fetch(`${API_BASE}/get_competition_details?id=${encodeURIComponent(id)}`);
         if (!resp.ok) return null;
         const data = await resp.json();
@@ -1381,7 +1408,8 @@ async function init() {
         currentCompetitionData.generatedFiles = files;
         generatedFetchedAt = Date.now();
         renderGeneratedFiles(files);
-        renderShareLinks(data.shareLinks);
+        // A role change meanwhile has its own refresh running: leave the list to it
+        if (shareLinksTicketValid(ticket)) renderShareLinks(data.shareLinks);
         return files;
     }
 
@@ -1392,11 +1420,12 @@ async function init() {
      */
     async function refreshShareLinks(id: string): Promise<void> {
         if (currentCompetitionData?.id !== id) return;
+        const ticket = shareLinksTicket(id);
         try {
             const resp = await fetch(`${API_BASE}/get_competition_details?id=${encodeURIComponent(id)}`);
             if (!resp.ok) return;
             const data = await resp.json();
-            if (currentCompetitionData?.id !== id) return;
+            if (!shareLinksTicketValid(ticket)) return;   // stale: the role or competition changed
             reportPoolRefresh(data.refreshedFromPool);
             renderShareLinks(data.shareLinks);
         } catch (_e) {
@@ -1409,9 +1438,10 @@ async function init() {
         return count === 1 ? '1 download' : `${count} downloads`;
     }
 
-    /** How a link was shared, with the recipients when the backend gave them */
-    function shareChannelText(link: ShareLink): string {
+    /** How a link was shared, with the recipients when the backend gave them (never view-only) */
+    function shareChannelText(link: ShareLink, readOnly: boolean): string {
         if (link.channel === 'link') return 'Copied link';
+        if (readOnly) return 'E-mail';
         const to = (link.to ?? '').trim();
         const cc = (link.cc ?? '').trim();
         if (!to) return 'E-mail';
@@ -1421,14 +1451,14 @@ async function init() {
     /**
      * The live share links of the generated papers, with Revoke. The backend
      * decides what is listed: everything (with recipients) for write access,
-     * only the user's own links for view-only access. `null` = the list could
-     * not be read.
+     * only the user's own links for view-only access — and for view-only the
+     * page enforces the same itself (own links, no recipients), whatever the
+     * response holds. `null` = the list could not be read.
      */
     function renderShareLinks(raw: unknown) {
         const section = document.getElementById('share-links');
         if (!section || !currentCompetitionData) return;
         currentCompetitionData.shareLinks = raw;
-        shareLinksAccess = currentAccess();
         const ro = viewOnly();
         const title = ro ? 'Your shared links' : 'Shared links';
         if (raw === null) {
@@ -1439,7 +1469,8 @@ async function init() {
             return;
         }
         const links: ShareLink[] = Array.isArray(raw)
-            ? raw.filter((l): l is ShareLink => Boolean(l) && typeof l.linkId === 'string')
+            ? raw.filter((l): l is ShareLink => Boolean(l) && typeof l.linkId === 'string'
+                && (!ro || l.createdByMe === true))
             : [];
         if (!links.length) {
             section.innerHTML = '';
@@ -1461,7 +1492,7 @@ async function init() {
                     <li class="share-link">
                         <div class="share-link-main">
                             <div class="share-link-file">${escapeHtml(link.fileName)}</div>
-                            <div class="share-link-how">${escapeHtml(shareChannelText(link))}</div>
+                            <div class="share-link-how">${escapeHtml(shareChannelText(link, ro))}</div>
                             <div class="share-link-meta">
                                 <span>Shared by ${escapeHtml(by)}</span>
                                 <span>Created ${escapeHtml(created)}</span>
