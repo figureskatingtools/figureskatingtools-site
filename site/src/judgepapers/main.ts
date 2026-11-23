@@ -1202,6 +1202,12 @@ async function init() {
             // Superseded (a newer load, or another competition opened meanwhile):
             // drop it before it touches any state or the screen.
             if (!ticketCurrent(ticket, 'full')) return;
+            // A newer refresh may already have cached and rendered the
+            // generated papers: keep its list, so the cache and the screen
+            // stay the same (markGeneratedUnavailable re-renders from it).
+            if (!ticketCurrent(ticket, 'generated') && currentCompetitionData?.id === data.id) {
+                data.generatedFiles = currentCompetitionData.generatedFiles;
+            }
             currentCompetitionData = data;
 
             // The backend re-copies its own files from the competition file
