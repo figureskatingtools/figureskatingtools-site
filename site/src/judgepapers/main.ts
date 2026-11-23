@@ -694,17 +694,15 @@ async function init() {
         // ... which also decides which shared links are listed (all of them for
         // write, only the user's own for view-only): drop the stale rows and
         // fetch the list again for the new role.
+        // A new request supersedes everything issued under the old role, and
+        // every response is checked against the role again before it renders.
         const access = currentAccess();
         const accessChanged = knownAccess !== null && access !== knownAccess;
         knownAccess = access;
-        if (accessChanged) {
-            shareLinksEpoch++;   // responses requested under the old role are dropped
-            const active = getActiveCompetition();
-            const openId: string | undefined = currentCompetitionData?.id;
-            if (active && openId && active.id === boundPlatformId) {
-                renderShareLinks([]);
-                void refreshShareLinks(openId);
-            }
+        const active = getActiveCompetition();
+        if (accessChanged && openedCompetitionId && active && active.id === boundPlatformId) {
+            renderShareLinks([], openedCompetitionId);
+            void refreshShareLinks(openedCompetitionId);
         }
     });
 
@@ -715,17 +713,39 @@ async function init() {
     /** The role last seen by the selection subscription (null: none yet) */
     let knownAccess: string | null = null;
     /**
-     * Bumped whenever the role or the open competition changes. Every details
-     * request that will render Shared links takes a ticket first and renders
-     * only while the ticket is still current: a response fetched under write
-     * access must never be shown after a downgrade to view-only (or the reverse).
+     * The tool record the detail view shows. Set (and the previous one's rows
+     * cleared) by openCompetition before its details request starts, so nothing
+     * of another competition stays on screen or clickable while it loads.
      */
-    let shareLinksEpoch = 0;
-    type ShareLinksTicket = { epoch: number, access: string, id: string };
-    const shareLinksTicket = (id: string): ShareLinksTicket =>
-        ({ epoch: shareLinksEpoch, access: currentAccess(), id });
-    const shareLinksTicketValid = (t: ShareLinksTicket): boolean =>
-        t.epoch === shareLinksEpoch && t.access === currentAccess() && currentCompetitionData?.id === t.id;
+    let openedCompetitionId: string | null = null;
+
+    /*
+     * Details requests and what they may render. `get_competition_details` is
+     * read by three paths: the full load (everything), refreshGeneratedFiles
+     * (generated papers + Shared links) and refreshShareLinks (Shared links
+     * only). Every request gets its own number from one increasing counter and
+     * records it as the latest for each part it renders; a response renders a
+     * part only while it is still that part's latest request, for the
+     * competition that is still open — and, for Shared links, under the role
+     * it was requested with. So an older response can never overwrite a newer
+     * one, another competition's response is dropped before it touches any
+     * state, and a list fetched with write access is never shown after a
+     * downgrade to view-only (or the reverse).
+     */
+    type DetailsTicket = { seq: number, competition: string, access: string };
+    let detailsSeq = 0;
+    const latestDetails = { full: 0, generated: 0, shareLinks: 0 };
+    function issueDetailsTicket(competition: string, parts: Array<keyof typeof latestDetails>): DetailsTicket {
+        const ticket = { seq: ++detailsSeq, competition, access: currentAccess() };
+        for (const part of parts) latestDetails[part] = ticket.seq;
+        return ticket;
+    }
+    /** The ticket's competition is still open and nothing newer was issued for `part` */
+    const ticketCurrent = (t: DetailsTicket, part: keyof typeof latestDetails): boolean =>
+        t.seq === latestDetails[part] && t.competition === openedCompetitionId;
+    /** As ticketCurrent, and the role is still the one the list was requested with */
+    const shareLinksTicketCurrent = (t: DetailsTicket): boolean =>
+        ticketCurrent(t, 'shareLinks') && t.access === currentAccess();
     /** When `currentCompetitionData` was fetched (epoch ms) — its download links live 15 minutes */
     let generatedFetchedAt = 0;
     let isGlobalValid = false;
@@ -1063,6 +1083,8 @@ async function init() {
     // Generate Handler
     document.getElementById('btn-generate')?.addEventListener('click', async () => {
         if (!currentCompetitionData || !isGlobalValid) return;
+        // The competition the user pressed Generate in, whatever is open later
+        const generateFor: string = currentCompetitionData.id;
         
         const btn = document.getElementById('btn-generate') as HTMLButtonElement;
         const originalText = 'Generate Papers';
@@ -1124,7 +1146,7 @@ async function init() {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    workingFolder: currentCompetitionData.id,
+                    workingFolder: generateFor,
                     options: options
                 })
             });
@@ -1138,7 +1160,7 @@ async function init() {
                      btn.innerHTML = originalText;
                      btn.classList.remove('btn-success');
                      btn.disabled = false;
-                     loadCompetitionDetails(currentCompetitionData.id);
+                     if (generateFor === openedCompetitionId) loadCompetitionDetails(generateFor);
                  }, 3000);
             } else {
                 const errText = await resp.text();
@@ -1164,17 +1186,22 @@ async function init() {
     };
 
     async function loadCompetitionDetails(id: string) {
+        // A reload queued by an upload, import or generate of a competition that
+        // is no longer open: the open one must not be touched.
+        if (id !== openedCompetitionId) return;
         const container = document.getElementById('comp-files-container')!;
         container.innerHTML = '<p class="text-muted">Scanning files...</p>';
 
-        shareLinksEpoch++;   // a (re)load supersedes every earlier list request
         knownAccess = currentAccess();
-        const ticket = shareLinksTicket(id);
+        const ticket = issueDetailsTicket(id, ['full', 'generated', 'shareLinks']);
         try {
             const resp = await fetch(`${API_BASE}/get_competition_details?id=${encodeURIComponent(id)}`);
             if (!resp.ok) throw new Error('Failed to load details');
             
             const data = await resp.json();
+            // Superseded (a newer load, or another competition opened meanwhile):
+            // drop it before it touches any state or the screen.
+            if (!ticketCurrent(ticket, 'full')) return;
             currentCompetitionData = data;
 
             // The backend re-copies its own files from the competition file
@@ -1214,14 +1241,17 @@ async function init() {
             updateOptionsView(data);
             renderCompetitionView();
 
-            // Render Generated Files
-            generatedFetchedAt = Date.now();
-            renderGeneratedFiles(data.generatedFiles || []);
-            if (shareLinksTicketValid(ticket)) {
-                renderShareLinks(data.shareLinks);
-            } else {
-                // The role changed while this was loading: fetch the list for the new one
-                renderShareLinks([]);
+            // Render Generated Files (unless a newer refresh already did)
+            if (ticketCurrent(ticket, 'generated')) {
+                generatedFetchedAt = Date.now();
+                renderGeneratedFiles(data.generatedFiles || []);
+            }
+            if (shareLinksTicketCurrent(ticket)) {
+                renderShareLinks(data.shareLinks, id);
+            } else if (ticketCurrent(ticket, 'shareLinks')) {
+                // Same competition, but the role changed while this was loading:
+                // fetch the list again for the new one.
+                renderShareLinks([], id);
                 void refreshShareLinks(id);
             }
 
@@ -1230,7 +1260,7 @@ async function init() {
             void renderPoolImport(id);
 
         } catch (_e) {
-            container.innerHTML = '<p class="text-error">Error loading files.</p>';
+            if (ticketCurrent(ticket, 'full')) container.innerHTML = '<p class="text-error">Error loading files.</p>';
         }
     }
 
@@ -1396,20 +1426,23 @@ async function init() {
      * fetch failed or `id` is not (or no longer) the open competition.
      */
     async function refreshGeneratedFiles(id: string): Promise<GeneratedPaperFile[] | null> {
-        if (currentCompetitionData?.id !== id) return null;
-        const ticket = shareLinksTicket(id);
+        if (openedCompetitionId !== id || currentCompetitionData?.id !== id) return null;
+        const ticket = issueDetailsTicket(id, ['generated', 'shareLinks']);
         const resp = await fetch(`${API_BASE}/get_competition_details?id=${encodeURIComponent(id)}`);
         if (!resp.ok) return null;
         const data = await resp.json();
-        if (currentCompetitionData?.id !== id) return null;
-        // The backend may have re-pulled pool files on this call too
-        reportPoolRefresh(data.refreshedFromPool);
+        if (openedCompetitionId !== id || currentCompetitionData?.id !== id) return null;
         const files: GeneratedPaperFile[] = data.generatedFiles || [];
-        currentCompetitionData.generatedFiles = files;
-        generatedFetchedAt = Date.now();
-        renderGeneratedFiles(files);
-        // A role change meanwhile has its own refresh running: leave the list to it
-        if (shareLinksTicketValid(ticket)) renderShareLinks(data.shareLinks);
+        if (ticketCurrent(ticket, 'generated')) {
+            // The backend may have re-pulled pool files on this call too
+            reportPoolRefresh(data.refreshedFromPool);
+            currentCompetitionData.generatedFiles = files;
+            generatedFetchedAt = Date.now();
+            renderGeneratedFiles(files);
+        }
+        if (shareLinksTicketCurrent(ticket)) renderShareLinks(data.shareLinks, id);
+        // The caller wants a fresh link of this competition: still valid even
+        // when a newer request renders the list.
         return files;
     }
 
@@ -1419,15 +1452,15 @@ async function init() {
      * alone, so a "Link copied" confirmation on its button stays visible.
      */
     async function refreshShareLinks(id: string): Promise<void> {
-        if (currentCompetitionData?.id !== id) return;
-        const ticket = shareLinksTicket(id);
+        if (openedCompetitionId !== id) return;
+        const ticket = issueDetailsTicket(id, ['shareLinks']);
         try {
             const resp = await fetch(`${API_BASE}/get_competition_details?id=${encodeURIComponent(id)}`);
             if (!resp.ok) return;
             const data = await resp.json();
-            if (!shareLinksTicketValid(ticket)) return;   // stale: the role or competition changed
+            if (!shareLinksTicketCurrent(ticket)) return;   // superseded, or the role/competition changed
             reportPoolRefresh(data.refreshedFromPool);
-            renderShareLinks(data.shareLinks);
+            renderShareLinks(data.shareLinks, id);
         } catch (_e) {
             // The list just stays as it was; the next load shows the change.
         }
@@ -1453,19 +1486,39 @@ async function init() {
      * decides what is listed: everything (with recipients) for write access,
      * only the user's own links for view-only access — and for view-only the
      * page enforces the same itself (own links, no recipients), whatever the
-     * response holds. `null` = the list could not be read.
+     * response holds. `null` = the list could not be read. `competition` is
+     * the tool record the rows belong to; their Revoke buttons carry it.
+     *
+     * Keyboard focus: a re-render never pulls focus in from elsewhere, but
+     * focus already inside the list stays there — on the same link's Revoke
+     * button, else (that row is gone, e.g. just revoked) on the button that took
+     * its place or the one before it, else on the section heading.
      */
-    function renderShareLinks(raw: unknown) {
+    function renderShareLinks(raw: unknown, competition: string) {
         const section = document.getElementById('share-links');
-        if (!section || !currentCompetitionData) return;
-        currentCompetitionData.shareLinks = raw;
+        if (!section || competition !== openedCompetitionId) return;
+        const focused = document.activeElement;
+        const hadFocus = focused instanceof HTMLElement && section.contains(focused);
+        const focusedButtons = Array.from(section.querySelectorAll<HTMLButtonElement>('.share-link-revoke'));
+        const focusedLinkId = hadFocus ? (focused as HTMLElement).dataset.linkId ?? null : null;
+        const focusedIndex = focusedLinkId ? focusedButtons.indexOf(focused as HTMLButtonElement) : -1;
+
         const ro = viewOnly();
         const title = ro ? 'Your shared links' : 'Shared links';
+        const heading = `<h3 id="share-links-title" class="micro-label share-links-title" tabindex="-1">${escapeHtml(title)}</h3>`;
+        const restoreFocus = () => {
+            if (!hadFocus) return;
+            const buttons = Array.from(section.querySelectorAll<HTMLButtonElement>('.share-link-revoke'));
+            const target = buttons.find(b => b.dataset.linkId === focusedLinkId)
+                ?? (focusedIndex >= 0 ? buttons[focusedIndex] ?? buttons[focusedIndex - 1] : undefined)
+                ?? section.querySelector<HTMLElement>('#share-links-title');
+            target?.focus();
+        };
         if (raw === null) {
-            section.innerHTML = `
-                <h3 id="share-links-title" class="micro-label share-links-title">${escapeHtml(title)}</h3>
+            section.innerHTML = `${heading}
                 <p class="share-links-note text-muted">Shared links could not be loaded. Reload the page to try again.</p>`;
             section.hidden = false;
+            restoreFocus();
             return;
         }
         const links: ShareLink[] = Array.isArray(raw)
@@ -1473,12 +1526,20 @@ async function init() {
                 && (!ro || l.createdByMe === true))
             : [];
         if (!links.length) {
-            section.innerHTML = '';
-            section.hidden = true;
+            if (hadFocus) {
+                // Keep a focus target where the list was (e.g. the last link was just revoked)
+                section.innerHTML = `${heading}
+                    <p class="share-links-note text-muted">No live shared links.</p>`;
+                section.hidden = false;
+                restoreFocus();
+            } else {
+                section.innerHTML = '';
+                section.hidden = true;
+            }
             return;
         }
         section.innerHTML = `
-            <h3 id="share-links-title" class="micro-label share-links-title">${escapeHtml(title)}</h3>
+            ${heading}
             <p class="share-links-note">Anyone with one of these links can download the file until it expires.
                Revoke a link to stop it working at once.</p>
             <ul class="share-link-list">
@@ -1502,7 +1563,8 @@ async function init() {
                         </div>
                         ${canRevoke ? `
                         <button type="button" class="btn btn-ghost btn-ghost--danger btn-sm share-link-revoke"
-                                data-link-id="${escapeAttr(link.linkId)}" data-file="${escapeAttr(link.fileName)}"
+                                data-competition="${escapeAttr(competition)}" data-link-id="${escapeAttr(link.linkId)}"
+                                data-file="${escapeAttr(link.fileName)}"
                                 data-channel="${escapeAttr(link.channel)}">Revoke</button>` : ''}
                     </li>`;
                 }).join('')}
@@ -1511,12 +1573,14 @@ async function init() {
 
         section.querySelectorAll<HTMLButtonElement>('.share-link-revoke').forEach(btn => {
             btn.addEventListener('click', () => {
-                const competitionId = currentCompetitionData?.id;
-                if (!competitionId) return;
-                openRevokeLinkModal(competitionId, btn.dataset.linkId!, btn.dataset.file || '',
+                // The row's own competition — never whatever is open by the time of the click
+                const rowCompetition = btn.dataset.competition;
+                if (!rowCompetition || rowCompetition !== openedCompetitionId) return;
+                openRevokeLinkModal(rowCompetition, btn.dataset.linkId!, btn.dataset.file || '',
                     btn.dataset.channel === 'email' ? 'email' : 'link');
             });
         });
+        restoreFocus();
     }
 
     /**
@@ -1820,9 +1884,11 @@ async function init() {
         try {
             files = await listCompetitionFiles(boundPlatformId);
         } catch (_e) {
-            host.innerHTML = '';
+            if (competitionId === openedCompetitionId) host.innerHTML = '';
             return;   // pool unavailable — degrade to no section
         }
+        // Another competition was opened meanwhile: its own call renders the section
+        if (competitionId !== openedCompetitionId) return;
 
         const have = existingFilenames();
         const all = files.filter(f => f.name.toLowerCase().endsWith('.pdf') && !have.has(f.name));
@@ -1956,6 +2022,18 @@ async function init() {
     }
 
     async function openCompetition(id: string, name: string) {
+        if (id !== openedCompetitionId) {
+            // Another competition: nothing of the previous one may stay on
+            // screen or act on it while this one loads (or if loading fails).
+            openedCompetitionId = id;
+            currentCompetitionData = null;
+            const genList = document.getElementById('generated-files-list');
+            if (genList) genList.innerHTML = '';
+            const shareSection = document.getElementById('share-links');
+            if (shareSection) { shareSection.innerHTML = ''; shareSection.hidden = true; }
+            const pool = document.getElementById('pool-import-container');
+            if (pool) pool.innerHTML = '';
+        }
         showView('view-competition-details');
         const titleEl = document.getElementById('comp-detail-title')!;
 
@@ -2054,8 +2132,21 @@ async function init() {
     modalDialog.addEventListener('close', () => {
         pendingAction = null;
         modalCancel.classList.remove('hidden');   // the error variant hides it
-        const target = modalReturnFocus;
+        let target = modalReturnFocus;
         modalReturnFocus = null;
+        // The 'close' event comes a task after close(): the browser has already
+        // put focus back, and a re-render may already have moved it on (e.g.
+        // to the next Shared links row). Only step in when focus is lost.
+        const now = document.activeElement;
+        if (now && now !== document.body && !modalDialog.contains(now)) return;
+        // A Shared links row re-rendered while the dialog was open: its button is
+        // a new element now — go to the same link's button, else the list heading.
+        if (target && !target.isConnected && target.dataset.linkId) {
+            const section = document.getElementById('share-links');
+            target = Array.from(section?.querySelectorAll<HTMLElement>('.share-link-revoke') ?? [])
+                .find(b => b.dataset.linkId === target!.dataset.linkId)
+                ?? section?.querySelector<HTMLElement>('#share-links-title') ?? null;
+        }
         if (target?.isConnected) target.focus();
     });
 
@@ -2142,7 +2233,8 @@ async function init() {
                 try {
                     if (await revokeLink(action)) {
                         modalBusy = false;
-                        closeModal();
+                        closeModal();   // focus goes back to the row's Revoke button ...
+                        // ... and the re-render moves it to the next row (renderShareLinks)
                         void refreshShareLinks(action.competition);
                     }
                 } catch (_error) {
@@ -2159,7 +2251,7 @@ async function init() {
                 if (resp.ok) {
                     modalBusy = false;
                     closeModal();
-                    if (currentCompetitionData) loadCompetitionDetails(currentCompetitionData.id);
+                    if (action.competition === openedCompetitionId) loadCompetitionDetails(action.competition);
                 } else {
                     alert(readOnlyRefusal(resp.status, await resp.text()) ?? 'Failed to delete file.');
                 }
