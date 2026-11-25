@@ -1839,14 +1839,21 @@ async function init() {
      * fetch failed or `id` is not (or no longer) the open competition.
      */
     /**
-     * True when a details response says the backend has just replaced source
-     * files with newer ones from the pool. A refresh that renders only the
-     * generated papers or the links then leaves a file list (and a missing
-     * report) on screen that is no longer what Generate would act on: the
-     * list has to be re-read.
+     * A details response for `id` came in on a refresh that renders only the
+     * generated papers or the links. If it says the backend has just replaced
+     * source files with newer ones from the pool, tell the operator and
+     * re-read the file list: the list (and the missing report) on screen is
+     * no longer what Generate would act on. For every response of the
+     * still-open competition, superseded or not: a later response does not
+     * mention files that are already copied.
      */
-    const sourceFilesReplaced = (data: any): boolean =>
-        Array.isArray(data?.refreshedFromPool) && data.refreshedFromPool.length > 0;
+    function noteSourceFiles(id: string, data: any) {
+        if (openedCompetitionId !== id) return;
+        reportPoolRefresh(data?.refreshedFromPool);
+        if (Array.isArray(data?.refreshedFromPool) && data.refreshedFromPool.length > 0) {
+            void loadCompetitionDetails(id);
+        }
+    }
 
     async function refreshGeneratedFiles(id: string): Promise<GeneratedPaperFile[] | null> {
         if (openedCompetitionId !== id || currentCompetitionData?.id !== id) return null;
@@ -1857,14 +1864,13 @@ async function init() {
         if (openedCompetitionId !== id || currentCompetitionData?.id !== id) return null;
         const files: GeneratedPaperFile[] = data.generatedFiles || [];
         if (ticketCurrent(ticket, 'generated')) {
-            // The backend may have re-pulled pool files on this call too
-            reportPoolRefresh(data.refreshedFromPool);
             currentCompetitionData.generatedFiles = files;
             generatedFetchedAt = Date.now();
             renderGeneratedFiles(files);
         }
         if (shareLinksTicketCurrent(ticket)) renderShareLinks(data.shareLinks, id);
-        if (sourceFilesReplaced(data)) void loadCompetitionDetails(id);
+        // The backend may have re-pulled pool files on this call too
+        noteSourceFiles(id, data);
         // The caller wants a fresh link of this competition: still valid even
         // when a newer request renders the list.
         return files;
@@ -1882,10 +1888,9 @@ async function init() {
             const resp = await fetch(`${API_BASE}/get_competition_details?id=${encodeURIComponent(id)}`);
             if (!resp.ok) return;
             const data = await resp.json();
-            if (!shareLinksTicketCurrent(ticket)) return;   // superseded, or the role/competition changed
-            reportPoolRefresh(data.refreshedFromPool);
-            renderShareLinks(data.shareLinks, id);
-            if (sourceFilesReplaced(data)) void loadCompetitionDetails(id);
+            // Superseded, or the role changed: the links are not this response's to render
+            if (shareLinksTicketCurrent(ticket)) renderShareLinks(data.shareLinks, id);
+            noteSourceFiles(id, data);
         } catch (_e) {
             // The list just stays as it was; the next load shows the change.
         }
