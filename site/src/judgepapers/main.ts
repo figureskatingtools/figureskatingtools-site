@@ -770,6 +770,38 @@ async function init() {
     let canGenerate = false;
     /** Why Generate is unavailable although files are uploaded; '' otherwise */
     let generateBlocker = '';
+    /** Uploads, imports and deletes still running, per competition id */
+    const fileChanges = new Map<string, number>();
+    /**
+     * Generate may run: the list on screen is what the backend would act on.
+     * Not while the list is being re-read (canGenerate is off until the new
+     * one is rendered) or while files of the open competition are changing.
+     */
+    const generateReady = (): boolean =>
+        canGenerate && !fileChanges.get(openedCompetitionId ?? '');
+
+    /** The file list is about to change: no generating, and no confirming of an open prompt, on the old one */
+    function suspendGenerate() {
+        canGenerate = false;
+        generateBlocker = '';
+        if (pendingAction?.type === 'GENERATE') closeModal();
+        updateGenerateButton();
+    }
+
+    /** Run an upload, import or delete of `competition`'s files; Generate waits until it has ended */
+    async function whileFilesChange<T>(competition: string, work: () => Promise<T>): Promise<T> {
+        fileChanges.set(competition, (fileChanges.get(competition) ?? 0) + 1);
+        if (competition === openedCompetitionId && pendingAction?.type === 'GENERATE') closeModal();
+        updateGenerateButton();
+        try {
+            return await work();
+        } finally {
+            const left = (fileChanges.get(competition) ?? 1) - 1;
+            if (left > 0) fileChanges.set(competition, left);
+            else fileChanges.delete(competition);
+            updateGenerateButton();
+        }
+    }
     // Id of the competition whose "No cover page or time schedule" box is
     // checked, so the choice survives options re-renders (language switch,
     // reload after generating) but not a switch to another competition.
@@ -1096,7 +1128,7 @@ async function init() {
     function updateGenerateButton() {
         const btn = document.getElementById('btn-generate') as HTMLButtonElement;
         if (btn) {
-            btn.disabled = !canGenerate;
+            btn.disabled = !generateReady();
         }
         // Files are there, but nothing could be generated from them: say why
         const blocker = document.getElementById('generate-blocker');
@@ -1390,17 +1422,22 @@ async function init() {
     // Generate: straight away when nothing is missing. Otherwise the prompt
     // first, and only its confirm with "Generate anyway" ticked goes on.
     document.getElementById('btn-generate')?.addEventListener('click', () => {
-        if (!currentCompetitionData || !canGenerate) return;
+        if (!currentCompetitionData || !generateReady()) return;
         if (missing.count > 0) {
             openGenerateModal(currentCompetitionData.id, missing.lines);
             return;
         }
-        void runGenerate(currentCompetitionData.id);
+        void runGenerate(currentCompetitionData.id, []);
     });
 
-    /** Generate the papers of `generateFor`: the competition Generate was pressed in, whatever is open later */
-    async function runGenerate(generateFor: string) {
-        if (!currentCompetitionData || currentCompetitionData.id !== generateFor || !canGenerate) return;
+    /**
+     * Generate the papers of `generateFor`: the competition Generate was
+     * pressed in, whatever is open later. `accepted` is the list of missing
+     * papers the user was shown and accepted (empty when nothing was missing);
+     * the run goes on only while that is still what is missing.
+     */
+    async function runGenerate(generateFor: string, accepted: string[]) {
+        if (!currentCompetitionData || currentCompetitionData.id !== generateFor || !generateReady()) return;
 
         const btn = document.getElementById('btn-generate') as HTMLButtonElement;
         const originalText = 'Generate Papers';
@@ -1465,7 +1502,17 @@ async function init() {
                 showNotice('Papers not generated', 'Another competition was opened before the papers '
                     + 'were generated. Open the competition again and generate once more.');
                 btn.innerHTML = originalText;
-                btn.disabled = false;
+                updateGenerateButton();
+                return;
+            }
+            // A change that was still saving may have been taken back (a failed
+            // ISU/MUPI switch brings its missing sheets back), or the files
+            // changed: generate only what the user saw and accepted.
+            if (!generateReady() || missing.lines.join('\n') !== accepted.join('\n')) {
+                showNotice('Papers not generated', 'The files or settings of the competition changed before '
+                    + 'the papers were generated. Check the file list and generate once more.');
+                btn.innerHTML = originalText;
+                updateGenerateButton();
                 return;
             }
             const resp = await fetch(`${API_BASE}/generate_judging_papers`, {
@@ -1492,7 +1539,7 @@ async function init() {
                  setTimeout(() => {
                      btn.innerHTML = originalText;
                      btn.classList.remove('btn-success');
-                     btn.disabled = false;
+                     updateGenerateButton();
                      if (generateFor === openedCompetitionId) loadCompetitionDetails(generateFor);
                  }, 3000);
             } else {
@@ -1503,12 +1550,12 @@ async function init() {
                     : `An error occurred while generating papers:<br><br>${escapeHtml(errText)}`);
                 // Reset immediately on error
                 btn.innerHTML = originalText;
-                btn.disabled = false; 
+                updateGenerateButton();
             }
         } catch (_e) {
             showNotice('Generation Error', 'Network error or server unreachable.');
             btn.innerHTML = originalText;
-            btn.disabled = false;
+            updateGenerateButton();
         }
     }
 
@@ -1522,6 +1569,9 @@ async function init() {
         // A reload queued by an upload, import or generate of a competition that
         // is no longer open: the open one must not be touched.
         if (id !== openedCompetitionId) return;
+        // Until the new list is rendered (renderCompetitionView), nothing on
+        // screen says what Generate would act on.
+        suspendGenerate();
         const container = document.getElementById('comp-files-container')!;
         container.innerHTML = '<p class="text-muted">Scanning files...</p>';
 
@@ -2286,32 +2336,40 @@ async function init() {
             btn.disabled = true;
             btn.textContent = 'Importing…';
 
-            let failed = 0;
-            for (const { name, source } of chosen) {
-                try {
-                    const resp = await fetch(
-                        `${API_BASE}/import_platform_file?competition=${encodeURIComponent(competitionId)}`
-                        + `&name=${encodeURIComponent(name)}&source=${encodeURIComponent(source)}`,
-                        { method: 'POST' });
-                    if (!resp.ok) {
+            // Generate waits until the imports have ended and the list is back
+            await whileFilesChange(competitionId, async () => {
+                let failed = 0;
+                for (const { name, source } of chosen) {
+                    try {
+                        const resp = await fetch(
+                            `${API_BASE}/import_platform_file?competition=${encodeURIComponent(competitionId)}`
+                            + `&name=${encodeURIComponent(name)}&source=${encodeURIComponent(source)}`,
+                            { method: 'POST' });
+                        if (!resp.ok) {
+                            failed++;
+                            if (resp.status === 503 || resp.status === 409) { poolDisabled = true; break; }
+                        }
+                    } catch (_e) {
                         failed++;
-                        if (resp.status === 503 || resp.status === 409) { poolDisabled = true; break; }
                     }
-                } catch (_e) {
-                    failed++;
                 }
-            }
 
-            const statusEl = document.getElementById('upload-status');
-            if (statusEl) {
-                statusEl.innerHTML = `<span style="color: var(--success-color);">Imported ${chosen.length - failed} file(s).</span>`
-                    + (failed ? ` <span style="color: var(--error-color);">Failed: ${failed}</span>` : '');
-            }
-            await loadCompetitionDetails(competitionId);
+                const statusEl = document.getElementById('upload-status');
+                if (statusEl) {
+                    statusEl.innerHTML = `<span style="color: var(--success-color);">Imported ${chosen.length - failed} file(s).</span>`
+                        + (failed ? ` <span style="color: var(--error-color);">Failed: ${failed}</span>` : '');
+                }
+                await loadCompetitionDetails(competitionId);
+            });
         });
     }
 
-    async function handleFiles(files: FileList, competitionId: string) {
+    /** Upload the dropped or picked files; Generate waits until the uploads have ended and the list is re-read */
+    function handleFiles(files: FileList, competitionId: string): Promise<void> {
+        return whileFilesChange(competitionId, () => uploadFiles(files, competitionId));
+    }
+
+    async function uploadFiles(files: FileList, competitionId: string) {
         const statusEl = document.getElementById('upload-status')!;
         let successCount = 0;
         let errors: string[] = [];
@@ -2350,6 +2408,7 @@ async function init() {
         statusEl.innerHTML = msg;
         
         if (successCount > 0) {
+             // Not awaited, but it takes Generate away before this returns
              loadCompetitionDetails(competitionId);
         }
     }
@@ -2441,8 +2500,9 @@ async function init() {
         | { type: 'FILE', filename: string, competition: string }
         | { type: 'LINK', linkId: string, competition: string }
         | { type: 'TRAINEE', trainee: Trainee, competition: string }
-        // Not a request of its own: confirming starts the generate run
-        | { type: 'GENERATE', competition: string };
+        // Not a request of its own: confirming starts the generate run for
+        // the missing papers the prompt listed
+        | { type: 'GENERATE', competition: string, lines: string[] };
 
     let pendingAction: ModalAction | null = null;
     /** A delete/revoke request is running: the dialog stays open until it ends */
@@ -2538,7 +2598,7 @@ async function init() {
      * every press of Generate asks again, with the list as it is then.
      */
     function openGenerateModal(competition: string, lines: string[]) {
-        pendingAction = { type: 'GENERATE', competition };
+        pendingAction = { type: 'GENERATE', competition, lines };
         modalTitle.textContent = 'Papers are missing';
         modalMessage.textContent = 'These papers are missing. If you generate now, the packets are made without them:';
         modalExtra.innerHTML = `
@@ -2640,7 +2700,7 @@ async function init() {
             // Only with the box ticked (the button is disabled until then)
             if (!modalExtra.querySelector<HTMLInputElement>('#generate-override')?.checked) return;
             closeModal();
-            void runGenerate(action.competition);
+            void runGenerate(action.competition, action.lines);
             return;
         }
 

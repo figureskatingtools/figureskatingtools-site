@@ -130,6 +130,38 @@ describe('isGenerable', () => {
     expect(isGenerable(files('SP', ISU_SET.filter(f => f !== 'ISUPanelofJudgesandTechnicalPanel.pdf')))).toBe(false);
     expect(isGenerable([])).toBe(false);
   });
+
+  it('needs both for the same FSM prefix', () => {
+    // Two segments under one printed name: a panel of one, a time schedule of the other
+    const mixed = [
+      { ...files('SP', ['StartListwithTimes.pdf'])[0], prefix: 'PREFIX-A' },
+      { ...files('SP', ['ISUPanelofJudgesandTechnicalPanel.pdf'])[0], prefix: 'PREFIX-B' },
+    ];
+    expect(isGenerable(mixed)).toBe(false);
+    expect(isGenerable([...mixed, { ...files('SP', ['StartListwithTimes.pdf'])[0], prefix: 'PREFIX-B' }])).toBe(true);
+  });
+
+  it('reads the prefix from the file name when the response has none', () => {
+    const bare = (filename: string): FileData => {
+      const file = files('SP', [filename.slice(filename.lastIndexOf('_') + 1)])[0];
+      delete file.prefix;
+      return { ...file, filename };
+    };
+    expect(isGenerable([bare('A_StartListwithTimes.pdf'), bare('A_ISUPanelofJudgesandTechnicalPanel.pdf')])).toBe(true);
+    expect(isGenerable([bare('A_StartListwithTimes.pdf'), bare('B_ISUPanelofJudgesandTechnicalPanel.pdf')])).toBe(false);
+  });
+});
+
+describe('missingReport with segments of two prefixes in one block', () => {
+  it('does not count a mixed pair as something to generate', () => {
+    const report = missingReport({
+      structure: { 'JUNIORI Naiset': { 'Free Skating': [
+        { ...files('Free Skating', ['StartListwithTimes.pdf'])[0], prefix: 'PREFIX-A' },
+        { ...files('Free Skating', ['ISUPanelofJudgesandTechnicalPanel.pdf'])[0], prefix: 'PREFIX-B' },
+      ] } },
+    });
+    expect(report.generableSegments).toBe(0);
+  });
 });
 
 describe('scheduleWhen', () => {

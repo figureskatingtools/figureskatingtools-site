@@ -167,9 +167,25 @@ export function validateCategory(
     };
 }
 
-/** True when the backend can produce papers for a segment with these files */
+/** The FSM file prefix of a file: everything before the last `_` of its name */
+function filePrefix(file: FileData): string {
+    return file.prefix ?? file.filename.slice(0, Math.max(file.filename.lastIndexOf('_'), 0));
+}
+
+/**
+ * True when the backend can produce papers for a segment with these files:
+ * the panel and the time schedule of the **same** FSM prefix. A segment block
+ * can hold files of two prefixes (two segments FSM prints under one name),
+ * and a panel never pairs with another prefix's time schedule.
+ */
 export function isGenerable(files: FileData[]): boolean {
-    return GENERATE_NEEDS.every(req => files.some(f => f.suffix === req));
+    const byPrefix = new Map<string, Set<string>>();
+    for (const file of files) {
+        const prefix = filePrefix(file);
+        if (!byPrefix.has(prefix)) byPrefix.set(prefix, new Set());
+        byPrefix.get(prefix)!.add(file.suffix);
+    }
+    return [...byPrefix.values()].some(suffixes => GENERATE_NEEDS.every(req => suffixes.has(req)));
 }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
