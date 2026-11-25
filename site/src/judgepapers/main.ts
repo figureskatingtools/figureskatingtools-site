@@ -1054,6 +1054,20 @@ async function init() {
     const MOOT_SAVE = 'Another competition was opened before the change was saved. Nothing was saved.';
 
     /**
+     * Resolves once no settings save is queued or running: the chain is
+     * awaited again whenever a save was added while waiting (each one comes
+     * from a user action, so this ends). The chain never rejects and a skipped
+     * save still settles, so this cannot hang or spin.
+     */
+    async function settingsSettled(): Promise<void> {
+        let chain: Promise<void>;
+        do {
+            chain = settingsSaveChain;
+            await chain;
+        } while (chain !== settingsSaveChain);
+    }
+
+    /**
      * Queue one settings save on the chain. `send` makes the request and
      * resolves to null, or to the message for the user. `revert` undoes the
      * local change after a failure (when nothing newer replaced it). After a
@@ -1353,8 +1367,18 @@ async function init() {
         
         try {
             // A judging-method switch or a trainee change may still be saving;
-            // the backend reads both from metadata.json.
-            await settingsSaveChain;
+            // the backend reads both from metadata.json. Changes made while
+            // this waits are waited for too.
+            await settingsSettled();
+            if (generateFor !== openedCompetitionId) {
+                // Another competition was opened meanwhile; its queued changes were
+                // dropped, so this run would not be what the user saw. Send nothing.
+                showNotice('Papers not generated', 'Another competition was opened before the papers '
+                    + 'were generated. Open the competition again and generate once more.');
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                return;
+            }
             const resp = await fetch(`${API_BASE}/generate_judging_papers`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
