@@ -41,6 +41,15 @@ import {
 import { validateCategory, validateCompetition } from './validate';
 import { renderHelpTrigger, filesHelpHtml, judgingMethodHelpHtml, initHelp } from './help';
 import { openSendDialog, SENDABLE_FILE_RE } from './send';
+import {
+    addTraineeBlocker,
+    closeTraineeDialog,
+    openTraineeDialog,
+    parseTrainees,
+    segmentChoices,
+    traineesSectionHtml,
+    type Trainee,
+} from './trainees';
 
 // Inject the shared figureskatingtools.com nav styles once at startup
 injectSiteNavStyles();
@@ -181,6 +190,9 @@ appElement.innerHTML = `
                  </div>
 
                  <div id="right-panel" class="right-panel">
+                      <!-- Trainees named by the operator (saved with the competition) -->
+                      <section id="trainees-area" class="options-area trainees-area"
+                               aria-labelledby="trainees-title" hidden></section>
                       <div id="options-area" class="options-area">
                           <!-- Options injected here -->
                       </div>
@@ -1020,12 +1032,13 @@ async function init() {
      * picking the table default removes the key; the full map is sent on every
      * save because the server shallow-replaces the whole setting.
      */
-    // Override saves run one after another on this chain. Each save sends the
-    // full map as it stood when queued, so the last request in the chain always
-    // carries the final selection and an older response can never overwrite a
-    // newer one. Generate awaits the chain, because the backend reads the
-    // overrides from metadata.json when it records statistics.
-    let overrideSaveChain: Promise<void> = Promise.resolve();
+    // Settings saves (judging-method overrides, trainees) run one after another
+    // on this chain. Each save sends its whole setting as it stood when queued,
+    // so the last request in the chain always carries the final state and an
+    // older response can never overwrite a newer one. Generate awaits the
+    // chain, because the backend reads the overrides (for its statistics) and
+    // the trainees from metadata.json.
+    let settingsSaveChain: Promise<void> = Promise.resolve();
 
     async function setJudgingMethodOverride(code: string, method: string, defaultMethod: string) {
         if (!currentCompetitionData || !code) return;
@@ -1051,7 +1064,7 @@ async function init() {
         renderCompetitionView();
 
         const competitionId = currentCompetitionData.id;
-        overrideSaveChain = overrideSaveChain.then(async () => {
+        settingsSaveChain = settingsSaveChain.then(async () => {
             // The competition changed under us while queued; this map is moot.
             if (currentCompetitionData?.id !== competitionId) return;
             let ok = false;
@@ -1077,7 +1090,153 @@ async function init() {
                 }
             }
         });
-        await overrideSaveChain;
+        await settingsSaveChain;
+    }
+
+    /* ── Trainees (saved with the competition, see trainees.ts) ── */
+
+    /** The open competition's trainees ([] when the backend sends none) */
+    const currentTrainees = (): Trainee[] => currentCompetitionData?.trainees ?? [];
+
+    /** The Trainees section of the right-hand panel; empty while nothing is loaded */
+    function renderTrainees() {
+        const area = document.getElementById('trainees-area');
+        if (!area) return;
+        if (!currentCompetitionData) {
+            area.innerHTML = '';
+            area.hidden = true;
+            return;
+        }
+        // Keep keyboard focus on the same control across the re-render
+        const focused = document.activeElement;
+        const focusKey = focused instanceof HTMLElement && area.contains(focused)
+            ? traineeFocusKey(focused) : null;
+        area.innerHTML = traineesSectionHtml(currentTrainees(), segmentChoices(currentCompetitionData));
+        area.hidden = false;
+        if (focusKey) traineeFocusTarget(focusKey)?.focus();
+    }
+
+    /** A selector that finds a Trainees control again after a re-render */
+    function traineeFocusKey(el: HTMLElement): string | null {
+        for (const attr of ['data-trainee-edit', 'data-trainee-remove']) {
+            const value = el.getAttribute(attr);
+            if (value !== null) return `[${attr}="${CSS.escape(value)}"]`;
+        }
+        if (el.hasAttribute('data-trainee-add')) return '[data-trainee-add]';
+        return el.id === 'trainees-title' ? '#trainees-title' : null;
+    }
+
+    /**
+     * Where focus goes back to in the Trainees section: the control `key`
+     * names when it is still there and usable, else Add trainee, else the
+     * section heading.
+     */
+    function traineeFocusTarget(key: string | null): HTMLElement | null {
+        const area = document.getElementById('trainees-area');
+        if (!area || area.hidden) return null;
+        const usable = (el: HTMLElement | null) =>
+            el && !(el instanceof HTMLButtonElement && el.disabled) ? el : null;
+        return (key ? usable(area.querySelector<HTMLElement>(key)) : null)
+            ?? usable(area.querySelector<HTMLElement>('[data-trainee-add]'))
+            ?? area.querySelector<HTMLElement>('#trainees-title');
+    }
+
+    /**
+     * Replace the open competition's trainee list: shown at once, then saved
+     * on the settings chain. Resolves to null once the server has it, else to
+     * the message for the user — and then the details are reloaded, so the
+     * list shows what the server holds.
+     */
+    function saveTrainees(trainees: Trainee[]): Promise<string | null> {
+        if (!currentCompetitionData) return Promise.resolve('No competition is open.');
+        const competitionId: string = currentCompetitionData.id;
+        currentCompetitionData.trainees = trainees;
+        renderTrainees();
+
+        let report: (problem: string | null) => void = () => {};
+        const outcome = new Promise<string | null>(resolve => { report = resolve; });
+        settingsSaveChain = settingsSaveChain.then(async () => {
+            // The competition changed under us while queued; this list is moot.
+            if (currentCompetitionData?.id !== competitionId) {
+                report('Another competition was opened before the trainees were saved. Nothing was saved.');
+                return;
+            }
+            let problem: string | null = null;
+            try {
+                const resp = await fetch(`${API_BASE}/save_competition_settings`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: competitionId, settings: { trainees } }),
+                });
+                if (!resp.ok) {
+                    const text = (await resp.text().catch(() => '')).trim();
+                    problem = readOnlyRefusal(resp.status, text)
+                        ?? (resp.status === 401 ? 'Your session has expired. Reload the page and sign in again.'
+                            : resp.status === 400 && text ? text
+                            : `Could not save the trainees (HTTP ${resp.status}). Try again.`);
+                }
+            } catch (_e) {
+                problem = 'Could not save the trainees. Check your connection and try again.';
+            }
+            report(problem);
+            // Resync only if nothing newer is queued behind us; otherwise the
+            // later save carries the current list and reports itself.
+            if (problem && currentCompetitionData?.trainees === trainees) {
+                await loadCompetitionDetails(competitionId);
+            }
+        });
+        return outcome;
+    }
+
+    /** Add (index null) or edit one trainee in the dialog */
+    function editTrainee(index: number | null) {
+        if (!currentCompetitionData || viewOnly()) return;
+        const original = index === null ? undefined : currentTrainees()[index];
+        if (index !== null && !original) return;
+        if (index === null && addTraineeBlocker(currentTrainees(), segmentChoices(currentCompetitionData))) return;
+        const focusKey = index === null ? '[data-trainee-add]' : `[data-trainee-edit="${index}"]`;
+        openTraineeDialog({
+            trainee: original,
+            choices: segmentChoices(currentCompetitionData),
+            returnFocus: () => traineeFocusTarget(focusKey),
+            onSave: (trainee) => {
+                const list = [...currentTrainees()];
+                if (original) {
+                    // The list may have been reloaded meanwhile (e.g. after a failed
+                    // save): find the trainee by its content then.
+                    let at = list.indexOf(original);
+                    if (at < 0) at = list.findIndex(t => JSON.stringify(t) === JSON.stringify(original));
+                    if (at < 0) {
+                        return Promise.resolve('This trainee was changed or removed meanwhile. '
+                            + 'Cancel and open it again.');
+                    }
+                    list[at] = trainee;
+                } else {
+                    list.push(trainee);
+                }
+                return saveTrainees(list);
+            },
+        });
+    }
+
+    // One listener for the section: its rows are re-rendered on every load
+    document.getElementById('trainees-area')?.addEventListener('click', (e) => {
+        const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button');
+        if (!btn || btn.disabled || !currentCompetitionData) return;
+        if (btn.hasAttribute('data-trainee-add')) {
+            editTrainee(null);
+        } else if (btn.dataset.traineeEdit !== undefined) {
+            editTrainee(Number(btn.dataset.traineeEdit));
+        } else if (btn.dataset.traineeRemove !== undefined) {
+            const trainee = currentTrainees()[Number(btn.dataset.traineeRemove)];
+            if (trainee && !viewOnly()) openRemoveTraineeModal(currentCompetitionData.id, trainee);
+        }
+    });
+
+    /** The trailing "Warning: …" sentence of a successful generate response, or null */
+    function generateWarning(text: string): string | null {
+        const at = text.indexOf(' Warning:');
+        return at >= 0 ? text.slice(at + 1).trim() : null;
     }
 
     // Generate Handler
@@ -1139,9 +1298,9 @@ async function init() {
         }
         
         try {
-            // A judging-method switch may still be saving; the backend reads the
-            // overrides from metadata.json when it records statistics.
-            await overrideSaveChain;
+            // A judging-method switch or a trainee change may still be saving;
+            // the backend reads both from metadata.json.
+            await settingsSaveChain;
             const resp = await fetch(`${API_BASE}/generate_judging_papers`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1152,6 +1311,13 @@ async function init() {
             });
 
             if (resp.ok) {
+                 // The papers are there, but something needs the operator's eye
+                 // (e.g. trainee sheets that still show the original name): the
+                 // response text then ends with a " Warning: …" sentence.
+                 const warning = generateWarning(await resp.text().catch(() => ''));
+                 if (warning && generateFor === openedCompetitionId) {
+                     openErrorModal('Papers generated with a warning', escapeHtml(warning));
+                 }
                  // Success Animation
                  btn.innerHTML = 'Completed!';
                  btn.classList.add('btn-success');
@@ -1208,6 +1374,8 @@ async function init() {
             if (!ticketCurrent(ticket, 'generated') && currentCompetitionData?.id === data.id) {
                 data.generatedFiles = currentCompetitionData.generatedFiles;
             }
+            // Older backends send no trainee list at all
+            data.trainees = parseTrainees(data.trainees);
             currentCompetitionData = data;
 
             // The backend re-copies its own files from the competition file
@@ -1244,6 +1412,7 @@ async function init() {
                  nameEl.classList.remove('info-field-value--alert');
             }
 
+            renderTrainees();
             updateOptionsView(data);
             renderCompetitionView();
 
@@ -1613,28 +1782,8 @@ async function init() {
         const isFigureSkating = (data.type && data.type.includes('Figure skating')) || false;
         const defaultUseTimeSchedule = !isFigureSkating;
         
-        // Find all segments
-        const segments: { prefix: string, label: string }[] = [];
-        
-        // structure: { category: { segment: [files] } }
-        if (data.structure) {
-            for (const cat in data.structure) {
-                if (cat === 'Uncategorized') continue;
-
-                for (const seg in data.structure[cat]) {
-                    const files = data.structure[cat][seg];
-                    const startList = files.find((f: any) => f.suffix.includes('StartListwithTimes'));
-                    if (startList) {
-                        // Extract prefix from filename
-                        const prefix = startList.filename.replace('_StartListwithTimes.pdf', '');
-                        segments.push({
-                            prefix: prefix,
-                            label: `${cat} - ${seg}`
-                        });
-                    }
-                }
-            }
-        }
+        // Every segment with a time schedule (shared with the trainee dialog)
+        const segments = segmentChoices(data);
 
         if (segments.length === 0) {
              optionsArea.innerHTML = '<p class="text-muted" style="font-size: 0.9rem; margin: 0;">No segments detected yet.</p>';
@@ -1686,8 +1835,8 @@ async function init() {
                 <div id="segment-options-list" class="segment-options-list hidden">
                     ${segments.map(s => `
                         <label class="segment-option">
-                            <input type="checkbox" class="time-schedule-toggle" data-prefix="${s.prefix}" ${defaultUseTimeSchedule ? 'checked' : ''}>
-                            <span>${s.label}</span>
+                            <input type="checkbox" class="time-schedule-toggle" data-prefix="${escapeAttr(s.prefix)}" ${defaultUseTimeSchedule ? 'checked' : ''}>
+                            <span>${escapeHtml(s.label)}</span>
                         </label>
                     `).join('')}
                 </div>
@@ -2039,6 +2188,9 @@ async function init() {
             if (shareSection) { shareSection.innerHTML = ''; shareSection.hidden = true; }
             const pool = document.getElementById('pool-import-container');
             if (pool) pool.innerHTML = '';
+            // An open trainee editor belongs to the previous competition
+            closeTraineeDialog();
+            renderTrainees();
         }
         showView('view-competition-details');
         const titleEl = document.getElementById('comp-detail-title')!;
@@ -2109,7 +2261,8 @@ async function init() {
     // links can be revoked.
     type ModalAction =
         | { type: 'FILE', filename: string, competition: string }
-        | { type: 'LINK', linkId: string, competition: string };
+        | { type: 'LINK', linkId: string, competition: string }
+        | { type: 'TRAINEE', trainee: Trainee, competition: string };
 
     let pendingAction: ModalAction | null = null;
     /** A delete/revoke request is running: the dialog stays open until it ends */
@@ -2153,6 +2306,11 @@ async function init() {
                 .find(b => b.dataset.linkId === target!.dataset.linkId)
                 ?? section?.querySelector<HTMLElement>('#share-links-title') ?? null;
         }
+        // A trainee row re-rendered (or removed): the row now at that place,
+        // else Add trainee, else the section heading.
+        if (target && !target.isConnected && target.dataset.traineeRemove !== undefined) {
+            target = traineeFocusTarget(`[data-trainee-edit="${CSS.escape(target.dataset.traineeRemove)}"]`);
+        }
         if (target?.isConnected) target.focus();
     });
 
@@ -2194,6 +2352,23 @@ async function init() {
         return false;
     }
 
+    function openRemoveTraineeModal(competition: string, trainee: Trainee) {
+        openConfirmModal({ type: 'TRAINEE', trainee, competition }, 'Remove trainee?',
+            `<strong>${escapeHtml(trainee.name)}</strong> no longer gets trainee papers the next time `
+            + 'papers are generated. Papers already generated stay as they are.', 'Remove');
+    }
+
+    /** Remove one trainee; null when done, else the message for the user */
+    async function removeTrainee(action: { trainee: Trainee, competition: string }): Promise<string | null> {
+        if (!currentCompetitionData || currentCompetitionData.id !== action.competition) return null;
+        const list = currentTrainees();
+        // The list may have been reloaded since the dialog opened: match by content then
+        let at = list.indexOf(action.trainee);
+        if (at < 0) at = list.findIndex(t => JSON.stringify(t) === JSON.stringify(action.trainee));
+        if (at < 0) return null;   // already gone
+        return saveTrainees(list.filter((_t, i) => i !== at));
+    }
+
     function openDeleteFileModal(filename: string, competition: string) {
         openConfirmModal({ type: 'FILE', filename, competition }, 'Delete File?',
             `Are you sure you want to delete <strong>${escapeHtml(filename)}</strong>?`, 'Delete');
@@ -2232,8 +2407,19 @@ async function init() {
         modalBusy = true;
         btn.disabled = true;
         modalCancel.disabled = true;
+        /** Shown once the dialog's buttons are reset (a failed trainee removal) */
+        let failure: string | null = null;
 
         try {
+            if (action.type === 'TRAINEE') {
+                btn.textContent = 'Removing...';
+                failure = await removeTrainee(action);
+                if (failure === null) {
+                    modalBusy = false;
+                    closeModal();
+                }
+                return;
+            }
             if (action.type === 'LINK') {
                 btn.textContent = 'Revoking...';
                 try {
@@ -2269,6 +2455,7 @@ async function init() {
             btn.textContent = originalText;
             btn.disabled = false;
             modalCancel.disabled = false;
+            if (failure !== null && modalDialog.open) openErrorModal('Could not remove the trainee', escapeHtml(failure));
         }
     });
 
