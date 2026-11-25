@@ -12,6 +12,7 @@ import {
   SPECIALIST_SHEET_LABEL,
   isGenerable,
   missingReport,
+  prefixChecks,
   scheduleWhen,
   validateCategory,
   type FileData,
@@ -152,15 +153,65 @@ describe('isGenerable', () => {
   });
 });
 
-describe('missingReport with segments of two prefixes in one block', () => {
+describe('two FSM segments printed under one name', () => {
+  const withPrefix = (prefix: string, suffixes: string[]): FileData[] =>
+    files('Free Skating', suffixes).map(file => ({ ...file, prefix }));
+
   it('does not count a mixed pair as something to generate', () => {
     const report = missingReport({
       structure: { 'JUNIORI Naiset': { 'Free Skating': [
-        { ...files('Free Skating', ['StartListwithTimes.pdf'])[0], prefix: 'PREFIX-A' },
-        { ...files('Free Skating', ['ISUPanelofJudgesandTechnicalPanel.pdf'])[0], prefix: 'PREFIX-B' },
+        ...withPrefix('PREFIX-A', ['StartListwithTimes.pdf']),
+        ...withPrefix('PREFIX-B', ['ISUPanelofJudgesandTechnicalPanel.pdf']),
       ] } },
     });
     expect(report.generableSegments).toBe(0);
+  });
+
+  it('checks each on its own: a complete one does not cover for the other', () => {
+    const block = [
+      ...withPrefix('PREFIX-A', ISU_SET),
+      ...withPrefix('PREFIX-B', ['StartListwithTimes.pdf', 'ISUPanelofJudgesandTechnicalPanel.pdf']),
+    ];
+    expect(prefixChecks(block)).toEqual([
+      { prefix: 'PREFIX-A', missing: [], generable: true },
+      { prefix: 'PREFIX-B', generable: true, missing: [
+        'JudgesSheetAll.pdf', 'RefereeSheet.pdf', 'PlannedProgramContent.pdf',
+        'TechnicalControllerSheet.pdf', SPECIALIST_SHEET_LABEL,
+      ] },
+    ]);
+
+    const structure = { 'JUNIORI Naiset': { 'Free Skating': block, 'Category General': SETUP } };
+    const check = validateCategory(structure['JUNIORI Naiset']);
+    expect(check.isValid).toBe(false);
+    // Each missing file says which of the two it belongs to
+    expect(check.missingBySegment['Free Skating']).toEqual([
+      'JudgesSheetAll.pdf (PREFIX-B)', 'RefereeSheet.pdf (PREFIX-B)', 'PlannedProgramContent.pdf (PREFIX-B)',
+      'TechnicalControllerSheet.pdf (PREFIX-B)', `${SPECIALIST_SHEET_LABEL} (PREFIX-B)`,
+    ]);
+
+    const report = missingReport({ structure });
+    expect(report.count).toBe(5);
+    expect(report.generableSegments).toBe(2);
+    expect(report.lines).toEqual([
+      'JUNIORI Naiset, Free Skating (PREFIX-B): JudgesSheetAll.pdf, RefereeSheet.pdf, PlannedProgramContent.pdf, '
+        + `TechnicalControllerSheet.pdf, ${SPECIALIST_SHEET_LABEL}`,
+    ]);
+  });
+
+  it('says which of the two is left out', () => {
+    const report = missingReport({
+      structure: { 'JUNIORI Naiset': {
+        'Free Skating': [
+          ...withPrefix('PREFIX-A', ISU_SET),
+          ...withPrefix('PREFIX-B', ISU_SET.filter(f => f !== 'StartListwithTimes.pdf')),
+        ],
+        'Category General': SETUP,
+      } },
+    });
+    expect(report.lines).toEqual([
+      'JUNIORI Naiset, Free Skating (PREFIX-B): StartListwithTimes.pdf — this segment will be left out of the papers',
+    ]);
+    expect(report.generableSegments).toBe(1);
   });
 });
 

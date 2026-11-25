@@ -772,13 +772,18 @@ async function init() {
     let generateBlocker = '';
     /** Uploads, imports and deletes still running, per competition id */
     const fileChanges = new Map<string, number>();
+    /** A generate run is going: from the press until its button is back */
+    let generating = false;
     /**
-     * Generate may run: the list on screen is what the backend would act on.
-     * Not while the list is being re-read (canGenerate is off until the new
-     * one is rendered) or while files of the open competition are changing.
+     * The list on screen is what the backend would act on, and something of
+     * it can be generated. Not while the list is being re-read (canGenerate is
+     * off until the new one is rendered) or while files of the open
+     * competition are changing.
      */
-    const generateReady = (): boolean =>
+    const listReady = (): boolean =>
         canGenerate && !fileChanges.get(openedCompetitionId ?? '');
+    /** Generate may be pressed: the list is ready and no run is going */
+    const generateReady = (): boolean => listReady() && !generating;
 
     /** The file list is about to change: no generating, and no confirming of an open prompt, on the old one */
     function suspendGenerate() {
@@ -1438,9 +1443,19 @@ async function init() {
      */
     async function runGenerate(generateFor: string, accepted: string[]) {
         if (!currentCompetitionData || currentCompetitionData.id !== generateFor || !generateReady()) return;
+        // One run at a time: a re-render during the run (an ISU/MUPI switch,
+        // a reload) must not hand the button back.
+        generating = true;
 
         const btn = document.getElementById('btn-generate') as HTMLButtonElement;
         const originalText = 'Generate Papers';
+        /** Every way out of the run: the button is back, in whatever state the list allows */
+        const endRun = () => {
+            btn.innerHTML = originalText;
+            btn.classList.remove('btn-success');
+            generating = false;
+            updateGenerateButton();
+        };
         
         // Start Loading
         btn.disabled = true;
@@ -1501,18 +1516,17 @@ async function init() {
                 // dropped, so this run would not be what the user saw. Send nothing.
                 showNotice('Papers not generated', 'Another competition was opened before the papers '
                     + 'were generated. Open the competition again and generate once more.');
-                btn.innerHTML = originalText;
-                updateGenerateButton();
+                endRun();
                 return;
             }
             // A change that was still saving may have been taken back (a failed
             // ISU/MUPI switch brings its missing sheets back), or the files
             // changed: generate only what the user saw and accepted.
-            if (!generateReady() || missing.lines.join('\n') !== accepted.join('\n')) {
+            // (listReady, not generateReady: this run is the one that is going.)
+            if (!listReady() || missing.lines.join('\n') !== accepted.join('\n')) {
                 showNotice('Papers not generated', 'The files or settings of the competition changed before '
                     + 'the papers were generated. Check the file list and generate once more.');
-                btn.innerHTML = originalText;
-                updateGenerateButton();
+                endRun();
                 return;
             }
             const resp = await fetch(`${API_BASE}/generate_judging_papers`, {
@@ -1537,9 +1551,7 @@ async function init() {
                  btn.classList.add('btn-success');
                  
                  setTimeout(() => {
-                     btn.innerHTML = originalText;
-                     btn.classList.remove('btn-success');
-                     updateGenerateButton();
+                     endRun();
                      if (generateFor === openedCompetitionId) loadCompetitionDetails(generateFor);
                  }, 3000);
             } else {
@@ -1549,13 +1561,11 @@ async function init() {
                     ? escapeHtml(refusal)
                     : `An error occurred while generating papers:<br><br>${escapeHtml(errText)}`);
                 // Reset immediately on error
-                btn.innerHTML = originalText;
-                updateGenerateButton();
+                endRun();
             }
         } catch (_e) {
             showNotice('Generation Error', 'Network error or server unreachable.');
-            btn.innerHTML = originalText;
-            updateGenerateButton();
+            endRun();
         }
     }
 
@@ -1828,6 +1838,16 @@ async function init() {
      * download links and re-render only the generated papers list. Null when the
      * fetch failed or `id` is not (or no longer) the open competition.
      */
+    /**
+     * True when a details response says the backend has just replaced source
+     * files with newer ones from the pool. A refresh that renders only the
+     * generated papers or the links then leaves a file list (and a missing
+     * report) on screen that is no longer what Generate would act on: the
+     * list has to be re-read.
+     */
+    const sourceFilesReplaced = (data: any): boolean =>
+        Array.isArray(data?.refreshedFromPool) && data.refreshedFromPool.length > 0;
+
     async function refreshGeneratedFiles(id: string): Promise<GeneratedPaperFile[] | null> {
         if (openedCompetitionId !== id || currentCompetitionData?.id !== id) return null;
         const ticket = issueDetailsTicket(id, ['generated', 'shareLinks']);
@@ -1844,6 +1864,7 @@ async function init() {
             renderGeneratedFiles(files);
         }
         if (shareLinksTicketCurrent(ticket)) renderShareLinks(data.shareLinks, id);
+        if (sourceFilesReplaced(data)) void loadCompetitionDetails(id);
         // The caller wants a fresh link of this competition: still valid even
         // when a newer request renders the list.
         return files;
@@ -1864,6 +1885,7 @@ async function init() {
             if (!shareLinksTicketCurrent(ticket)) return;   // superseded, or the role/competition changed
             reportPoolRefresh(data.refreshedFromPool);
             renderShareLinks(data.shareLinks, id);
+            if (sourceFilesReplaced(data)) void loadCompetitionDetails(id);
         } catch (_e) {
             // The list just stays as it was; the next load shows the change.
         }
@@ -2743,16 +2765,20 @@ async function init() {
 
             btn.textContent = 'Deleting...';
             try {
-                const resp = await fetch(`${API_BASE}/delete_file?competition=${encodeURIComponent(action.competition)}&filename=${encodeURIComponent(action.filename)}`, {
-                    method: 'DELETE'
+                // Generate waits until the file is gone (the dialog can be closed
+                // mid-request) and the reload below has taken the old list away
+                await whileFilesChange(action.competition, async () => {
+                    const resp = await fetch(`${API_BASE}/delete_file?competition=${encodeURIComponent(action.competition)}&filename=${encodeURIComponent(action.filename)}`, {
+                        method: 'DELETE'
+                    });
+                    if (resp.ok) {
+                        modalBusy = false;
+                        closeIfOurs();
+                        if (action.competition === openedCompetitionId) loadCompetitionDetails(action.competition);
+                    } else {
+                        alert(readOnlyRefusal(resp.status, await resp.text()) ?? 'Failed to delete file.');
+                    }
                 });
-                if (resp.ok) {
-                    modalBusy = false;
-                    closeIfOurs();
-                    if (action.competition === openedCompetitionId) loadCompetitionDetails(action.competition);
-                } else {
-                    alert(readOnlyRefusal(resp.status, await resp.text()) ?? 'Failed to delete file.');
-                }
             } catch (_error) {
                 alert('Error deleting item');
             }

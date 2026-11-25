@@ -40,7 +40,11 @@ export interface ScheduleRow {
 /** What one category card is missing */
 export interface CategoryCheck {
     isValid: boolean;
-    /** Segment key -> the files it is missing, as shown in the list */
+    /**
+     * Segment key -> the files it is missing, as shown in the list. Each
+     * carries its FSM prefix, `RefereeSheet.pdf (PREFIX)`, when the block
+     * holds several FSM segments.
+     */
     missingBySegment: Record<string, string[]>;
     /** Files expected once per category (the calculation setup) */
     missingCategoryFiles: string[];
@@ -110,8 +114,28 @@ export function validateCompetition(
     return { isValid: true, missingFiles: [] };
 }
 
-/** The files a segment is expected to have and does not, in list order */
-function missingSegmentFiles(files: FileData[]): string[] {
+/** The FSM file prefix of a file: everything before the last `_` of its name */
+function filePrefix(file: FileData): string {
+    return file.prefix ?? file.filename.slice(0, Math.max(file.filename.lastIndexOf('_'), 0));
+}
+
+/**
+ * One FSM segment inside a displayed segment block: the files of one file
+ * prefix. A block normally holds one. It holds several when FSM prints two
+ * segments under one name, and then each is checked on its own: the backend
+ * reads every sheet by its own prefix, so one segment's sheets never stand in
+ * for another's, and a panel never pairs with another prefix's time schedule.
+ */
+export interface PrefixCheck {
+    prefix: string;
+    /** The files it is expected to have and does not, in list order */
+    missing: string[];
+    /** The backend can produce it: its panel and its time schedule are there */
+    generable: boolean;
+}
+
+/** The files one FSM segment is expected to have and does not, in list order */
+function missingOfPrefix(files: FileData[]): string[] {
     const missing = COMMON_FILES.filter(req => !files.some(f => f.suffix === req));
 
     // The judgingMethod comes from the backend (the categories table; for
@@ -130,6 +154,21 @@ function missingSegmentFiles(files: FileData[]): string[] {
         }
     }
     return missing;
+}
+
+/** The FSM segments of a displayed segment block, in the order their first files appear */
+export function prefixChecks(files: FileData[]): PrefixCheck[] {
+    const groups = new Map<string, FileData[]>();
+    for (const file of files) {
+        const prefix = filePrefix(file);
+        if (!groups.has(prefix)) groups.set(prefix, []);
+        groups.get(prefix)!.push(file);
+    }
+    return [...groups].map(([prefix, group]) => ({
+        prefix,
+        missing: missingOfPrefix(group),
+        generable: GENERATE_NEEDS.every(req => group.some(f => f.suffix === req)),
+    }));
 }
 
 export function validateCategory(
@@ -152,7 +191,10 @@ export function validateCategory(
     const noSegmentPapers = hasCalcSetup && realSegments.length === 0;
 
     for (const segmentName of realSegments) {
-        const missing = missingSegmentFiles(segments[segmentName]);
+        const checks = prefixChecks(segments[segmentName]);
+        // A block of several FSM segments says whose file each missing one is
+        const missing = checks.flatMap(part =>
+            part.missing.map(label => (checks.length > 1 ? `${label} (${part.prefix})` : label)));
         if (missing.length) missingBySegment[segmentName] = missing;
     }
 
@@ -167,25 +209,9 @@ export function validateCategory(
     };
 }
 
-/** The FSM file prefix of a file: everything before the last `_` of its name */
-function filePrefix(file: FileData): string {
-    return file.prefix ?? file.filename.slice(0, Math.max(file.filename.lastIndexOf('_'), 0));
-}
-
-/**
- * True when the backend can produce papers for a segment with these files:
- * the panel and the time schedule of the **same** FSM prefix. A segment block
- * can hold files of two prefixes (two segments FSM prints under one name),
- * and a panel never pairs with another prefix's time schedule.
- */
+/** True when the backend can produce papers for at least one FSM segment of these files */
 export function isGenerable(files: FileData[]): boolean {
-    const byPrefix = new Map<string, Set<string>>();
-    for (const file of files) {
-        const prefix = filePrefix(file);
-        if (!byPrefix.has(prefix)) byPrefix.set(prefix, new Set());
-        byPrefix.get(prefix)!.add(file.suffix);
-    }
-    return [...byPrefix.values()].some(suffixes => GENERATE_NEEDS.every(req => suffixes.has(req)));
+    return prefixChecks(files).some(part => part.generable);
 }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -233,7 +259,7 @@ export interface MissingReport {
     counts: Record<string, number>;
     /** Missing things in all; 0 = nothing to mark, nothing to ask */
     count: number;
-    /** Segments the backend can produce; 0 = nothing to generate */
+    /** FSM segments the backend can produce; 0 = nothing to generate */
     generableSegments: number;
     /** One plain-text line per missing thing, for the prompt */
     lines: string[];
@@ -306,11 +332,13 @@ export function missingReport(data: unknown): MissingReport {
         const scheduled = report.scheduled[key] ?? [];
         report.categories[key] = check;
         for (const [segment, files] of Object.entries(segments)) {
-            if (isGenerable(files)) report.generableSegments += 1;
-            const missing = check.missingBySegment[segment];
-            if (missing) {
-                report.lines.push(`${key}, ${segment}: ${missing.join(', ')}`
-                    + (isGenerable(files) ? '' : ' — this segment will be left out of the papers'));
+            const parts = prefixChecks(files);
+            report.generableSegments += parts.filter(part => part.generable).length;
+            if (!check.missingBySegment[segment]) continue;   // nothing missing, or not a skating segment
+            for (const part of parts) {
+                if (!part.missing.length) continue;
+                report.lines.push(`${key}, ${segment}${parts.length > 1 ? ` (${part.prefix})` : ''}: ${part.missing.join(', ')}`
+                    + (part.generable ? '' : ' — this segment will be left out of the papers'));
             }
         }
         for (const file of check.missingCategoryFiles) report.lines.push(`${key}: ${file}`);
