@@ -1808,6 +1808,168 @@ dialog.send-dialog.send-dialog--preview {
   overflow-y: auto;
 }
 
+/* ── Trainees (top of the right-hand panel; trainees.ts) ── */
+.trainees-area[hidden] { display: none; }
+
+.trainees-area .options-title:focus {
+  outline: none;
+}
+
+.trainees-hint {
+  margin: 0 0 0.75rem;
+}
+
+.trainee-list {
+  list-style: none;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  /* The panel is sticky: a long list scrolls on its own, so Generate stays in reach */
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.trainee-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.4rem 0.45rem 0.7rem;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+}
+
+.trainee-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.trainee-name {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+
+.trainee-meta {
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+}
+
+.trainee-note {
+  font-size: 0.75rem;
+  color: var(--gold);
+}
+
+.trainee-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.15rem;
+}
+
+.trainee-add {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.35rem;
+}
+
+.trainee-add .option-hint {
+  margin: 0;
+}
+
+.btn.trainee-add-btn {
+  background: var(--paper);
+  border-color: var(--line-strong);
+  color: var(--ink);
+  box-shadow: none;
+}
+
+.btn.trainee-add-btn:hover:not(:disabled) {
+  background: var(--rink-tint);
+}
+
+/* The add / edit dialog */
+dialog.send-dialog.trainee-dialog {
+  max-width: min(560px, calc(100vw - 2rem));
+  width: 100%;
+}
+
+.trainee-role .send-field-note,
+.trainee-role .send-field-error {
+  width: 100%;
+  margin-top: 0;
+}
+
+.trainee-segments {
+  border: none;
+  padding: 0;
+  margin: 0 0 1rem;
+  min-width: 0;
+}
+
+.trainee-segments legend {
+  padding: 0;
+}
+
+.trainee-segment-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  max-height: min(45vh, 360px);
+  overflow-y: auto;
+  padding: 0.75rem;
+  background: var(--paper-tint);
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+}
+
+.trainee-segment-groups > .option-hint {
+  margin: 0;
+}
+
+.trainee-category-tick span {
+  font-weight: 600;
+}
+
+.trainee-segment-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin: 0.35rem 0 0 1.5rem;
+}
+
+.trainee-segment-options .segment-option {
+  cursor: pointer;
+}
+
+/* A rule only when known segments are listed above */
+.trainee-segment-group + .trainee-segment-group--unknown {
+  border-top: 1px solid var(--line);
+  padding-top: 0.75rem;
+}
+
+.trainee-unknown-title {
+  display: block;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--gold);
+}
+
+.trainee-segment-group--unknown .trainee-segment-options {
+  margin-left: 0;
+}
+
+.trainee-prefix {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  overflow-wrap: anywhere;
+}
+
 /* Deletion within a week, or before the competition starts */
 .retention-date--warn {
   color: var(--gold);

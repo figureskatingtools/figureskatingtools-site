@@ -41,6 +41,15 @@ import {
 import { validateCategory, validateCompetition } from './validate';
 import { renderHelpTrigger, filesHelpHtml, judgingMethodHelpHtml, initHelp } from './help';
 import { openSendDialog, SENDABLE_FILE_RE } from './send';
+import {
+    addTraineeBlocker,
+    closeTraineeDialog,
+    openTraineeDialog,
+    parseTrainees,
+    segmentChoices,
+    traineesSectionHtml,
+    type Trainee,
+} from './trainees';
 
 // Inject the shared figureskatingtools.com nav styles once at startup
 injectSiteNavStyles();
@@ -181,6 +190,9 @@ appElement.innerHTML = `
                  </div>
 
                  <div id="right-panel" class="right-panel">
+                      <!-- Trainees named by the operator (saved with the competition) -->
+                      <section id="trainees-area" class="options-area trainees-area"
+                               aria-labelledby="trainees-title" hidden></section>
                       <div id="options-area" class="options-area">
                           <!-- Options injected here -->
                       </div>
@@ -1020,17 +1032,126 @@ async function init() {
      * picking the table default removes the key; the full map is sent on every
      * save because the server shallow-replaces the whole setting.
      */
-    // Override saves run one after another on this chain. Each save sends the
-    // full map as it stood when queued, so the last request in the chain always
-    // carries the final selection and an older response can never overwrite a
-    // newer one. Generate awaits the chain, because the backend reads the
-    // overrides from metadata.json when it records statistics.
-    let overrideSaveChain: Promise<void> = Promise.resolve();
+    // Settings saves (judging-method overrides, trainees) run one after another
+    // on this chain. Each save sends its whole setting as it stood when queued,
+    // so the last request in the chain always carries the final state and an
+    // older response can never overwrite a newer one. Generate awaits the
+    // chain, because the backend reads the overrides (for its statistics) and
+    // the trainees from metadata.json.
+    let settingsSaveChain: Promise<void> = Promise.resolve();
+    /** Settings saves queued or running, of either setting */
+    let pendingSettingsSaves = 0;
+    /**
+     * Bumped by every local settings change. A details response whose request
+     * was issued before the latest change, or while a save was pending, may
+     * predate what the screen shows: it keeps the local settings (the queued
+     * saves bring the server along).
+     */
+    let settingsRevision = 0;
+    /** A save failed: reload this competition once the chain is empty */
+    let resyncCompetition: string | null = null;
+
+    const MOOT_SAVE = 'Another competition was opened before the change was saved. Nothing was saved.';
+
+    /**
+     * Resolves once no settings save is queued or running: the chain is
+     * awaited again whenever a save was added while waiting (each one comes
+     * from a user action, so this ends). The chain never rejects and a skipped
+     * save still settles, so this cannot hang or spin.
+     */
+    async function settingsSettled(): Promise<void> {
+        let chain: Promise<void>;
+        do {
+            chain = settingsSaveChain;
+            await chain;
+        } while (chain !== settingsSaveChain);
+    }
+
+    /**
+     * Queue one settings save on the chain. `send` makes the request and
+     * resolves to null, or to the message for the user. `revert` undoes the
+     * local change after a failure (when nothing newer replaced it). After a
+     * failure the details are reloaded once nothing at all is queued behind,
+     * so the screen shows what the server holds; the returned promise resolves
+     * after that reload when this save is the one that runs it.
+     */
+    function queueSettingsSave(competitionId: string, send: () => Promise<string | null>,
+                               revert: () => void): Promise<string | null> {
+        settingsRevision++;
+        pendingSettingsSaves++;
+        let report: (problem: string | null) => void = () => {};
+        const outcome = new Promise<string | null>(resolve => { report = resolve; });
+        settingsSaveChain = settingsSaveChain.then(async () => {
+            let problem: string | null = null;
+            try {
+                // The competition changed under us while queued; this change is moot.
+                if (currentCompetitionData?.id !== competitionId) {
+                    problem = MOOT_SAVE;
+                    return;
+                }
+                problem = await send();
+                if (problem !== null) {
+                    resyncCompetition = competitionId;
+                    revert();
+                }
+            } catch (e) {
+                console.warn('Settings save failed', e);
+                problem = problem ?? 'Could not save the change. Try again.';
+            } finally {
+                pendingSettingsSaves--;
+                if (pendingSettingsSaves === 0 && resyncCompetition) {
+                    const id = resyncCompetition;
+                    resyncCompetition = null;
+                    if (id === openedCompetitionId) await loadCompetitionDetails(id).catch(() => {});
+                }
+                report(problem);
+            }
+        }).catch(e => console.warn('Settings save chain', e));
+        return outcome;
+    }
+
+    /** POST one setting; null when saved, else the message for the user */
+    async function postSetting(competitionId: string, settings: Record<string, unknown>,
+                               what: string): Promise<string | null> {
+        try {
+            const resp = await fetch(`${API_BASE}/save_competition_settings`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: competitionId, settings }),
+            });
+            if (resp.ok) return null;
+            const text = (await resp.text().catch(() => '')).trim();
+            return readOnlyRefusal(resp.status, text)
+                ?? (resp.status === 401 ? 'Your session has expired. Reload the page and sign in again.'
+                    : resp.status === 400 && text ? text
+                    : `Could not save the ${what} (HTTP ${resp.status}). Try again.`);
+        } catch (_e) {
+            return `Could not save the ${what}. Check your connection and try again.`;
+        }
+    }
+
+    /**
+     * Make each overridable file's effective judging method follow `data`'s
+     * override map (the backend's rule: the override, else the table default).
+     */
+    function applyJudgingMethodOverrides(data: any) {
+        const overrides: Record<string, string> = data?.judgingMethodOverrides || {};
+        for (const segments of Object.values(data?.structure || {})) {
+            for (const files of Object.values(segments as Record<string, any[]>)) {
+                for (const file of files) {
+                    if (!file?.categoryCode || !file.judgingMethodOverridable) continue;
+                    file.judgingMethod = overrides[file.categoryCode]
+                        ?? file.defaultJudgingMethod ?? file.judgingMethod;
+                }
+            }
+        }
+    }
 
     async function setJudgingMethodOverride(code: string, method: string, defaultMethod: string) {
         if (!currentCompetitionData || !code) return;
 
-        const overrides: Record<string, string> = { ...(currentCompetitionData.judgingMethodOverrides || {}) };
+        const previous: Record<string, string> = currentCompetitionData.judgingMethodOverrides || {};
+        const overrides: Record<string, string> = { ...previous };
         if (method === defaultMethod) {
             delete overrides[code];
         } else {
@@ -1051,33 +1172,139 @@ async function init() {
         renderCompetitionView();
 
         const competitionId = currentCompetitionData.id;
-        overrideSaveChain = overrideSaveChain.then(async () => {
-            // The competition changed under us while queued; this map is moot.
-            if (currentCompetitionData?.id !== competitionId) return;
-            let ok = false;
-            try {
-                const resp = await fetch(`${API_BASE}/save_competition_settings`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        id: competitionId,
-                        settings: { judgingMethodOverrides: overrides }
-                    })
-                });
-                ok = resp.ok;
-            } catch (_e) {
-                ok = false;
-            }
-            if (!ok) {
-                console.warn('Failed to save judging method override');
-                // Resync only if nothing newer is queued behind us; otherwise the
-                // later save carries the current selection and will report itself.
-                if (currentCompetitionData?.judgingMethodOverrides === overrides) {
-                    await loadCompetitionDetails(competitionId);
+        const problem = await queueSettingsSave(competitionId,
+            () => postSetting(competitionId, { judgingMethodOverrides: overrides }, 'judging method'),
+            () => {
+                // Back to the last saved map, unless a newer switch replaced this one
+                if (currentCompetitionData?.judgingMethodOverrides !== overrides) return;
+                currentCompetitionData.judgingMethodOverrides = previous;
+                applyJudgingMethodOverrides(currentCompetitionData);
+                renderCompetitionView();
+            });
+        // Silent as before: the switch simply goes back
+        if (problem) console.warn('Failed to save judging method override');
+    }
+
+    /* ── Trainees (saved with the competition, see trainees.ts) ── */
+
+    /** The open competition's trainees ([] when the backend sends none) */
+    const currentTrainees = (): Trainee[] => currentCompetitionData?.trainees ?? [];
+
+    /** The Trainees section of the right-hand panel; empty while nothing is loaded */
+    function renderTrainees() {
+        const area = document.getElementById('trainees-area');
+        if (!area) return;
+        if (!currentCompetitionData) {
+            area.innerHTML = '';
+            area.hidden = true;
+            return;
+        }
+        // Keep keyboard focus on the same control across the re-render
+        const focused = document.activeElement;
+        const focusKey = focused instanceof HTMLElement && area.contains(focused)
+            ? traineeFocusKey(focused) : null;
+        area.innerHTML = traineesSectionHtml(currentTrainees(), segmentChoices(currentCompetitionData));
+        area.hidden = false;
+        if (focusKey) traineeFocusTarget(focusKey)?.focus();
+    }
+
+    /** A selector that finds a Trainees control again after a re-render */
+    function traineeFocusKey(el: HTMLElement): string | null {
+        for (const attr of ['data-trainee-edit', 'data-trainee-remove']) {
+            const value = el.getAttribute(attr);
+            if (value !== null) return `[${attr}="${CSS.escape(value)}"]`;
+        }
+        if (el.hasAttribute('data-trainee-add')) return '[data-trainee-add]';
+        return el.id === 'trainees-title' ? '#trainees-title' : null;
+    }
+
+    /**
+     * Where focus goes back to in the Trainees section: the control `key`
+     * names when it is still there and usable, else Add trainee, else the
+     * section heading.
+     */
+    function traineeFocusTarget(key: string | null): HTMLElement | null {
+        const area = document.getElementById('trainees-area');
+        if (!area || area.hidden) return null;
+        const usable = (el: HTMLElement | null) =>
+            el && !(el instanceof HTMLButtonElement && el.disabled) ? el : null;
+        return (key ? usable(area.querySelector<HTMLElement>(key)) : null)
+            ?? usable(area.querySelector<HTMLElement>('[data-trainee-add]'))
+            ?? area.querySelector<HTMLElement>('#trainees-title');
+    }
+
+    /**
+     * Replace the open competition's trainee list: shown at once, then saved
+     * on the settings chain. Resolves to null once the server has it, else to
+     * the message for the user. A failed list is taken off the screen again
+     * (back to the list before it) before that, so a retry starts from it.
+     */
+    function saveTrainees(trainees: Trainee[]): Promise<string | null> {
+        if (!currentCompetitionData) return Promise.resolve('No competition is open.');
+        const competitionId: string = currentCompetitionData.id;
+        const previous = currentTrainees();
+        currentCompetitionData.trainees = trainees;
+        renderTrainees();
+        return queueSettingsSave(competitionId,
+            () => postSetting(competitionId, { trainees }, 'trainees'),
+            () => {
+                if (currentCompetitionData?.trainees !== trainees) return;   // a newer list replaced it
+                currentCompetitionData.trainees = previous;
+                renderTrainees();
+            });
+    }
+
+    /** Add (index null) or edit one trainee in the dialog */
+    function editTrainee(index: number | null) {
+        if (!currentCompetitionData || viewOnly()) return;
+        const original = index === null ? undefined : currentTrainees()[index];
+        if (index !== null && !original) return;
+        if (index === null && addTraineeBlocker(currentTrainees(), segmentChoices(currentCompetitionData))) return;
+        const focusKey = index === null ? '[data-trainee-add]' : `[data-trainee-edit="${index}"]`;
+        openTraineeDialog({
+            trainee: original,
+            choices: segmentChoices(currentCompetitionData),
+            returnFocus: () => traineeFocusTarget(focusKey),
+            // The dialog was closed while saving: the failure goes to the page's dialog
+            onUnseenProblem: (problem) => showNotice('Could not save the trainee', escapeHtml(problem)),
+            onSave: (trainee) => {
+                const list = [...currentTrainees()];
+                if (original) {
+                    // The list may have been reloaded meanwhile (e.g. after a failed
+                    // save): find the trainee by its content then.
+                    let at = list.indexOf(original);
+                    if (at < 0) at = list.findIndex(t => JSON.stringify(t) === JSON.stringify(original));
+                    if (at < 0) {
+                        return Promise.resolve('This trainee was changed or removed meanwhile. '
+                            + 'Cancel and open it again.');
+                    }
+                    list[at] = trainee;
+                } else {
+                    list.push(trainee);
                 }
-            }
+                return saveTrainees(list);
+            },
         });
-        await overrideSaveChain;
+    }
+
+    // One listener for the section: its rows are re-rendered on every load
+    document.getElementById('trainees-area')?.addEventListener('click', (e) => {
+        const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('button');
+        if (!btn || btn.disabled || !currentCompetitionData) return;
+        if (btn.hasAttribute('data-trainee-add')) {
+            editTrainee(null);
+        } else if (btn.dataset.traineeEdit !== undefined) {
+            editTrainee(Number(btn.dataset.traineeEdit));
+        } else if (btn.dataset.traineeRemove !== undefined) {
+            const trainee = currentTrainees()[Number(btn.dataset.traineeRemove)];
+            if (trainee && !viewOnly()) openRemoveTraineeModal(currentCompetitionData.id, trainee);
+        }
+    });
+
+    /** The trailing "Warning: …" sentence of a successful generate response, or null */
+    function generateWarning(text: string): string | null {
+        const at = text.indexOf(' Warning:');
+        return at >= 0 ? text.slice(at + 1).trim() : null;
     }
 
     // Generate Handler
@@ -1139,9 +1366,19 @@ async function init() {
         }
         
         try {
-            // A judging-method switch may still be saving; the backend reads the
-            // overrides from metadata.json when it records statistics.
-            await overrideSaveChain;
+            // A judging-method switch or a trainee change may still be saving;
+            // the backend reads both from metadata.json. Changes made while
+            // this waits are waited for too.
+            await settingsSettled();
+            if (generateFor !== openedCompetitionId) {
+                // Another competition was opened meanwhile; its queued changes were
+                // dropped, so this run would not be what the user saw. Send nothing.
+                showNotice('Papers not generated', 'Another competition was opened before the papers '
+                    + 'were generated. Open the competition again and generate once more.');
+                btn.innerHTML = originalText;
+                btn.disabled = false;
+                return;
+            }
             const resp = await fetch(`${API_BASE}/generate_judging_papers`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -1152,6 +1389,13 @@ async function init() {
             });
 
             if (resp.ok) {
+                 // The papers are there, but something needs the operator's eye
+                 // (e.g. trainee sheets that still show the original name): the
+                 // response text then ends with a " Warning: …" sentence.
+                 const warning = generateWarning(await resp.text().catch(() => ''));
+                 if (warning && generateFor === openedCompetitionId) {
+                     showNotice('Papers generated with a warning', escapeHtml(warning));
+                 }
                  // Success Animation
                  btn.innerHTML = 'Completed!';
                  btn.classList.add('btn-success');
@@ -1165,15 +1409,15 @@ async function init() {
             } else {
                 const errText = await resp.text();
                 const refusal = readOnlyRefusal(resp.status, errText);
-                openErrorModal('Generation Failed', refusal
+                showNotice('Generation Failed', refusal
                     ? escapeHtml(refusal)
-                    : `An error occurred while generating papers:<br><br>${errText}`);
+                    : `An error occurred while generating papers:<br><br>${escapeHtml(errText)}`);
                 // Reset immediately on error
                 btn.innerHTML = originalText;
                 btn.disabled = false; 
             }
         } catch (_e) {
-            openErrorModal('Generation Error', 'Network error or server unreachable.');
+            showNotice('Generation Error', 'Network error or server unreachable.');
             btn.innerHTML = originalText;
             btn.disabled = false;
         }
@@ -1194,6 +1438,8 @@ async function init() {
 
         knownAccess = currentAccess();
         const ticket = issueDetailsTicket(id, ['full', 'generated', 'shareLinks']);
+        // Settings state when the request leaves (see settingsRevision)
+        const settingsAtIssue = { revision: settingsRevision, pending: pendingSettingsSaves > 0 };
         try {
             const resp = await fetch(`${API_BASE}/get_competition_details?id=${encodeURIComponent(id)}`);
             if (!resp.ok) throw new Error('Failed to load details');
@@ -1207,6 +1453,17 @@ async function init() {
             // stay the same (markGeneratedUnavailable re-renders from it).
             if (!ticketCurrent(ticket, 'generated') && currentCompetitionData?.id === data.id) {
                 data.generatedFiles = currentCompetitionData.generatedFiles;
+            }
+            // Older backends send no trainee list at all
+            data.trainees = parseTrainees(data.trainees);
+            // A settings change was made or still saving while this was on its
+            // way: the response may predate it. Keep what the screen shows; the
+            // queued saves (or the reload after a failed one) bring the two together.
+            if (currentCompetitionData?.id === data.id && (settingsAtIssue.pending
+                    || pendingSettingsSaves > 0 || settingsAtIssue.revision !== settingsRevision)) {
+                data.trainees = currentCompetitionData.trainees;
+                data.judgingMethodOverrides = currentCompetitionData.judgingMethodOverrides;
+                applyJudgingMethodOverrides(data);
             }
             currentCompetitionData = data;
 
@@ -1244,6 +1501,7 @@ async function init() {
                  nameEl.classList.remove('info-field-value--alert');
             }
 
+            renderTrainees();
             updateOptionsView(data);
             renderCompetitionView();
 
@@ -1613,28 +1871,8 @@ async function init() {
         const isFigureSkating = (data.type && data.type.includes('Figure skating')) || false;
         const defaultUseTimeSchedule = !isFigureSkating;
         
-        // Find all segments
-        const segments: { prefix: string, label: string }[] = [];
-        
-        // structure: { category: { segment: [files] } }
-        if (data.structure) {
-            for (const cat in data.structure) {
-                if (cat === 'Uncategorized') continue;
-
-                for (const seg in data.structure[cat]) {
-                    const files = data.structure[cat][seg];
-                    const startList = files.find((f: any) => f.suffix.includes('StartListwithTimes'));
-                    if (startList) {
-                        // Extract prefix from filename
-                        const prefix = startList.filename.replace('_StartListwithTimes.pdf', '');
-                        segments.push({
-                            prefix: prefix,
-                            label: `${cat} - ${seg}`
-                        });
-                    }
-                }
-            }
-        }
+        // Every segment with a time schedule (shared with the trainee dialog)
+        const segments = segmentChoices(data);
 
         if (segments.length === 0) {
              optionsArea.innerHTML = '<p class="text-muted" style="font-size: 0.9rem; margin: 0;">No segments detected yet.</p>';
@@ -1686,8 +1924,8 @@ async function init() {
                 <div id="segment-options-list" class="segment-options-list hidden">
                     ${segments.map(s => `
                         <label class="segment-option">
-                            <input type="checkbox" class="time-schedule-toggle" data-prefix="${s.prefix}" ${defaultUseTimeSchedule ? 'checked' : ''}>
-                            <span>${s.label}</span>
+                            <input type="checkbox" class="time-schedule-toggle" data-prefix="${escapeAttr(s.prefix)}" ${defaultUseTimeSchedule ? 'checked' : ''}>
+                            <span>${escapeHtml(s.label)}</span>
                         </label>
                     `).join('')}
                 </div>
@@ -2039,6 +2277,9 @@ async function init() {
             if (shareSection) { shareSection.innerHTML = ''; shareSection.hidden = true; }
             const pool = document.getElementById('pool-import-container');
             if (pool) pool.innerHTML = '';
+            // An open trainee editor belongs to the previous competition
+            closeTraineeDialog();
+            renderTrainees();
         }
         showView('view-competition-details');
         const titleEl = document.getElementById('comp-detail-title')!;
@@ -2109,7 +2350,8 @@ async function init() {
     // links can be revoked.
     type ModalAction =
         | { type: 'FILE', filename: string, competition: string }
-        | { type: 'LINK', linkId: string, competition: string };
+        | { type: 'LINK', linkId: string, competition: string }
+        | { type: 'TRAINEE', trainee: Trainee, competition: string };
 
     let pendingAction: ModalAction | null = null;
     /** A delete/revoke request is running: the dialog stays open until it ends */
@@ -2129,6 +2371,25 @@ async function init() {
 
     function closeModal() {
         if (modalDialog.open) modalDialog.close();
+    }
+
+    /**
+     * Messages that arrived while the dialog was busy or showing something
+     * else (e.g. Generate's warning during a Remove): shown one after another
+     * once it is free, so none takes over a running action or is closed by it.
+     */
+    const deferredNotices: Array<[string, string]> = [];
+    function showNotice(title: string, messageHtml: string) {
+        if (modalBusy || modalDialog.open) {
+            deferredNotices.push([title, messageHtml]);
+            return;
+        }
+        openErrorModal(title, messageHtml);
+    }
+    function showDeferredNotice() {
+        if (modalBusy || modalDialog.open || !deferredNotices.length) return;
+        const [title, messageHtml] = deferredNotices.shift()!;
+        openErrorModal(title, messageHtml);
     }
 
     // Escape while a request runs would hide its outcome: ignore it then
@@ -2153,8 +2414,14 @@ async function init() {
                 .find(b => b.dataset.linkId === target!.dataset.linkId)
                 ?? section?.querySelector<HTMLElement>('#share-links-title') ?? null;
         }
+        // A trainee row re-rendered (or removed): the row now at that place,
+        // else Add trainee, else the section heading.
+        if (target && !target.isConnected && target.dataset.traineeRemove !== undefined) {
+            target = traineeFocusTarget(`[data-trainee-edit="${CSS.escape(target.dataset.traineeRemove)}"]`);
+        }
         if (target?.isConnected) target.focus();
     });
+    modalDialog.addEventListener('close', () => setTimeout(showDeferredNotice, 0));
 
     /** The destructive variant: Cancel + a red confirm button, Cancel focused */
     function openConfirmModal(action: ModalAction, title: string, messageHtml: string, confirmLabel: string) {
@@ -2194,6 +2461,25 @@ async function init() {
         return false;
     }
 
+    function openRemoveTraineeModal(competition: string, trainee: Trainee) {
+        openConfirmModal({ type: 'TRAINEE', trainee, competition }, 'Remove trainee?',
+            `<strong>${escapeHtml(trainee.name)}</strong> no longer gets trainee papers the next time `
+            + 'papers are generated. Papers already generated stay as they are.', 'Remove');
+    }
+
+    /** Remove one trainee; null when done, else the message for the user */
+    async function removeTrainee(action: { trainee: Trainee, competition: string }): Promise<string | null> {
+        if (!currentCompetitionData || currentCompetitionData.id !== action.competition) {
+            return 'Another competition was opened before the trainee was removed. Nothing was removed.';
+        }
+        const list = currentTrainees();
+        // The list may have been reloaded since the dialog opened: match by content then
+        let at = list.indexOf(action.trainee);
+        if (at < 0) at = list.findIndex(t => JSON.stringify(t) === JSON.stringify(action.trainee));
+        if (at < 0) return null;   // already gone
+        return saveTrainees(list.filter((_t, i) => i !== at));
+    }
+
     function openDeleteFileModal(filename: string, competition: string) {
         openConfirmModal({ type: 'FILE', filename, competition }, 'Delete File?',
             `Are you sure you want to delete <strong>${escapeHtml(filename)}</strong>?`, 'Delete');
@@ -2219,27 +2505,42 @@ async function init() {
     });
 
     modalConfirm.addEventListener('click', async () => {
+        if (modalBusy) return;
         const action = pendingAction;
         if (!action) {
             // Just close if no action (e.g. Alert mode)
             closeModal();
             return;
         }
-        if (modalBusy) return;
 
         const btn = modalConfirm;
         const originalText = btn.textContent;
         modalBusy = true;
         btn.disabled = true;
         modalCancel.disabled = true;
+        /** Shown once the dialog's buttons are reset (a failed trainee removal) */
+        let failure: string | null = null;
+        // Close the dialog after success only while it still shows this action:
+        // a second Escape can close it mid-request (Chrome), and something else
+        // may be showing by the time the request ends.
+        const closeIfOurs = () => { if (pendingAction === action) closeModal(); };
 
         try {
+            if (action.type === 'TRAINEE') {
+                btn.textContent = 'Removing...';
+                failure = await removeTrainee(action);
+                if (failure === null) {
+                    modalBusy = false;
+                    closeIfOurs();
+                }
+                return;
+            }
             if (action.type === 'LINK') {
                 btn.textContent = 'Revoking...';
                 try {
                     if (await revokeLink(action)) {
                         modalBusy = false;
-                        closeModal();   // focus goes back to the row's Revoke button ...
+                        closeIfOurs();   // focus goes back to the row's Revoke button ...
                         // ... and the re-render moves it to the next row (renderShareLinks)
                         void refreshShareLinks(action.competition);
                     }
@@ -2256,7 +2557,7 @@ async function init() {
                 });
                 if (resp.ok) {
                     modalBusy = false;
-                    closeModal();
+                    closeIfOurs();
                     if (action.competition === openedCompetitionId) loadCompetitionDetails(action.competition);
                 } else {
                     alert(readOnlyRefusal(resp.status, await resp.text()) ?? 'Failed to delete file.');
@@ -2266,9 +2567,19 @@ async function init() {
             }
         } finally {
             modalBusy = false;
-            btn.textContent = originalText;
-            btn.disabled = false;
-            modalCancel.disabled = false;
+            const stillOurs = pendingAction === action;
+            if (stillOurs) {
+                btn.textContent = originalText;
+                btn.disabled = false;
+                modalCancel.disabled = false;
+            }
+            if (failure !== null) {
+                // In place of our confirm when it still shows, else as soon as
+                // the dialog is free (it may have been closed mid-request)
+                if (stillOurs) openErrorModal('Could not remove the trainee', escapeHtml(failure));
+                else showNotice('Could not remove the trainee', escapeHtml(failure));
+            }
+            showDeferredNotice();
         }
     });
 

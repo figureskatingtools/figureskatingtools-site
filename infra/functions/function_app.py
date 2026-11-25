@@ -402,7 +402,7 @@ INACTIVE_USER_DAYS = 365
 # and site/public/tietosuoja/ (pinned by tests/test_legal_versions.py): bump
 # both here and in the pages whenever a document changes in substance.
 TERMS_VERSION = "2026-10-23"
-PRIVACY_VERSION = "2026-10-28"
+PRIVACY_VERSION = "2026-11-25"
 _LEGAL_VERSION_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 # The legacy e-mail claim (_claim_legacy_competitions) only ever considers
 # competitions created before this instant: the rollout of the access model.
