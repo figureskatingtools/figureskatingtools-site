@@ -1826,6 +1826,9 @@ dialog.send-dialog.send-dialog--preview {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
+  /* The panel is sticky: a long list scrolls on its own, so Generate stays in reach */
+  max-height: 300px;
+  overflow-y: auto;
 }
 
 .trainee-row {
@@ -1944,7 +1947,8 @@ dialog.send-dialog.trainee-dialog {
   cursor: pointer;
 }
 
-.trainee-segment-group--unknown {
+/* A rule only when known segments are listed above */
+.trainee-segment-group + .trainee-segment-group--unknown {
   border-top: 1px solid var(--line);
   padding-top: 0.75rem;
 }

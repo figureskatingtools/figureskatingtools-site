@@ -33,8 +33,10 @@ export interface SegmentChoice {
 export const MAX_TRAINEES = 50;
 export const TRAINEE_NAME_MAX = 80;
 export const MAX_TRAINEE_SEGMENTS = 200;
-// eslint-disable-next-line no-control-regex
-const NAME_FORBIDDEN = /[/:@<>\\"\u0000-\u001f\u007f]/;
+// The server refuses these and every Unicode "other" (C*) character: control
+// characters, and invisible ones a paste brings along (soft hyphen, zero-width
+// space, direction marks, ...).
+const NAME_FORBIDDEN = /[/:@<>\\"]|\p{C}/u;
 
 export const ROLE_LABELS: Record<TraineeRole, string> = {
     judge: 'Judge trainee',
@@ -160,6 +162,12 @@ export interface TraineeDialogOptions {
     onSave: (trainee: Trainee) => Promise<string | null>;
     /** Where focus goes when the dialog closes (the opener may have been re-rendered) */
     returnFocus: () => HTMLElement | null;
+    /**
+     * A save failed after the dialog had already closed (Chrome closes a
+     * modal dialog on a second Escape even while its cancel is prevented, or
+     * another competition was opened): the caller shows the message instead.
+     */
+    onUnseenProblem: (problem: string) => void;
 }
 
 /** Close an open trainee dialog without saving (e.g. another competition was opened) */
@@ -233,7 +241,7 @@ export function openTraineeDialog(opts: TraineeDialogOptions): void {
                  placeholder="First name LAST NAME" value="${escapeAttr(editing?.name ?? '')}"
                  aria-describedby="${DIALOG_ID}-name-note ${DIALOG_ID}-name-error">
           <span class="send-field-note" id="${DIALOG_ID}-name-note">Printed on the trainee's cover and sheets.</span>
-          <span class="send-field-error" id="${DIALOG_ID}-name-error" data-error-for="name" hidden>1–${TRAINEE_NAME_MAX} characters, no / : @ &lt; &gt; \\ "</span>
+          <span class="send-field-error" id="${DIALOG_ID}-name-error" data-error-for="name" hidden>1–${TRAINEE_NAME_MAX} characters. Not allowed: / : @ &lt; &gt; \\ " and invisible characters (retype a pasted name).</span>
         </div>
 
         <fieldset class="send-field send-language trainee-role" aria-describedby="${DIALOG_ID}-role-error">
@@ -386,7 +394,12 @@ export function openTraineeDialog(opts: TraineeDialogOptions): void {
             problem = 'Could not save the trainees. Try again.';
         }
         saving = false;
-        if (!dialog.isConnected) return;   // closed meanwhile (another competition opened)
+        if (!dialog.open) {
+            // Closed meanwhile: there is no form left to show the outcome in
+            dialog.remove();
+            if (problem !== null) opts.onUnseenProblem(problem);
+            return;
+        }
         if (problem === null) {
             close();
             return;

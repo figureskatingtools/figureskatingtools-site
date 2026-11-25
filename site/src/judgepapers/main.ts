@@ -1039,11 +1039,105 @@ async function init() {
     // chain, because the backend reads the overrides (for its statistics) and
     // the trainees from metadata.json.
     let settingsSaveChain: Promise<void> = Promise.resolve();
+    /** Settings saves queued or running, of either setting */
+    let pendingSettingsSaves = 0;
+    /**
+     * Bumped by every local settings change. A details response whose request
+     * was issued before the latest change, or while a save was pending, may
+     * predate what the screen shows: it keeps the local settings (the queued
+     * saves bring the server along).
+     */
+    let settingsRevision = 0;
+    /** A save failed: reload this competition once the chain is empty */
+    let resyncCompetition: string | null = null;
+
+    const MOOT_SAVE = 'Another competition was opened before the change was saved. Nothing was saved.';
+
+    /**
+     * Queue one settings save on the chain. `send` makes the request and
+     * resolves to null, or to the message for the user. `revert` undoes the
+     * local change after a failure (when nothing newer replaced it). After a
+     * failure the details are reloaded once nothing at all is queued behind,
+     * so the screen shows what the server holds; the returned promise resolves
+     * after that reload when this save is the one that runs it.
+     */
+    function queueSettingsSave(competitionId: string, send: () => Promise<string | null>,
+                               revert: () => void): Promise<string | null> {
+        settingsRevision++;
+        pendingSettingsSaves++;
+        let report: (problem: string | null) => void = () => {};
+        const outcome = new Promise<string | null>(resolve => { report = resolve; });
+        settingsSaveChain = settingsSaveChain.then(async () => {
+            let problem: string | null = null;
+            try {
+                // The competition changed under us while queued; this change is moot.
+                if (currentCompetitionData?.id !== competitionId) {
+                    problem = MOOT_SAVE;
+                    return;
+                }
+                problem = await send();
+                if (problem !== null) {
+                    resyncCompetition = competitionId;
+                    revert();
+                }
+            } catch (e) {
+                console.warn('Settings save failed', e);
+                problem = problem ?? 'Could not save the change. Try again.';
+            } finally {
+                pendingSettingsSaves--;
+                if (pendingSettingsSaves === 0 && resyncCompetition) {
+                    const id = resyncCompetition;
+                    resyncCompetition = null;
+                    if (id === openedCompetitionId) await loadCompetitionDetails(id).catch(() => {});
+                }
+                report(problem);
+            }
+        }).catch(e => console.warn('Settings save chain', e));
+        return outcome;
+    }
+
+    /** POST one setting; null when saved, else the message for the user */
+    async function postSetting(competitionId: string, settings: Record<string, unknown>,
+                               what: string): Promise<string | null> {
+        try {
+            const resp = await fetch(`${API_BASE}/save_competition_settings`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: competitionId, settings }),
+            });
+            if (resp.ok) return null;
+            const text = (await resp.text().catch(() => '')).trim();
+            return readOnlyRefusal(resp.status, text)
+                ?? (resp.status === 401 ? 'Your session has expired. Reload the page and sign in again.'
+                    : resp.status === 400 && text ? text
+                    : `Could not save the ${what} (HTTP ${resp.status}). Try again.`);
+        } catch (_e) {
+            return `Could not save the ${what}. Check your connection and try again.`;
+        }
+    }
+
+    /**
+     * Make each overridable file's effective judging method follow `data`'s
+     * override map (the backend's rule: the override, else the table default).
+     */
+    function applyJudgingMethodOverrides(data: any) {
+        const overrides: Record<string, string> = data?.judgingMethodOverrides || {};
+        for (const segments of Object.values(data?.structure || {})) {
+            for (const files of Object.values(segments as Record<string, any[]>)) {
+                for (const file of files) {
+                    if (!file?.categoryCode || !file.judgingMethodOverridable) continue;
+                    file.judgingMethod = overrides[file.categoryCode]
+                        ?? file.defaultJudgingMethod ?? file.judgingMethod;
+                }
+            }
+        }
+    }
 
     async function setJudgingMethodOverride(code: string, method: string, defaultMethod: string) {
         if (!currentCompetitionData || !code) return;
 
-        const overrides: Record<string, string> = { ...(currentCompetitionData.judgingMethodOverrides || {}) };
+        const previous: Record<string, string> = currentCompetitionData.judgingMethodOverrides || {};
+        const overrides: Record<string, string> = { ...previous };
         if (method === defaultMethod) {
             delete overrides[code];
         } else {
@@ -1064,33 +1158,17 @@ async function init() {
         renderCompetitionView();
 
         const competitionId = currentCompetitionData.id;
-        settingsSaveChain = settingsSaveChain.then(async () => {
-            // The competition changed under us while queued; this map is moot.
-            if (currentCompetitionData?.id !== competitionId) return;
-            let ok = false;
-            try {
-                const resp = await fetch(`${API_BASE}/save_competition_settings`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        id: competitionId,
-                        settings: { judgingMethodOverrides: overrides }
-                    })
-                });
-                ok = resp.ok;
-            } catch (_e) {
-                ok = false;
-            }
-            if (!ok) {
-                console.warn('Failed to save judging method override');
-                // Resync only if nothing newer is queued behind us; otherwise the
-                // later save carries the current selection and will report itself.
-                if (currentCompetitionData?.judgingMethodOverrides === overrides) {
-                    await loadCompetitionDetails(competitionId);
-                }
-            }
-        });
-        await settingsSaveChain;
+        const problem = await queueSettingsSave(competitionId,
+            () => postSetting(competitionId, { judgingMethodOverrides: overrides }, 'judging method'),
+            () => {
+                // Back to the last saved map, unless a newer switch replaced this one
+                if (currentCompetitionData?.judgingMethodOverrides !== overrides) return;
+                currentCompetitionData.judgingMethodOverrides = previous;
+                applyJudgingMethodOverrides(currentCompetitionData);
+                renderCompetitionView();
+            });
+        // Silent as before: the switch simply goes back
+        if (problem) console.warn('Failed to save judging method override');
     }
 
     /* ── Trainees (saved with the competition, see trainees.ts) ── */
@@ -1144,48 +1222,22 @@ async function init() {
     /**
      * Replace the open competition's trainee list: shown at once, then saved
      * on the settings chain. Resolves to null once the server has it, else to
-     * the message for the user — and then the details are reloaded, so the
-     * list shows what the server holds.
+     * the message for the user. A failed list is taken off the screen again
+     * (back to the list before it) before that, so a retry starts from it.
      */
     function saveTrainees(trainees: Trainee[]): Promise<string | null> {
         if (!currentCompetitionData) return Promise.resolve('No competition is open.');
         const competitionId: string = currentCompetitionData.id;
+        const previous = currentTrainees();
         currentCompetitionData.trainees = trainees;
         renderTrainees();
-
-        let report: (problem: string | null) => void = () => {};
-        const outcome = new Promise<string | null>(resolve => { report = resolve; });
-        settingsSaveChain = settingsSaveChain.then(async () => {
-            // The competition changed under us while queued; this list is moot.
-            if (currentCompetitionData?.id !== competitionId) {
-                report('Another competition was opened before the trainees were saved. Nothing was saved.');
-                return;
-            }
-            let problem: string | null = null;
-            try {
-                const resp = await fetch(`${API_BASE}/save_competition_settings`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ id: competitionId, settings: { trainees } }),
-                });
-                if (!resp.ok) {
-                    const text = (await resp.text().catch(() => '')).trim();
-                    problem = readOnlyRefusal(resp.status, text)
-                        ?? (resp.status === 401 ? 'Your session has expired. Reload the page and sign in again.'
-                            : resp.status === 400 && text ? text
-                            : `Could not save the trainees (HTTP ${resp.status}). Try again.`);
-                }
-            } catch (_e) {
-                problem = 'Could not save the trainees. Check your connection and try again.';
-            }
-            report(problem);
-            // Resync only if nothing newer is queued behind us; otherwise the
-            // later save carries the current list and reports itself.
-            if (problem && currentCompetitionData?.trainees === trainees) {
-                await loadCompetitionDetails(competitionId);
-            }
-        });
-        return outcome;
+        return queueSettingsSave(competitionId,
+            () => postSetting(competitionId, { trainees }, 'trainees'),
+            () => {
+                if (currentCompetitionData?.trainees !== trainees) return;   // a newer list replaced it
+                currentCompetitionData.trainees = previous;
+                renderTrainees();
+            });
     }
 
     /** Add (index null) or edit one trainee in the dialog */
@@ -1199,6 +1251,8 @@ async function init() {
             trainee: original,
             choices: segmentChoices(currentCompetitionData),
             returnFocus: () => traineeFocusTarget(focusKey),
+            // The dialog was closed while saving: the failure goes to the page's dialog
+            onUnseenProblem: (problem) => showNotice('Could not save the trainee', escapeHtml(problem)),
             onSave: (trainee) => {
                 const list = [...currentTrainees()];
                 if (original) {
@@ -1316,7 +1370,7 @@ async function init() {
                  // response text then ends with a " Warning: …" sentence.
                  const warning = generateWarning(await resp.text().catch(() => ''));
                  if (warning && generateFor === openedCompetitionId) {
-                     openErrorModal('Papers generated with a warning', escapeHtml(warning));
+                     showNotice('Papers generated with a warning', escapeHtml(warning));
                  }
                  // Success Animation
                  btn.innerHTML = 'Completed!';
@@ -1331,15 +1385,15 @@ async function init() {
             } else {
                 const errText = await resp.text();
                 const refusal = readOnlyRefusal(resp.status, errText);
-                openErrorModal('Generation Failed', refusal
+                showNotice('Generation Failed', refusal
                     ? escapeHtml(refusal)
-                    : `An error occurred while generating papers:<br><br>${errText}`);
+                    : `An error occurred while generating papers:<br><br>${escapeHtml(errText)}`);
                 // Reset immediately on error
                 btn.innerHTML = originalText;
                 btn.disabled = false; 
             }
         } catch (_e) {
-            openErrorModal('Generation Error', 'Network error or server unreachable.');
+            showNotice('Generation Error', 'Network error or server unreachable.');
             btn.innerHTML = originalText;
             btn.disabled = false;
         }
@@ -1360,6 +1414,8 @@ async function init() {
 
         knownAccess = currentAccess();
         const ticket = issueDetailsTicket(id, ['full', 'generated', 'shareLinks']);
+        // Settings state when the request leaves (see settingsRevision)
+        const settingsAtIssue = { revision: settingsRevision, pending: pendingSettingsSaves > 0 };
         try {
             const resp = await fetch(`${API_BASE}/get_competition_details?id=${encodeURIComponent(id)}`);
             if (!resp.ok) throw new Error('Failed to load details');
@@ -1376,6 +1432,15 @@ async function init() {
             }
             // Older backends send no trainee list at all
             data.trainees = parseTrainees(data.trainees);
+            // A settings change was made or still saving while this was on its
+            // way: the response may predate it. Keep what the screen shows; the
+            // queued saves (or the reload after a failed one) bring the two together.
+            if (currentCompetitionData?.id === data.id && (settingsAtIssue.pending
+                    || pendingSettingsSaves > 0 || settingsAtIssue.revision !== settingsRevision)) {
+                data.trainees = currentCompetitionData.trainees;
+                data.judgingMethodOverrides = currentCompetitionData.judgingMethodOverrides;
+                applyJudgingMethodOverrides(data);
+            }
             currentCompetitionData = data;
 
             // The backend re-copies its own files from the competition file
@@ -2284,6 +2349,25 @@ async function init() {
         if (modalDialog.open) modalDialog.close();
     }
 
+    /**
+     * Messages that arrived while the dialog was busy or showing something
+     * else (e.g. Generate's warning during a Remove): shown one after another
+     * once it is free, so none takes over a running action or is closed by it.
+     */
+    const deferredNotices: Array<[string, string]> = [];
+    function showNotice(title: string, messageHtml: string) {
+        if (modalBusy || modalDialog.open) {
+            deferredNotices.push([title, messageHtml]);
+            return;
+        }
+        openErrorModal(title, messageHtml);
+    }
+    function showDeferredNotice() {
+        if (modalBusy || modalDialog.open || !deferredNotices.length) return;
+        const [title, messageHtml] = deferredNotices.shift()!;
+        openErrorModal(title, messageHtml);
+    }
+
     // Escape while a request runs would hide its outcome: ignore it then
     modalDialog.addEventListener('cancel', (e) => {
         if (modalBusy) e.preventDefault();
@@ -2313,6 +2397,7 @@ async function init() {
         }
         if (target?.isConnected) target.focus();
     });
+    modalDialog.addEventListener('close', () => setTimeout(showDeferredNotice, 0));
 
     /** The destructive variant: Cancel + a red confirm button, Cancel focused */
     function openConfirmModal(action: ModalAction, title: string, messageHtml: string, confirmLabel: string) {
@@ -2360,7 +2445,9 @@ async function init() {
 
     /** Remove one trainee; null when done, else the message for the user */
     async function removeTrainee(action: { trainee: Trainee, competition: string }): Promise<string | null> {
-        if (!currentCompetitionData || currentCompetitionData.id !== action.competition) return null;
+        if (!currentCompetitionData || currentCompetitionData.id !== action.competition) {
+            return 'Another competition was opened before the trainee was removed. Nothing was removed.';
+        }
         const list = currentTrainees();
         // The list may have been reloaded since the dialog opened: match by content then
         let at = list.indexOf(action.trainee);
@@ -2394,13 +2481,13 @@ async function init() {
     });
 
     modalConfirm.addEventListener('click', async () => {
+        if (modalBusy) return;
         const action = pendingAction;
         if (!action) {
             // Just close if no action (e.g. Alert mode)
             closeModal();
             return;
         }
-        if (modalBusy) return;
 
         const btn = modalConfirm;
         const originalText = btn.textContent;
@@ -2409,6 +2496,10 @@ async function init() {
         modalCancel.disabled = true;
         /** Shown once the dialog's buttons are reset (a failed trainee removal) */
         let failure: string | null = null;
+        // Close the dialog after success only while it still shows this action:
+        // a second Escape can close it mid-request (Chrome), and something else
+        // may be showing by the time the request ends.
+        const closeIfOurs = () => { if (pendingAction === action) closeModal(); };
 
         try {
             if (action.type === 'TRAINEE') {
@@ -2416,7 +2507,7 @@ async function init() {
                 failure = await removeTrainee(action);
                 if (failure === null) {
                     modalBusy = false;
-                    closeModal();
+                    closeIfOurs();
                 }
                 return;
             }
@@ -2425,7 +2516,7 @@ async function init() {
                 try {
                     if (await revokeLink(action)) {
                         modalBusy = false;
-                        closeModal();   // focus goes back to the row's Revoke button ...
+                        closeIfOurs();   // focus goes back to the row's Revoke button ...
                         // ... and the re-render moves it to the next row (renderShareLinks)
                         void refreshShareLinks(action.competition);
                     }
@@ -2442,7 +2533,7 @@ async function init() {
                 });
                 if (resp.ok) {
                     modalBusy = false;
-                    closeModal();
+                    closeIfOurs();
                     if (action.competition === openedCompetitionId) loadCompetitionDetails(action.competition);
                 } else {
                     alert(readOnlyRefusal(resp.status, await resp.text()) ?? 'Failed to delete file.');
@@ -2452,10 +2543,19 @@ async function init() {
             }
         } finally {
             modalBusy = false;
-            btn.textContent = originalText;
-            btn.disabled = false;
-            modalCancel.disabled = false;
-            if (failure !== null && modalDialog.open) openErrorModal('Could not remove the trainee', escapeHtml(failure));
+            const stillOurs = pendingAction === action;
+            if (stillOurs) {
+                btn.textContent = originalText;
+                btn.disabled = false;
+                modalCancel.disabled = false;
+            }
+            if (failure !== null) {
+                // In place of our confirm when it still shows, else as soon as
+                // the dialog is free (it may have been closed mid-request)
+                if (stillOurs) openErrorModal('Could not remove the trainee', escapeHtml(failure));
+                else showNotice('Could not remove the trainee', escapeHtml(failure));
+            }
+            showDeferredNotice();
         }
     });
 
