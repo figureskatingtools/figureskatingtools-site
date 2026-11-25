@@ -28,6 +28,7 @@ npm run dev --workspace=site                               # Vite MPA dev server
 
 # Tests
 npm test --workspace=@figureskatingtools/shared-ui         # vitest (competition state logic)
+npm test --workspace=site                                  # vitest (pure page modules, no DOM: site/test/, e.g. the Judge Paper Creator's missing-papers rules)
 node --test server/*.test.js                               # router suite (NOT `node --test server/` — Node 22.17 quirk)
 cd infra/functions && uv run --with-requirements requirements.txt \
   --with-requirements requirements-dev.txt python -m pytest tests -q   # platform API suite

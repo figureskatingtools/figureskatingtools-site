@@ -102,7 +102,7 @@ export function filesHelpHtml(): string {
   <p class="help-do">Export <strong>PlannedProgramContent</strong></p>
   <p class="help-dont">not <strong>PlannedProgramContentChecklist</strong> &mdash; the Checklist is a different FSM export and will not work.</p>
 </div>
-<p class="help-popover-note">MUPI categories need only the first four files. Synchronized skating categories can be switched between ISU and MUPI on their category card (see the ? next to the switch). CompetitionSchedule.pdf is optional.</p>`;
+<p class="help-popover-note">MUPI categories need only the first four files. Synchronized skating categories can be switched between ISU and MUPI on their category card (see the ? next to the switch). CompetitionSchedule.pdf is optional: when it is uploaded, its segments that have no papers are marked as missing in the file list.</p>`;
 }
 
 /**
