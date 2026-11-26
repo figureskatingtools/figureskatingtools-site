@@ -790,6 +790,23 @@ dialog.confirm-dialog::backdrop {
   transition: transform 0.2s;
 }
 
+/* The arrow is a button (keyboard access to a collapsed card) that looks like the plain arrow it was */
+button.toggle-icon {
+  margin: -0.25rem;
+  padding: 0.25rem;
+  background: none;
+  border: 0;
+  border-radius: 0.25rem;
+  font-family: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+button.toggle-icon:focus-visible {
+  outline: 2px solid var(--rink);
+  outline-offset: 2px;
+}
+
 .category-content {
   padding: 1rem;
 }

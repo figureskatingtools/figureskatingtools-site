@@ -862,11 +862,17 @@ async function init() {
     type CardState = 'invalid' | 'pending' | 'valid';
     const STATUS_MARKS: Record<CardState, string> = { invalid: '⚠︎', pending: '○', valid: '✓' };
 
-    /** The right end of a card header: what is missing (red), what is not uploaded yet (grey), the arrow */
-    const cardTailHtml = (missingCount: number, pendingNote: string, collapsed: boolean): string => `
+    /**
+     * The right end of a card header: what is missing (red), what is not
+     * uploaded yet (grey), and the arrow. The arrow is the card's disclosure
+     * button, so a card can be opened from the keyboard as well: a click
+     * anywhere on the header does the same (see the header click handler).
+     */
+    const cardTailHtml = (title: string, missingCount: number, pendingNote: string, collapsed: boolean): string => `
         ${missingCount > 0 ? `<span class="missing-count">${missingCount} missing</span>` : ''}
         ${pendingNote ? `<span class="pending-count">${escapeHtml(pendingNote)}</span>` : ''}
-        <span class="toggle-icon">${collapsed ? '▾' : '▴'}</span>`;
+        <button type="button" class="toggle-icon" aria-expanded="${collapsed ? 'false' : 'true'}"
+                aria-label="${escapeAttr(`Files of ${title}`)}">${collapsed ? '▾' : '▴'}</button>`;
 
     /** A category of the competition schedule that has nothing uploaded */
     const placeholderCardHtml = (placeholder: PlaceholderCategory): string => {
@@ -882,7 +888,7 @@ async function init() {
                          <span class="category-title">${escapeHtml(placeholder.title)}</span>
                     </div>
                     <div class="category-head-tail">
-                        ${cardTailHtml(missingCount, pendingCount > 0 ? `${pendingCount} not uploaded yet` : '', collapsed)}
+                        ${cardTailHtml(placeholder.title, missingCount, pendingCount > 0 ? `${pendingCount} not uploaded yet` : '', collapsed)}
                     </div>
                 </div>
                 <div class="category-content" style="display: ${collapsed ? 'none' : 'block'};">
@@ -1061,7 +1067,7 @@ async function init() {
                              ${catCompNameHtml}
                         </div>
                         <div class="category-head-tail">
-                            ${cardTailHtml(missingCount, pendingNote, isCollapsed)}
+                            ${cardTailHtml(displayCategory, missingCount, pendingNote, isCollapsed)}
                         </div>
                     </div>
 
@@ -1142,7 +1148,8 @@ async function init() {
             });
         });
 
-        // Header click logic: the card's content follows its header
+        // Header click logic: the card's content follows its header. Enter and
+        // Space on the arrow button arrive here as its click, bubbling up.
         document.querySelectorAll('.category-header:not(.category-header--static)').forEach(header => {
             header.addEventListener('click', (e) => {
                 // The judging-method switch and its help popover live inside the
@@ -1154,9 +1161,12 @@ async function init() {
                 const isHidden = content.style.display === 'none';
                 content.style.display = isHidden ? 'block' : 'none';
 
-                // Update arrow
+                // Update the arrow, and what it tells a screen reader
                 const arrow = head.querySelector('.toggle-icon');
-                if (arrow) arrow.textContent = isHidden ? '▴' : '▾';
+                if (arrow) {
+                    arrow.textContent = isHidden ? '▴' : '▾';
+                    arrow.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
+                }
             });
         });
         
