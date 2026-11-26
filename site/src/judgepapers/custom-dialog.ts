@@ -62,12 +62,28 @@ import {
     type SegmentGrouping,
 } from './custom';
 
+/**
+ * How the page's wait for the papers of a cut-off generate request ended:
+ * the stored papers are current, the wait ran out, or the index answered
+ * something that will not change (400, 401, 403, 404, 410).
+ */
+export type PapersWait =
+    | { kind: 'current' }
+    | { kind: 'timeout' }
+    | { kind: 'http'; status: number; text: string };
+
 /** How a generate run the dialog asked for ended */
 export type GenerateOutcome =
     | { kind: 'ok'; warning: string | null }
     | { kind: 'http'; status: number; text: string }
-    /** No answer: the connection dropped or the request timed out */
-    | { kind: 'network' }
+    /**
+     * The request was cut (502 / 504, or no answer) while the backend run
+     * may still be going. The page keeps the run (Generate stays busy) and
+     * asks the index itself until the papers are there; `settled` says how
+     * that ended. The wait belongs to the page: it goes on when the dialog
+     * is closed.
+     */
+    | { kind: 'pending'; settled: Promise<PapersWait> }
     /** Not started; `message` says why */
     | { kind: 'refused'; message: string };
 
@@ -104,8 +120,11 @@ export interface CustomDialogHost {
     notify(title: string, message: string): void;
     /** The backend replaced these source files with newer ones from the competition file pool */
     poolRefreshed(names: string[]): void;
-    /** Re-read the competition: its files or papers changed without the page seeing it */
-    reloadDetails(): void;
+    /**
+     * Re-read the competition: its files or papers changed without the page
+     * seeing it. Resolves once the re-read has ended and the list is rendered.
+     */
+    reloadDetails(): Promise<void>;
     /** Custom papers were created: re-read the Generated files list */
     filesCreated(): void;
     /** A fresh download link of a generated file (the first ones live 15 minutes) */
@@ -117,13 +136,6 @@ export interface CustomDialogHost {
 const DIALOG_ID = 'custom-dialog';
 /** Below this the panes stack and Quick select folds (the breakpoint in style.css) */
 const NARROW_QUERY = '(max-width: 860px)';
-/**
- * A generate run that outlives its HTTP request (Azure cuts the request at
- * about 230 s while the function keeps running): the index is asked again
- * this often, for this long, before giving up.
- */
-const POLL_INTERVAL_MS = 10_000;
-const POLL_LIMIT_MS = 3 * 60_000;
 
 const PREPARING_TEXT = 'This is the same work as Generate. The list opens when the papers are ready. '
     + 'If nothing has changed since the last Generate, this step is skipped.';
@@ -170,8 +182,6 @@ function parseCreatedFiles(raw: unknown): CreatedFile[] {
             pages: number(f.pages),
         }));
 }
-
-const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 
 /** Closes the open dialog, whatever it is doing */
 let closeOpen: (() => void) | null = null;
@@ -418,7 +428,7 @@ export function openCustomDialog(host: CustomDialogHost): void {
         if (dialog.open) dialog.close();
         dialog.remove();
         if (target?.isConnected && !(target instanceof HTMLButtonElement && target.disabled)) target.focus();
-        if (listStale && !closedByHost) host.reloadDetails();
+        if (listStale && !closedByHost) void host.reloadDetails();
     }
 
     /** Close on the user's request: not while the custom PDF is being created */
@@ -531,6 +541,21 @@ export function openCustomDialog(host: CustomDialogHost): void {
             return;
         }
 
+        // The files are no longer the ones the page lists (an upload or a
+        // delete elsewhere, a newer export taken from the pool): what is
+        // missing is asked about from a fresh list, checked like the first one
+        if (first.answer.reason === 'files' || first.answer.refreshedFromPool.length > 0) {
+            await host.reloadDetails();
+            if (!live()) return;
+            listStale = false;
+            const changed = await host.settle();
+            if (!live()) return;
+            if (changed) {
+                fail('The papers were not prepared', changed, true);
+                return;
+            }
+        }
+
         // Not current: the same run as Generate, after the same confirmation
         if (!(await host.confirmMissing())) {
             if (live()) close();
@@ -548,35 +573,41 @@ export function openCustomDialog(host: CustomDialogHost): void {
             const refusal = host.refusal(outcome.status, outcome.text);
             if (refusal) {
                 refused(refusal);
-                return;
-            }
-            if (outcome.status === 401) {
+            } else if (outcome.status === 401) {
                 fail('The papers were not prepared', SESSION_EXPIRED, false);
-                return;
-            }
-            if (outcome.status === 503) {
+            } else if (outcome.status === 503) {
                 fail('The papers were not prepared', unavailableText(outcome.status, outcome.text), true);
-                return;
-            }
-            if (outcome.status !== 502 && outcome.status !== 504) {
+            } else {
                 fail('The papers were not prepared', outcome.text
                     ? `An error occurred while generating papers: ${outcome.text}`
                     : `An error occurred while generating papers (HTTP ${outcome.status}).`, true);
-                return;
             }
-        }
-        if (outcome.kind !== 'ok') {
-            // 502 / 504 or no answer: the request was cut, the run may still be going
-            await awaitPapers(live);
             return;
         }
-
-        // The host has re-read the competition after its run
-        listStale = false;
-        if (outcome.warning) {
+        if (outcome.kind === 'pending') {
+            // The request was cut, the run may still be going: the page is
+            // waiting for the papers (one wait, with or without this dialog)
+            preparingText.textContent = STILL_PREPARING_TEXT;
+            const waited = await outcome.settled;
+            if (!live()) return;
+            listStale = false;   // the page re-read the competition when its wait ended
+            if (waited.kind === 'timeout') {
+                fail('The papers are not ready yet', 'The papers were not ready after three minutes. They may '
+                    + 'still be on their way: try again in a moment.', true);
+                return;
+            }
+            if (waited.kind === 'http') {
+                indexFailed(waited.status, waited.text);
+                return;
+            }
+        } else if (outcome.warning) {
             notes.push(outcome.warning);
             renderNotes();
         }
+
+        // The page re-reads the competition after the run; the papers are
+        // there, so the index is asked once more, with the same options
+        listStale = false;
         const second = await requestIndex();
         if (!live()) return;
         if (!second.ok) {
@@ -587,32 +618,6 @@ export function openCustomDialog(host: CustomDialogHost): void {
             fail('The papers could not be listed', 'The papers were generated, but the files or settings of the '
                 + 'competition changed meanwhile, so the list would not match them. Try again.', true);
         }
-    }
-
-    /** Ask for the index until the papers are there, or the wait is over */
-    async function awaitPapers(live: () => boolean) {
-        preparingText.textContent = STILL_PREPARING_TEXT;
-        const until = Date.now() + POLL_LIMIT_MS;
-        while (Date.now() < until) {
-            await sleep(POLL_INTERVAL_MS);
-            if (!live()) return;
-            const result = await requestIndex();
-            if (!live()) return;
-            if (result.ok && result.answer.current) {
-                // The page did not see this run end: its lists are behind
-                listStale = false;
-                host.reloadDetails();
-                openLists(result.answer);
-                return;
-            }
-            // Only an answer that will not change ends the wait early
-            if (!result.ok && [400, 401, 403, 404, 410].includes(result.status)) {
-                indexFailed(result.status, result.text);
-                return;
-            }
-        }
-        fail('The papers are not ready yet', 'The papers were not ready after three minutes. They may still be '
-            + 'on their way: try again in a moment.', true);
     }
 
     /* ── The lists ── */

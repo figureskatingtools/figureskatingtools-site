@@ -53,7 +53,8 @@ import {
     traineesSectionHtml,
     type Trainee,
 } from './trainees';
-import { closeCustomDialog, openCustomDialog, type GenerateOutcome } from './custom-dialog';
+import { closeCustomDialog, openCustomDialog, type GenerateOutcome, type PapersWait } from './custom-dialog';
+import { parseIndexAnswer } from './custom';
 
 // Inject the shared figureskatingtools.com nav styles once at startup
 injectSiteNavStyles();
@@ -808,6 +809,17 @@ async function init() {
      * longer open does not hold back the one that is.
      */
     const listLoads = new Map<string, number>();
+    /** Waiting for the re-reads to end (listLoadsEnded) */
+    const listLoadWaiters: Array<() => void> = [];
+    /**
+     * Resolves once no re-read of `competition`'s file list is on its way:
+     * the list on screen is then the latest one (or the re-read failed).
+     */
+    async function listLoadsEnded(competition: string): Promise<void> {
+        while (listLoads.get(competition)) {
+            await new Promise<void>(resolve => listLoadWaiters.push(resolve));
+        }
+    }
     /**
      * The list on screen is what the backend would act on, and something of
      * it can be generated. Not while the open competition's list is being
@@ -1715,12 +1727,77 @@ async function init() {
         });
     }
 
+    /** How often, and for how long, the page asks for the papers of a generate request that was cut off */
+    const CUT_OFF_POLL_MS = 10_000;
+    const CUT_OFF_LIMIT_MS = 3 * 60_000;
+
+    /**
+     * The generate request of Custom generate was cut (502 / 504, or no
+     * answer) while its backend run may still be going: Azure cuts a request
+     * at about 230 s and the function keeps running. For the page the run is
+     * not over. It asks get_papers_index, with the run's own options, every
+     * 10 s for at most 3 minutes: until the papers are current, an answer
+     * that will not change (400, 401, 403, 404, 410) or another competition
+     * is opened. Generate stays busy (`generating`) all that time, so nothing
+     * can start a second run against the same output, and `endRun` and a
+     * re-read of the competition end the wait whatever happened. This one
+     * wait belongs to the page: the dialog only awaits its outcome, and once
+     * the dialog is closed a timeout or an error is a notice, as for a failed
+     * Generate (papers that did arrive show in the re-read lists).
+     */
+    async function awaitCutOffRun(competitionId: string, options: unknown, watching: () => boolean,
+                                  endRun: () => void): Promise<PapersWait> {
+        let waited: PapersWait = { kind: 'timeout' };
+        try {
+            const until = Date.now() + CUT_OFF_LIMIT_MS;
+            while (Date.now() < until) {
+                await new Promise(resolve => setTimeout(resolve, CUT_OFF_POLL_MS));
+                if (competitionId !== openedCompetitionId) break;
+                let resp: Response;
+                try {
+                    resp = await fetch(`${API_BASE}/get_papers_index`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ id: competitionId, options }),
+                    });
+                } catch (_e) {
+                    continue;   // no answer this time either: ask again
+                }
+                if (resp.ok) {
+                    if (parseIndexAnswer(await resp.json().catch(() => null))?.current) {
+                        waited = { kind: 'current' };
+                        break;
+                    }
+                } else if ([400, 401, 403, 404, 410].includes(resp.status)) {
+                    waited = { kind: 'http', status: resp.status, text: (await resp.text().catch(() => '')).trim() };
+                    break;
+                }
+            }
+        } finally {
+            endRun();
+            if (competitionId === openedCompetitionId) void loadCompetitionDetails(competitionId);
+        }
+        if (!watching() && competitionId === openedCompetitionId) {
+            if (waited.kind === 'timeout') {
+                showNotice('Generation Failed', 'The request to generate the papers was cut off, and the papers '
+                    + 'were not ready after three minutes. They may still be on their way: check the generated '
+                    + 'files in a moment, or generate once more.');
+            } else if (waited.kind === 'http') {
+                const refusal = customGenerateRefusal(waited.status, waited.text);
+                showNotice('Generation Failed', escapeHtml(refusal ?? (waited.text
+                    || `The request to generate the papers was cut off, and the papers could not be checked (HTTP ${waited.status}).`)));
+            }
+        }
+        return waited;
+    }
+
     /**
      * The generate run Custom generate needs when the stored papers are not
      * the current ones: the same request and the same busy Generate button
      * as runGenerate, so nothing else can start a run meanwhile. While the
      * dialog is `watching`, the outcome is the dialog's to show. Once it is
      * closed the run ends like any Generate: its warning or failure as a notice.
+     * A request that was cut off is `pending`: see awaitCutOffRun.
      */
     async function generateForCustom(competitionId: string, options: unknown,
                                      watching: () => boolean): Promise<GenerateOutcome> {
@@ -1730,13 +1807,14 @@ async function init() {
             return { kind: 'refused', message: LIST_CHANGED };
         }
         const { btn, endRun } = beginGenerateRun();
-        let resp: Response;
+        let resp: Response | null = null;
         try {
             resp = await requestGenerate(competitionId, options);
         } catch (_e) {
-            endRun();
-            if (!watching()) showNotice('Generation Error', 'Network error or server unreachable.');
-            return { kind: 'network' };
+            resp = null;   // no answer: the connection dropped or the request timed out
+        }
+        if (!resp || resp.status === 502 || resp.status === 504) {
+            return { kind: 'pending', settled: awaitCutOffRun(competitionId, options, watching, endRun) };
         }
         const text = await resp.text().catch(() => '');
         if (!resp.ok) {
@@ -1775,8 +1853,10 @@ async function init() {
             options,
             settle: async () => {
                 // As in runGenerate: a settings change may still be saving, and
-                // only the list the user saw is acted on
+                // only the list on the page is acted on (a re-read of it that
+                // is on its way is waited for)
                 await settingsSettled();
+                await listLoadsEnded(competitionId);
                 return competitionId === openedCompetitionId && listReady() ? null : LIST_CHANGED;
             },
             confirmMissing: () => confirmMissingPapers(competitionId),
@@ -1784,8 +1864,11 @@ async function init() {
             refusal: customGenerateRefusal,
             notify: (title, message) => showNotice(title, escapeHtml(message)),
             poolRefreshed: reportPoolRefresh,
-            reloadDetails: () => {
-                if (competitionId === openedCompetitionId) void loadCompetitionDetails(competitionId);
+            reloadDetails: async () => {
+                if (competitionId !== openedCompetitionId) return;
+                await loadCompetitionDetails(competitionId).catch(() => {});
+                // A newer re-read may have taken over: the list is the last one's
+                await listLoadsEnded(competitionId);
             },
             filesCreated: () => void refreshGeneratedFiles(competitionId).catch(() => null),
             freshDownloadUrl: async fileName =>
@@ -1906,6 +1989,7 @@ async function init() {
             if (left > 0) listLoads.set(id, left);
             else listLoads.delete(id);
             updateGenerateButton();
+            listLoadWaiters.splice(0).forEach(done => done());
         }
     }
 

@@ -2250,8 +2250,13 @@ dialog.custom-dialog::backdrop {
   border-color: var(--ink);
 }
 
+.custom-dialog .btn-ghost {
+  color: var(--ink-soft);
+}
+
 .custom-dialog .btn-ghost:hover {
   background: var(--paper-tint);
+  color: var(--ink);
 }
 
 /* Head */
@@ -2271,7 +2276,7 @@ dialog.custom-dialog::backdrop {
 
 .custom-made {
   margin-left: auto;
-  color: var(--ink-muted);
+  color: var(--ink-soft);
   font-family: var(--font-mono);
   font-size: 0.76rem;
 }
@@ -2285,7 +2290,7 @@ dialog.custom-dialog::backdrop {
   border: 1px solid transparent;
   border-radius: 0.45rem;
   background: none;
-  color: var(--ink-muted);
+  color: var(--ink-soft);
   font: inherit;
   font-size: 1.2rem;
   line-height: 1;
@@ -2372,48 +2377,60 @@ dialog.custom-dialog::backdrop {
   cursor: pointer;
 }
 
+/* Text colours in the dialog keep at least 4.5:1 on every background a row
+   can have (white, the Quick select tint, the hover tint): --ink, --ink-soft
+   and --rink do, --ink-muted does not. --ink-faint is for disabled rows only. */
 .custom-meta {
-  color: var(--ink-muted);
+  color: var(--ink-soft);
   font-size: 0.77rem;
 }
 
 .custom-times {
-  color: var(--ink-muted);
+  color: var(--ink-soft);
   font-size: 0.8rem;
 }
 
 .custom-t {
   margin-right: 0.5rem;
-  color: var(--ink-muted);
+  color: var(--ink-soft);
   font-family: var(--font-mono);
   font-size: 0.78rem;
 }
 
+/* A ticked row: dark label, dark medium page count */
 .custom-pg {
-  color: var(--ink-soft);
+  color: var(--ink);
   font-family: var(--font-mono);
   font-size: 0.76rem;
+  font-weight: 500;
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
 }
 
+/* An unticked row: one step lighter, regular page count */
 .custom-line.is-off .custom-lbl {
-  color: var(--ink-muted);
+  color: var(--ink-soft);
 }
 
-.custom-line.is-off .custom-pg,
-.custom-line.is-off .custom-t {
-  color: var(--ink-faint);
+.custom-line.is-off .custom-pg {
+  color: var(--ink-soft);
+  font-weight: 400;
 }
 
+/* A partly ticked row: its "selected / total" count in the accent colour */
 .custom-line.is-some .custom-pg {
   color: var(--rink);
 }
 
-/* Nothing to print for this row */
-.custom-line.is-empty .custom-lbl {
+/* Nothing to print for this row: the only faint text, its tick is disabled */
+.custom-line.is-empty .custom-lbl,
+.custom-line.is-empty .custom-pg,
+.custom-line.is-empty .custom-t {
   color: var(--ink-faint);
+}
+
+.custom-line.is-empty .custom-lbl {
   cursor: default;
 }
 
@@ -2464,7 +2481,7 @@ dialog.custom-dialog::backdrop {
 
 .custom-q-note {
   margin: 0.35rem 0.25rem 0;
-  color: var(--ink-muted);
+  color: var(--ink-soft);
   font-size: 0.76rem;
 }
 
@@ -2479,7 +2496,7 @@ dialog.custom-dialog::backdrop {
 .custom-q-h h3,
 .custom-people-head h3 {
   margin: 0;
-  color: var(--ink-muted);
+  color: var(--ink-soft);
   font-family: var(--font-body);
   font-size: 0.7rem;
   font-weight: 600;
@@ -2532,6 +2549,11 @@ dialog.custom-dialog::backdrop {
   color: var(--ink);
   font: inherit;
   font-size: 0.85rem;
+}
+
+.custom-search::placeholder {
+  color: var(--ink-soft);
+  opacity: 1;
 }
 
 .custom-tree-scroll {
@@ -2608,7 +2630,6 @@ ul.custom-kids {
 
 .custom-tree .custom-cat > .custom-line .custom-lbl {
   font-weight: 600;
-  color: var(--ink-soft);
 }
 
 .custom-person > .custom-kids {
@@ -2617,7 +2638,7 @@ ul.custom-kids {
 
 .custom-empty {
   margin: 1.5rem 1rem;
-  color: var(--ink-muted);
+  color: var(--ink-soft);
 }
 
 /* Footer */
@@ -2693,7 +2714,7 @@ ul.custom-kids {
 .custom-center p {
   margin: 0;
   max-width: 34rem;
-  color: var(--ink-muted);
+  color: var(--ink-soft);
 }
 
 .custom-center-actions {
@@ -2764,7 +2785,7 @@ ul.custom-kids {
 
 .custom-done-sub {
   margin: 0.2rem 0 0;
-  color: var(--ink-muted);
+  color: var(--ink-soft);
 }
 
 .custom-done-actions {
@@ -2801,7 +2822,7 @@ ul.custom-kids {
 }
 
 .custom-fdesc {
-  color: var(--ink-muted);
+  color: var(--ink-soft);
   font-size: 0.82rem;
 }
 
