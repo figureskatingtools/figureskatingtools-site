@@ -2102,3 +2102,776 @@ dialog.send-dialog.trainee-dialog {
 }
 
 .view-only .method-switch-btn { pointer-events: none; }
+
+/* ── Custom generate (custom-dialog.ts): print a chosen part of the papers ── */
+
+/* The button under Generate Papers */
+.btn.btn-custom-generate {
+  width: 100%;
+}
+
+.btn.btn-custom-generate:not(:disabled) {
+  background: var(--paper);
+  border-color: var(--line-strong);
+  color: var(--ink);
+  box-shadow: none;
+}
+
+.btn.btn-custom-generate:hover:not(:disabled) {
+  border-color: var(--ink);
+}
+
+.custom-generate-note {
+  margin-top: -0.5rem;
+}
+
+/* The dialog: a quick-select rail on the left, the long person tree on the
+   right, totals and the action pinned underneath */
+dialog.custom-dialog {
+  --custom-gold-ink: #6b5514;
+  --custom-gold-line: #eadfb9;
+  box-sizing: border-box;
+  width: min(1180px, calc(100vw - 2rem));
+  max-width: none;
+  height: calc(100vh - 2rem);
+  height: calc(100dvh - 2rem);
+  max-height: none;
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: var(--shadow-lg);
+  font-family: var(--font-body);
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+dialog.custom-dialog[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+dialog.custom-dialog::backdrop {
+  background-color: rgb(13 31 51 / 0.45);
+  backdrop-filter: blur(3px);
+}
+
+.custom-dialog *,
+.custom-dialog *::before {
+  box-sizing: border-box;
+}
+
+/* Parts are switched with the hidden attribute, also those with a display of their own */
+.custom-dialog [hidden] {
+  display: none !important;
+}
+
+.custom-dialog :focus-visible {
+  outline: 2px solid var(--rink);
+  outline-offset: 2px;
+}
+
+.custom-dialog input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  cursor: pointer;
+}
+
+.custom-dialog input[type="checkbox"]:disabled {
+  cursor: not-allowed;
+}
+
+/* Small controls */
+.custom-sbtn {
+  display: inline-block;
+  padding: 0.32rem 0.7rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.45rem;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.custom-sbtn:hover {
+  background: var(--rink-tint);
+  border-color: var(--rink);
+}
+
+.custom-sbtn[aria-pressed="true"] {
+  background: var(--ink);
+  border-color: var(--ink);
+  color: var(--paper);
+}
+
+.custom-pair {
+  display: inline-flex;
+}
+
+.custom-pair .custom-sbtn {
+  border-radius: 0;
+}
+
+.custom-pair .custom-sbtn:first-child {
+  border-radius: 0.45rem 0 0 0.45rem;
+}
+
+.custom-pair .custom-sbtn:last-child {
+  border-radius: 0 0.45rem 0.45rem 0;
+  margin-left: -1px;
+}
+
+.custom-link {
+  border: 0;
+  background: none;
+  padding: 0;
+  color: var(--rink);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.btn.custom-btn-outline:not(:disabled) {
+  background: var(--paper);
+  border-color: var(--line-strong);
+  color: var(--ink);
+  box-shadow: none;
+}
+
+.btn.custom-btn-outline:hover:not(:disabled) {
+  border-color: var(--ink);
+}
+
+.custom-dialog .btn-ghost {
+  color: var(--ink-soft);
+}
+
+.custom-dialog .btn-ghost:hover {
+  background: var(--paper-tint);
+  color: var(--ink);
+}
+
+/* Head */
+.custom-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 1rem;
+  padding: 0.95rem 1.25rem 0.8rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.custom-head h2 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+.custom-made {
+  margin-left: auto;
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+}
+
+.custom-close {
+  align-self: center;
+  width: 2rem;
+  height: 2rem;
+  margin-left: auto;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 0.45rem;
+  background: none;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.custom-made:not([hidden]) + .custom-close {
+  margin-left: 0;
+}
+
+.custom-close:hover:not(:disabled) {
+  background: var(--paper-tint);
+  color: var(--ink);
+}
+
+.custom-close:disabled {
+  color: var(--ink-faint);
+  cursor: not-allowed;
+}
+
+/* A generate warning, or a request that did not go through */
+.custom-banner {
+  padding: 0.5rem 1.25rem;
+  border-bottom: 1px solid var(--custom-gold-line);
+  background: var(--gold-tint);
+  color: var(--custom-gold-ink);
+  font-size: 0.85rem;
+}
+
+.custom-banner p {
+  margin: 0;
+}
+
+.custom-banner p + p {
+  margin-top: 0.25rem;
+}
+
+.custom-banner--error {
+  border-bottom-color: #f0cfcf;
+  background: var(--error-tint);
+  color: var(--error-color);
+}
+
+.custom-banner--error .custom-link {
+  margin-left: 0.5rem;
+  color: inherit;
+}
+
+/* The two panes */
+.custom-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(260px, 350px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+
+/* Rows shared by both panes: [twisty] tick, text, pages */
+.custom-line {
+  display: grid;
+  grid-template-columns: 22px 16px minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.5rem;
+  min-height: 2rem;
+  padding: 0.22rem 0.5rem;
+  border-radius: 6px;
+}
+
+.custom-line:hover {
+  background: var(--rink-tint);
+}
+
+.custom-txt {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 0.65rem;
+  min-width: 0;
+}
+
+.custom-lbl {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+/* Text colours in the dialog keep at least 4.5:1 on every background a row
+   can have (white, the Quick select tint, the hover tint): --ink, --ink-soft
+   and --rink do, --ink-muted does not. --ink-faint is for disabled rows only. */
+.custom-meta {
+  color: var(--ink-soft);
+  font-size: 0.77rem;
+}
+
+.custom-times {
+  color: var(--ink-soft);
+  font-size: 0.8rem;
+}
+
+.custom-t {
+  margin-right: 0.5rem;
+  color: var(--ink-soft);
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+}
+
+/* A ticked row: dark label, dark medium page count */
+.custom-pg {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* An unticked row: one step lighter, regular page count */
+.custom-line.is-off .custom-lbl {
+  color: var(--ink-soft);
+}
+
+.custom-line.is-off .custom-pg {
+  color: var(--ink-soft);
+  font-weight: 400;
+}
+
+/* A partly ticked row: its "selected / total" count in the accent colour */
+.custom-line.is-some .custom-pg {
+  color: var(--rink);
+}
+
+/* Nothing to print for this row: the only faint text, its tick is disabled */
+.custom-line.is-empty .custom-lbl,
+.custom-line.is-empty .custom-pg,
+.custom-line.is-empty .custom-t {
+  color: var(--ink-faint);
+}
+
+.custom-line.is-empty .custom-lbl {
+  cursor: default;
+}
+
+.custom-line.is-empty:hover {
+  background: none;
+}
+
+/* Quick select */
+.custom-quick {
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+  background: var(--paper-tint);
+}
+
+.custom-quick > summary {
+  display: none;
+  padding: 0.7rem 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.custom-quick-in {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 0.9rem 0.75rem 1.25rem;
+}
+
+.custom-quick .custom-line {
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+}
+
+.custom-quick .custom-line.custom-q2 {
+  padding-left: 1.75rem;
+}
+
+.custom-q-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  padding: 0 0.25rem;
+}
+
+.custom-q-last {
+  margin-top: 0.4rem;
+}
+
+.custom-q-note {
+  margin: 0.35rem 0.25rem 0;
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+}
+
+.custom-q-h {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin: 0 0.25rem 0.3rem;
+}
+
+.custom-q-h h3,
+.custom-people-head h3 {
+  margin: 0;
+  color: var(--ink-soft);
+  font-family: var(--font-body);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.custom-q-day-h {
+  margin: 0.55rem 0.5rem 0.15rem;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+
+.custom-q-day:first-child .custom-q-day-h {
+  margin-top: 0.1rem;
+}
+
+.custom-quick .custom-cat .custom-lbl {
+  font-weight: 600;
+}
+
+/* Papers by person */
+.custom-people {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.custom-people-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.custom-people-head h3 {
+  margin-right: auto;
+}
+
+.custom-search {
+  width: min(15rem, 100%);
+  padding: 0.38rem 0.65rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 0.45rem;
+  background: var(--paper);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.custom-search::placeholder {
+  color: var(--ink-soft);
+  opacity: 1;
+}
+
+.custom-tree-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 0.5rem 1rem;
+}
+
+ul.custom-tree,
+ul.custom-kids {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.custom-tw {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  cursor: pointer;
+}
+
+.custom-tw::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--ink-muted);
+  border-bottom: 2px solid var(--ink-muted);
+  transform: translateX(-2px) rotate(-45deg);
+  transition: transform 0.12s;
+}
+
+.custom-tw[aria-expanded="true"]::before {
+  transform: translateY(-2px) rotate(45deg);
+}
+
+.custom-tw:hover {
+  background: var(--line);
+}
+
+.custom-l1 { padding-left: 1.5rem; }
+.custom-l2 { padding-left: 3rem; }
+.custom-l3 { padding-left: 4.4rem; }
+
+.custom-day > .custom-line {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  padding-block: 0.45rem;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--paper);
+}
+
+.custom-day > .custom-line:hover {
+  background: var(--paper-tint);
+}
+
+.custom-day > .custom-line .custom-lbl {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 1.02rem;
+}
+
+.custom-person > .custom-line .custom-lbl {
+  font-weight: 600;
+}
+
+.custom-tree .custom-cat > .custom-line .custom-lbl {
+  font-weight: 600;
+}
+
+.custom-person > .custom-kids {
+  padding-bottom: 0.35rem;
+}
+
+.custom-empty {
+  margin: 1.5rem 1rem;
+  color: var(--ink-soft);
+}
+
+/* Footer */
+.custom-foot {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.45rem 1.25rem;
+  padding: 0.75rem 1.25rem;
+  border-top: 1px solid var(--line);
+  background: var(--paper);
+}
+
+.custom-totals {
+  color: var(--ink-soft);
+}
+
+.custom-totals b {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-size: 1.05rem;
+}
+
+.custom-lone {
+  grid-column: 1 / -1;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--custom-gold-line);
+  border-radius: 0.5rem;
+  background: var(--gold-tint);
+  color: var(--custom-gold-ink);
+  font-size: 0.85rem;
+}
+
+.custom-foot-right {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem 1rem;
+}
+
+.custom-foot-buttons {
+  display: inline-flex;
+  gap: 0.25rem;
+}
+
+.custom-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  cursor: pointer;
+}
+
+/* Preparing, an error, creating, done */
+.custom-center {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 3rem 1.5rem;
+  text-align: center;
+}
+
+.custom-center h3,
+.custom-done h3 {
+  margin: 0;
+  font-size: 1.2rem;
+}
+
+.custom-center p {
+  margin: 0;
+  max-width: 34rem;
+  color: var(--ink-soft);
+}
+
+.custom-center-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+}
+
+.custom-spin {
+  width: 1.6rem;
+  height: 1.6rem;
+  border: 3px solid var(--line-strong);
+  border-top-color: var(--rink);
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .custom-spin { animation-duration: 3s; }
+  .custom-tw::before { transition: none; }
+}
+
+.custom-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  background: rgb(255 255 255 / 0.86);
+  font-weight: 600;
+}
+
+.custom-veil:focus {
+  outline: none;
+}
+
+.custom-done {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  padding: 1.25rem;
+}
+
+.custom-done h3:focus {
+  outline: none;
+}
+
+.custom-done-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+}
+
+.custom-done-head > div:first-child {
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+.custom-done-sub {
+  margin: 0.2rem 0 0;
+  color: var(--ink-soft);
+}
+
+.custom-done-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.custom-files {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.custom-files li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: 0.7rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 0.6rem;
+  background: var(--paper-tint);
+}
+
+.custom-fname {
+  font-family: var(--font-mono);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}
+
+.custom-fdesc {
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+
+/* Narrow windows: the panes stack in one scrolling column, Quick select folds
+   (custom-dialog.ts NARROW_QUERY), the footer stays at the bottom */
+@media (max-width: 860px) {
+  .custom-body {
+    display: block;
+    overflow: auto;
+  }
+
+  .custom-quick {
+    overflow: visible;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .custom-quick > summary {
+    display: list-item;
+  }
+
+  .custom-people {
+    display: block;
+  }
+
+  .custom-tree-scroll {
+    overflow: visible;
+  }
+
+  .custom-foot {
+    grid-template-columns: minmax(0, 1fr);
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  }
+
+  .custom-foot-right {
+    justify-content: space-between;
+  }
+
+  .custom-l1 { padding-left: 0.9rem; }
+  .custom-l2 { padding-left: 1.6rem; }
+  .custom-l3 { padding-left: 2.4rem; }
+
+  .custom-made:not([hidden]) {
+    order: 3;
+    flex-basis: 100%;
+    margin-left: 0;
+  }
+
+  .custom-made:not([hidden]) + .custom-close {
+    margin-left: auto;
+  }
+}
