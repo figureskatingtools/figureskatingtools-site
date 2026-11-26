@@ -1730,6 +1730,8 @@ async function init() {
     /** How often, and for how long, the page asks for the papers of a generate request that was cut off */
     const CUT_OFF_POLL_MS = 10_000;
     const CUT_OFF_LIMIT_MS = 3 * 60_000;
+    /** The longest one of those requests may take; never past the end of the wait */
+    const CUT_OFF_REQUEST_MS = 30_000;
 
     /**
      * The generate request of Custom generate was cut (502 / 504, or no
@@ -1753,23 +1755,38 @@ async function init() {
             while (Date.now() < until) {
                 await new Promise(resolve => setTimeout(resolve, CUT_OFF_POLL_MS));
                 if (competitionId !== openedCompetitionId) break;
-                let resp: Response;
+                const left = until - Date.now();
+                if (left <= 0) break;
+                // A request that hangs must not hold the guard past the end of
+                // the wait: it is given up (headers and body) after 30 s, or
+                // when the wait is over, whichever comes first
+                const abort = new AbortController();
+                const giveUp = setTimeout(() => abort.abort(), Math.min(left, CUT_OFF_REQUEST_MS));
+                let status = 0;
+                let answer: unknown = null;
+                let text = '';
                 try {
-                    resp = await fetch(`${API_BASE}/get_papers_index`, {
+                    const resp = await fetch(`${API_BASE}/get_papers_index`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ id: competitionId, options }),
+                        signal: abort.signal,
                     });
+                    status = resp.status;
+                    if (resp.ok) answer = await resp.json();
+                    else text = (await resp.text()).trim();
                 } catch (_e) {
-                    continue;   // no answer this time either: ask again
+                    continue;   // no (whole) answer this time either: ask again while the wait lasts
+                } finally {
+                    clearTimeout(giveUp);
                 }
-                if (resp.ok) {
-                    if (parseIndexAnswer(await resp.json().catch(() => null))?.current) {
+                if (status >= 200 && status < 300) {
+                    if (parseIndexAnswer(answer)?.current) {
                         waited = { kind: 'current' };
                         break;
                     }
-                } else if ([400, 401, 403, 404, 410].includes(resp.status)) {
-                    waited = { kind: 'http', status: resp.status, text: (await resp.text().catch(() => '')).trim() };
+                } else if ([400, 401, 403, 404, 410].includes(status)) {
+                    waited = { kind: 'http', status, text };
                     break;
                 }
             }
