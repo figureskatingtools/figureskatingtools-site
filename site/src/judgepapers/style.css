@@ -790,6 +790,23 @@ dialog.confirm-dialog::backdrop {
   transition: transform 0.2s;
 }
 
+/* The arrow is a button (keyboard access to a collapsed card) that looks like the plain arrow it was */
+button.toggle-icon {
+  margin: -0.25rem;
+  padding: 0.25rem;
+  background: none;
+  border: 0;
+  border-radius: 0.25rem;
+  font-family: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+button.toggle-icon:focus-visible {
+  outline: 2px solid var(--rink);
+  outline-offset: 2px;
+}
+
 .category-content {
   padding: 1rem;
 }
@@ -894,6 +911,91 @@ dialog.confirm-dialog::backdrop {
 }
 
 .file-delete-btn:hover {
+  color: var(--error-color);
+}
+
+/* ── Missing papers: placeholder rows, segments and cards in the file list ── */
+.file-row--missing,
+.file-row--missing:hover {
+  background: var(--error-tint);
+  border: 1px dashed #e6b8b8;
+  color: #a32d2d;
+}
+
+.missing-tag {
+  margin-left: auto;
+  padding-left: 0.75rem;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--error-color);
+  white-space: nowrap;
+}
+
+/* Scheduled, not uploaded yet: a quiet note, nothing is wrong */
+.file-row--pending,
+.file-row--pending:hover {
+  background: none;
+  border: 1px dashed var(--line);
+  color: var(--ink-muted);
+}
+
+.pending-count {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  color: var(--ink-muted);
+}
+
+/* A category with no segment papers yet: neither the green nor the red edge */
+.is-pending .status-mark {
+  color: var(--ink-faint);
+}
+
+/* When a scheduled segment is skated, after its name */
+.segment-when {
+  margin-left: 0.75rem;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: var(--ink-faint);
+}
+
+.category-card--placeholder .category-title {
+  color: var(--ink-muted);
+}
+
+/* The Generate prompt: the list of what is missing, and the box to tick */
+.modal-message:has(+ #modal-extra-content .missing-list) {
+  margin-bottom: 0.75rem;
+}
+
+.missing-list {
+  margin: 0 0 1rem;
+  padding: 0.6rem 0.9rem 0.6rem 1.9rem;
+  max-height: min(40vh, 18rem);
+  overflow-y: auto;
+  background: var(--error-tint);
+  border: 1px solid #f3d6d6;
+  border-radius: 0.5rem;
+  color: #a32d2d;
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.missing-list li + li {
+  margin-top: 0.25rem;
+}
+
+.missing-override span {
+  font-weight: 600;
+}
+
+/* Why Generate is unavailable although files are uploaded */
+.generate-blocker {
+  margin: 0;
+  font-size: 0.85rem;
   color: var(--error-color);
 }
 

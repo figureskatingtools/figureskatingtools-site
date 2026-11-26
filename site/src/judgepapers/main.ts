@@ -38,7 +38,10 @@ import {
     tenantBlockedCardHtml,
     type UserInfo,
 } from '../shell.js';
-import { validateCategory, validateCompetition } from './validate';
+import {
+    CATEGORY_GENERAL_SEGMENT, cardOrder, missingReport, scheduleSegmentTitle, scheduleWhen, validateCompetition,
+} from './validate';
+import type { MissingReport, PlaceholderCategory, ScheduledSegment } from './validate';
 import { renderHelpTrigger, filesHelpHtml, judgingMethodHelpHtml, initHelp } from './help';
 import { openSendDialog, SENDABLE_FILE_RE } from './send';
 import {
@@ -198,6 +201,7 @@ appElement.innerHTML = `
                       </div>
                       <p class="generate-note">Files are grouped into categories by their file
                          names — check the listing above before generating.</p>
+                      <p id="generate-blocker" class="generate-blocker" role="status" hidden></p>
                       <button id="btn-generate" class="btn btn-primary btn-generate" disabled>
                          Generate Papers
                       </button>
@@ -418,10 +422,11 @@ function showPickCompetition() {
             <li>Select the competition in the top bar; this tool opens its workspace automatically.</li>
             <li><strong>Upload the PDF exports</strong> from <em>Figure Skating Manager</em> ${renderHelpTrigger('help-files-welcome', 'Which files do I need?', filesHelpHtml())}<br><span class="howto-caution">Export <strong>PlannedProgramContent</strong>, not <strong>PlannedProgramContentChecklist</strong> &mdash; they look similar but the Checklist won't work.</span></li>
             <li>PDFs uploaded for the same competition in another tool appear under <strong>Competition files</strong> — import them here without re-uploading.</li>
-            <li>The system validates the files, groups them into categories by their file names, and ensures all required documents are present.</li>
+            <li>The system groups the files into categories by their file names. A segment is checked once one of its files is uploaded: the files it should still have are marked missing. Segments you have not uploaded yet (a later day, or a Free Skating whose start order waits for the Short Program) are not expected.</li>
+            <li>With the competition schedule uploaded, the list also notes the scheduled segments that are not uploaded yet, and marks a category as missing when nothing of it is uploaded although its first segment is skated on a day you have uploaded papers for.</li>
             <li><strong>Check that every file sits under the right category</strong> — grouping goes by file name, so verify the listing before generating.</li>
             <li><strong>Synchronized skating:</strong> pick <strong>ISU</strong> or <strong>MUPI</strong> on the category card ${renderHelpTrigger('help-method-welcome', 'What do ISU and MUPI mean here?', judgingMethodHelpHtml())} — the default comes from the category registry, the choice applies to this competition only and decides which files are required.</li>
-            <li>Once validated, click <strong>Generate Papers</strong> to create the combined PDF booklets and ZIP archives.</li>
+            <li>Click <strong>Generate Papers</strong> to create the combined PDF booklets and ZIP archives. If something is marked missing, you are shown the list and asked to confirm first.</li>
             <li>Download the generated files using the links that appear. You can also copy the links to share them.</li>
         </ol>
         <div class="card-footnote">
@@ -760,7 +765,59 @@ async function init() {
         ticketCurrent(t, 'shareLinks') && t.access === currentAccess();
     /** When `currentCompetitionData` was fetched (epoch ms) — its download links live 15 minutes */
     let generatedFetchedAt = 0;
-    let isGlobalValid = false;
+    /** What the open competition is missing (validate.ts): the marks in the file list and the Generate prompt */
+    let missing: MissingReport = missingReport(null);
+    /** Something can be generated and nothing blocks it: Generate is enabled */
+    let canGenerate = false;
+    /** Why Generate is unavailable although files are uploaded; '' otherwise */
+    let generateBlocker = '';
+    /** Uploads, imports and deletes still running, per competition id */
+    const fileChanges = new Map<string, number>();
+    /** A generate run is going: from the press until its button is back */
+    let generating = false;
+    /**
+     * Re-reads of the file list (loadCompetitionDetails) still on their way,
+     * per competition id. Counted on their own, because canGenerate alone
+     * does not hold through one: anything that re-renders the list meanwhile
+     * (a failed settings save putting the switch back) computes it again from
+     * the old list. Per competition, so a slow request of one that is no
+     * longer open does not hold back the one that is.
+     */
+    const listLoads = new Map<string, number>();
+    /**
+     * The list on screen is what the backend would act on, and something of
+     * it can be generated. Not while the open competition's list is being
+     * re-read or its files are changing.
+     */
+    const listReady = (): boolean => {
+        const open = openedCompetitionId ?? '';
+        return canGenerate && !listLoads.get(open) && !fileChanges.get(open);
+    };
+    /** Generate may be pressed: the list is ready and no run is going */
+    const generateReady = (): boolean => listReady() && !generating;
+
+    /** The file list is about to change: no generating, and no confirming of an open prompt, on the old one */
+    function suspendGenerate() {
+        canGenerate = false;
+        generateBlocker = '';
+        if (pendingAction?.type === 'GENERATE') closeModal();
+        updateGenerateButton();
+    }
+
+    /** Run an upload, import or delete of `competition`'s files; Generate waits until it has ended */
+    async function whileFilesChange<T>(competition: string, work: () => Promise<T>): Promise<T> {
+        fileChanges.set(competition, (fileChanges.get(competition) ?? 0) + 1);
+        if (competition === openedCompetitionId && pendingAction?.type === 'GENERATE') closeModal();
+        updateGenerateButton();
+        try {
+            return await work();
+        } finally {
+            const left = (fileChanges.get(competition) ?? 1) - 1;
+            if (left > 0) fileChanges.set(competition, left);
+            else fileChanges.delete(competition);
+            updateGenerateButton();
+        }
+    }
     // Id of the competition whose "No cover page or time schedule" box is
     // checked, so the choice survives options re-renders (language switch,
     // reload after generating) but not a switch to another competition.
@@ -780,14 +837,90 @@ async function init() {
         return Number.isFinite(n) ? Math.min(Math.max(n, 1), MAX_COMBINED_COPIES) : 1;
     };
 
+    /** Shown under Generate when files are uploaded but no segment can be generated */
+    const NOTHING_TO_GENERATE = 'Nothing can be generated yet: no segment has both its panel '
+        + '(ISUPanelofJudgesandTechnicalPanel) and its time schedule (StartListwithTimes).';
+
+    /** A placeholder row in the file list for something that should be there and is not */
+    const missingRowHtml = (label: string): string => `
+        <div class="file-row file-row--missing">
+            <span class="file-name">${escapeHtml(label)}</span>
+            <span class="missing-tag">Missing</span>
+        </div>`;
+
+    /** A quiet row for something that is not uploaded yet and not expected either */
+    const pendingRowHtml = (label: string): string => `
+        <div class="file-row file-row--pending">
+            <span class="file-name">${escapeHtml(label)}</span>
+        </div>`;
+
+    /**
+     * A segment of the competition schedule that has no papers: marked missing
+     * when they should be here, otherwise a quiet note (validate.ts missingReport).
+     */
+    const scheduledSegmentHtml = ({ row, expected }: ScheduledSegment): string => {
+        const when = scheduleWhen(row);
+        return `
+            <div class="segment-block ${expected ? 'segment-block--missing' : 'segment-block--pending'}">
+                <h4 class="segment-title">${escapeHtml(scheduleSegmentTitle(row) || row.name)}${
+                    when ? ` <span class="segment-when">${escapeHtml(when)}</span>` : ''}</h4>
+                <div class="file-list">${expected ? missingRowHtml('No papers uploaded') : pendingRowHtml('Not uploaded yet')}</div>
+            </div>`;
+    };
+
+    /** How a card looks: something is missing, nothing is uploaded yet, or all is there */
+    type CardState = 'invalid' | 'pending' | 'valid';
+    const STATUS_MARKS: Record<CardState, string> = { invalid: '⚠︎', pending: '○', valid: '✓' };
+
+    /**
+     * The right end of a card header: what is missing (red), what is not
+     * uploaded yet (grey), and the arrow. The arrow is the card's disclosure
+     * button, so a card can be opened from the keyboard as well: a click
+     * anywhere on the header does the same (see the header click handler).
+     */
+    const cardTailHtml = (title: string, missingCount: number, pendingNote: string, collapsed: boolean): string => `
+        ${missingCount > 0 ? `<span class="missing-count">${missingCount} missing</span>` : ''}
+        ${pendingNote ? `<span class="pending-count">${escapeHtml(pendingNote)}</span>` : ''}
+        <button type="button" class="toggle-icon" aria-expanded="${collapsed ? 'false' : 'true'}"
+                aria-label="${escapeAttr(`Files of ${title}`)}">${collapsed ? '▾' : '▴'}</button>`;
+
+    /** A category of the competition schedule that has nothing uploaded */
+    const placeholderCardHtml = (placeholder: PlaceholderCategory): string => {
+        const missingCount = placeholder.segments.filter(segment => segment.expected).length;
+        const pendingCount = placeholder.segments.length - missingCount;
+        const state: CardState = missingCount > 0 ? 'invalid' : 'pending';
+        const collapsed = state !== 'invalid';
+        return `
+            <div class="category-card category-card--placeholder">
+                <div class="category-header is-${state}">
+                    <div class="category-head-lead">
+                         <span class="status-mark">${STATUS_MARKS[state]}</span>
+                         <span class="category-title">${escapeHtml(placeholder.title)}</span>
+                    </div>
+                    <div class="category-head-tail">
+                        ${cardTailHtml(placeholder.title, missingCount, pendingCount > 0 ? `${pendingCount} not uploaded yet` : '', collapsed)}
+                    </div>
+                </div>
+                <div class="category-content" style="display: ${collapsed ? 'none' : 'block'};">
+                    ${placeholder.segments.map(scheduledSegmentHtml).join('')}
+                </div>
+            </div>`;
+    };
+
     function renderCompetitionView() {
         const container = document.getElementById('comp-files-container');
         if (!container || !currentCompetitionData) return;
-        
-        isGlobalValid = true; // Assume true, invalidate if any issue found
-        
+
+        // The list behind an open "Papers are missing" prompt is changing, so
+        // the prompt no longer shows what Generate would act on: close it.
+        // Pressing Generate again shows the current list.
+        if (pendingAction?.type === 'GENERATE') closeModal();
+
         const structure = currentCompetitionData.structure;
         const competitionFiles = currentCompetitionData.competitionFiles || [];
+        missing = missingReport(currentCompetitionData);
+        canGenerate = false;
+        generateBlocker = '';
 
         if (Object.keys(structure).length === 0 && competitionFiles.length === 0) {
             container.innerHTML = `
@@ -796,28 +929,29 @@ async function init() {
                     <p class="empty-hint">Upload PDFs to get started.</p>
                 </div>
             `;
-            isGlobalValid = false;
             updateGenerateButton();
             return;
         }
 
         let html = '';
-        const categories = Object.keys(structure).sort();
 
-        // Check alerts
-        if (currentCompetitionData.alerts && currentCompetitionData.alerts.length > 0) {
-            isGlobalValid = false;
-        }
+        // Several competition names in the files block Generate until the
+        // wrong files are gone. Otherwise one segment that can be generated is
+        // enough: whatever is missing is marked below and asked about first,
+        // and segments that are simply not uploaded yet are nobody's concern.
+        const hasAlerts = Boolean(currentCompetitionData.alerts && currentCompetitionData.alerts.length > 0);
+        canGenerate = !hasAlerts && missing.generableSegments > 0;
+        if (!hasAlerts && !canGenerate) generateBlocker = NOTHING_TO_GENERATE;
 
-        // Competition-level validation (e.g., CompetitionSchedule required)
+        // Competition-level validation (no competition-wide file is required today)
         const compValidation = validateCompetition(competitionFiles);
         if (!compValidation.isValid) {
-            isGlobalValid = false;
+            canGenerate = false;
             html += `
                 <div class="alert-missing">
                     <h5>Missing Competition Files:</h5>
                     <ul>
-                        ${compValidation.missingFiles.map(f => `<li>${f}</li>`).join('')}
+                        ${compValidation.missingFiles.map(f => `<li>${escapeHtml(f)}</li>`).join('')}
                     </ul>
                 </div>
             `;
@@ -848,23 +982,42 @@ async function init() {
             `;
         }
 
-        for (const category of categories) {
+        // The category cards in name order. A category of the competition
+        // schedule with nothing uploaded has a placeholder card among them.
+        const cards: Array<{ title: string, placeholder?: PlaceholderCategory }> = [
+            ...Object.keys(structure).map(title => ({ title })),
+            ...missing.placeholders.map(placeholder => ({ title: placeholder.title, placeholder })),
+        ];
+        cards.sort(cardOrder);
+
+        for (const card of cards) {
+            if (card.placeholder) {
+                html += placeholderCardHtml(card.placeholder);
+                continue;
+            }
+            const category = card.title;
             const segments = structure[category];
             // System is always ISU for Figure Skating now.
             // 'Uncategorized' holds files with an unrecognized category prefix —
-            // show them so the user can delete them, but don't demand the
-            // standard file set or block Generate on them.
-            const validation = category === 'Uncategorized'
-                ? { isValid: true, missingFiles: [] as string[] }
-                : validateCategory(segments);
-            
-            if (!validation.isValid) {
-                isGlobalValid = false;
-            }
-            
-            const validityClass = validation.isValid ? 'is-valid' : 'is-invalid';
-            const statusIcon = validation.isValid ? '✓' : '⚠︎';
-            const isCollapsed = validation.isValid;
+            // show them so the user can delete them; nothing is expected of
+            // them, so the report has no entry for that card.
+            const check = missing.categories[category];
+            // Segments of the competition schedule with no papers at all:
+            // missing ones, and quiet "not uploaded yet" notes
+            const scheduled = missing.scheduled[category] ?? [];
+            const missingCount = missing.counts[category] ?? 0;
+            const pendingCount = missing.pending[category] ?? 0;
+            // Only the calculation setup is here: nothing to check yet, and
+            // nothing to generate, so neither a warning nor a green check
+            const noPapersYet = Boolean(check?.noSegmentPapers);
+            const state: CardState = missingCount > 0 ? 'invalid' : noPapersYet ? 'pending' : 'valid';
+            const pendingNote = pendingCount > 0 ? `${pendingCount} not uploaded yet`
+                : noPapersYet && scheduled.length === 0 ? 'no segment papers yet' : '';
+
+            const validityClass = `is-${state}`;
+            const statusIcon = STATUS_MARKS[state];
+            // Only a card with something missing opens by itself
+            const isCollapsed = state !== 'invalid';
 
             // Check for competition name conflict
             let catCompNameHtml = '';
@@ -916,7 +1069,7 @@ async function init() {
             html += `
                 <div class="category-card">
                     <!-- Header -->
-                    <div class="category-header ${validityClass}" data-category="${category}">
+                    <div class="category-header ${validityClass}" data-category="${escapeAttr(category)}">
                         <div class="category-head-lead">
                              <span class="status-mark">${statusIcon}</span>
                              <span class="category-title">${escapeHtml(displayCategory)}</span>
@@ -924,31 +1077,27 @@ async function init() {
                              ${catCompNameHtml}
                         </div>
                         <div class="category-head-tail">
-                            ${ validation.missingFiles.length > 0 ? `<span class="missing-count">${validation.missingFiles.length} missing</span>` : '' }
-                            <span class="toggle-icon">${isCollapsed ? '▾' : '▴'}</span>
+                            ${cardTailHtml(displayCategory, missingCount, pendingNote, isCollapsed)}
                         </div>
                     </div>
 
-                    <!-- Content -->
-                    <div class="category-content" id="content-${category.replace(/\s+/g, '-')}" style="display: ${isCollapsed ? 'none' : 'block'};">
-
-                        <!-- Missing Files Warning -->
-                        ${!validation.isValid ? `
-                            <div class="alert-missing">
-                                <h5>Missing Files:</h5>
-                                <ul>
-                                    ${validation.missingFiles.map(f => `<li>${f}</li>`).join('')}
-                                </ul>
-                            </div>
-                        ` : ''}
-
-                        <!-- Segments -->
+                    <!-- Content: every missing thing is a marked row where it belongs -->
+                    <div class="category-content" id="content-${escapeAttr(category.replace(/\s+/g, '-'))}" style="display: ${isCollapsed ? 'none' : 'block'};">
             `;
+
+            // Only the calculation setup is uploaded, and the schedule names no
+            // segment of this category: say it in general terms.
+            if (noPapersYet && scheduled.length === 0) {
+                html += `
+                    <div class="segment-block segment-block--pending">
+                        <div class="file-list">${pendingRowHtml('No segment papers uploaded yet')}</div>
+                    </div>`;
+            }
 
             for (const [segment, files] of Object.entries(segments as any)) {
                 html += `
                     <div class="segment-block">
-                        <h4 class="segment-title">${segment}</h4>
+                        <h4 class="segment-title">${escapeHtml(segment)}</h4>
                         <div class="file-list">
                 `;
 
@@ -962,9 +1111,23 @@ async function init() {
                     `;
                 });
 
+                // The files this segment should have and does not
+                html += (check?.missingBySegment[segment] ?? []).map(missingRowHtml).join('');
+
                 html += `</div></div>`;
             }
-            
+
+            // The calculation setup, expected once per category
+            if (check && check.missingCategoryFiles.length > 0) {
+                html += `
+                    <div class="segment-block segment-block--missing">
+                        <h4 class="segment-title">${escapeHtml(CATEGORY_GENERAL_SEGMENT)}</h4>
+                        <div class="file-list">${check.missingCategoryFiles.map(missingRowHtml).join('')}</div>
+                    </div>`;
+            }
+
+            html += scheduled.map(scheduledSegmentHtml).join('');
+
             html += `</div></div>`; // Close category-content and outer div
         }
         
@@ -995,23 +1158,24 @@ async function init() {
             });
         });
 
-        // Header click logic
-        document.querySelectorAll('.category-header').forEach(header => {
+        // Header click logic: the card's content follows its header. Enter and
+        // Space on the arrow button arrive here as its click, bubbling up.
+        document.querySelectorAll('.category-header:not(.category-header--static)').forEach(header => {
             header.addEventListener('click', (e) => {
                 // The judging-method switch and its help popover live inside the
                 // header; interacting with them must not collapse the card.
                 if ((e.target as HTMLElement).closest('.method-switch, .help-wrap')) return;
-                const cat = (e.currentTarget as HTMLElement).getAttribute('data-category');
-                if (cat) {
-                     const content = document.getElementById(`content-${cat.replace(/\s+/g, '-')}`);
-                     if (content) {
-                         const isHidden = content.style.display === 'none';
-                         content.style.display = isHidden ? 'block' : 'none';
-                         
-                         // Update arrow
-                         const arrow = (e.currentTarget as HTMLElement).querySelector('.toggle-icon');
-                         if(arrow) arrow.textContent = isHidden ? '▴' : '▾';
-                     }
+                const head = e.currentTarget as HTMLElement;
+                const content = head.nextElementSibling as HTMLElement | null;
+                if (!content || !content.classList.contains('category-content')) return;
+                const isHidden = content.style.display === 'none';
+                content.style.display = isHidden ? 'block' : 'none';
+
+                // Update the arrow, and what it tells a screen reader
+                const arrow = head.querySelector('.toggle-icon');
+                if (arrow) {
+                    arrow.textContent = isHidden ? '▴' : '▾';
+                    arrow.setAttribute('aria-expanded', isHidden ? 'true' : 'false');
                 }
             });
         });
@@ -1022,7 +1186,13 @@ async function init() {
     function updateGenerateButton() {
         const btn = document.getElementById('btn-generate') as HTMLButtonElement;
         if (btn) {
-            btn.disabled = !isGlobalValid;
+            btn.disabled = !generateReady();
+        }
+        // Files are there, but nothing could be generated from them: say why
+        const blocker = document.getElementById('generate-blocker');
+        if (blocker) {
+            blocker.textContent = generateBlocker;
+            blocker.hidden = generateBlocker === '';
         }
     }
 
@@ -1307,14 +1477,38 @@ async function init() {
         return at >= 0 ? text.slice(at + 1).trim() : null;
     }
 
-    // Generate Handler
-    document.getElementById('btn-generate')?.addEventListener('click', async () => {
-        if (!currentCompetitionData || !isGlobalValid) return;
-        // The competition the user pressed Generate in, whatever is open later
-        const generateFor: string = currentCompetitionData.id;
-        
+    // Generate: straight away when nothing is missing. Otherwise the prompt
+    // first, and only its confirm with "Generate anyway" ticked goes on.
+    document.getElementById('btn-generate')?.addEventListener('click', () => {
+        if (!currentCompetitionData || !generateReady()) return;
+        if (missing.count > 0) {
+            openGenerateModal(currentCompetitionData.id, missing.lines);
+            return;
+        }
+        void runGenerate(currentCompetitionData.id, []);
+    });
+
+    /**
+     * Generate the papers of `generateFor`: the competition Generate was
+     * pressed in, whatever is open later. `accepted` is the list of missing
+     * papers the user was shown and accepted (empty when nothing was missing);
+     * the run goes on only while that is still what is missing.
+     */
+    async function runGenerate(generateFor: string, accepted: string[]) {
+        if (!currentCompetitionData || currentCompetitionData.id !== generateFor || !generateReady()) return;
+        // One run at a time: a re-render during the run (an ISU/MUPI switch,
+        // a reload) must not hand the button back.
+        generating = true;
+
         const btn = document.getElementById('btn-generate') as HTMLButtonElement;
         const originalText = 'Generate Papers';
+        /** Every way out of the run: the button is back, in whatever state the list allows */
+        const endRun = () => {
+            btn.innerHTML = originalText;
+            btn.classList.remove('btn-success');
+            generating = false;
+            updateGenerateButton();
+        };
         
         // Start Loading
         btn.disabled = true;
@@ -1375,8 +1569,17 @@ async function init() {
                 // dropped, so this run would not be what the user saw. Send nothing.
                 showNotice('Papers not generated', 'Another competition was opened before the papers '
                     + 'were generated. Open the competition again and generate once more.');
-                btn.innerHTML = originalText;
-                btn.disabled = false;
+                endRun();
+                return;
+            }
+            // A change that was still saving may have been taken back (a failed
+            // ISU/MUPI switch brings its missing sheets back), or the files
+            // changed: generate only what the user saw and accepted.
+            // (listReady, not generateReady: this run is the one that is going.)
+            if (!listReady() || missing.lines.join('\n') !== accepted.join('\n')) {
+                showNotice('Papers not generated', 'The files or settings of the competition changed before '
+                    + 'the papers were generated. Check the file list and generate once more.');
+                endRun();
                 return;
             }
             const resp = await fetch(`${API_BASE}/generate_judging_papers`, {
@@ -1401,9 +1604,7 @@ async function init() {
                  btn.classList.add('btn-success');
                  
                  setTimeout(() => {
-                     btn.innerHTML = originalText;
-                     btn.classList.remove('btn-success');
-                     btn.disabled = false;
+                     endRun();
                      if (generateFor === openedCompetitionId) loadCompetitionDetails(generateFor);
                  }, 3000);
             } else {
@@ -1413,15 +1614,13 @@ async function init() {
                     ? escapeHtml(refusal)
                     : `An error occurred while generating papers:<br><br>${escapeHtml(errText)}`);
                 // Reset immediately on error
-                btn.innerHTML = originalText;
-                btn.disabled = false; 
+                endRun();
             }
         } catch (_e) {
             showNotice('Generation Error', 'Network error or server unreachable.');
-            btn.innerHTML = originalText;
-            btn.disabled = false;
+            endRun();
         }
-    });
+    }
 
     // Global handler
     (window as any).promptDeleteFile = (filename: string) => {
@@ -1433,6 +1632,9 @@ async function init() {
         // A reload queued by an upload, import or generate of a competition that
         // is no longer open: the open one must not be touched.
         if (id !== openedCompetitionId) return;
+        // Until the new list is rendered (renderCompetitionView), nothing on
+        // screen says what Generate would act on.
+        suspendGenerate();
         const container = document.getElementById('comp-files-container')!;
         container.innerHTML = '<p class="text-muted">Scanning files...</p>';
 
@@ -1440,6 +1642,7 @@ async function init() {
         const ticket = issueDetailsTicket(id, ['full', 'generated', 'shareLinks']);
         // Settings state when the request leaves (see settingsRevision)
         const settingsAtIssue = { revision: settingsRevision, pending: pendingSettingsSaves > 0 };
+        listLoads.set(id, (listLoads.get(id) ?? 0) + 1);
         try {
             const resp = await fetch(`${API_BASE}/get_competition_details?id=${encodeURIComponent(id)}`);
             if (!resp.ok) throw new Error('Failed to load details');
@@ -1525,6 +1728,12 @@ async function init() {
 
         } catch (_e) {
             if (ticketCurrent(ticket, 'full')) container.innerHTML = '<p class="text-error">Error loading files.</p>';
+        } finally {
+            // Superseded, failed or rendered: this re-read no longer holds Generate back
+            const left = (listLoads.get(id) ?? 1) - 1;
+            if (left > 0) listLoads.set(id, left);
+            else listLoads.delete(id);
+            updateGenerateButton();
         }
     }
 
@@ -1689,6 +1898,23 @@ async function init() {
      * download links and re-render only the generated papers list. Null when the
      * fetch failed or `id` is not (or no longer) the open competition.
      */
+    /**
+     * A details response for `id` came in on a refresh that renders only the
+     * generated papers or the links. If it says the backend has just replaced
+     * source files with newer ones from the pool, tell the operator and
+     * re-read the file list: the list (and the missing report) on screen is
+     * no longer what Generate would act on. For every response of the
+     * still-open competition, superseded or not: a later response does not
+     * mention files that are already copied.
+     */
+    function noteSourceFiles(id: string, data: any) {
+        if (openedCompetitionId !== id) return;
+        reportPoolRefresh(data?.refreshedFromPool);
+        if (Array.isArray(data?.refreshedFromPool) && data.refreshedFromPool.length > 0) {
+            void loadCompetitionDetails(id);
+        }
+    }
+
     async function refreshGeneratedFiles(id: string): Promise<GeneratedPaperFile[] | null> {
         if (openedCompetitionId !== id || currentCompetitionData?.id !== id) return null;
         const ticket = issueDetailsTicket(id, ['generated', 'shareLinks']);
@@ -1698,13 +1924,13 @@ async function init() {
         if (openedCompetitionId !== id || currentCompetitionData?.id !== id) return null;
         const files: GeneratedPaperFile[] = data.generatedFiles || [];
         if (ticketCurrent(ticket, 'generated')) {
-            // The backend may have re-pulled pool files on this call too
-            reportPoolRefresh(data.refreshedFromPool);
             currentCompetitionData.generatedFiles = files;
             generatedFetchedAt = Date.now();
             renderGeneratedFiles(files);
         }
         if (shareLinksTicketCurrent(ticket)) renderShareLinks(data.shareLinks, id);
+        // The backend may have re-pulled pool files on this call too
+        noteSourceFiles(id, data);
         // The caller wants a fresh link of this competition: still valid even
         // when a newer request renders the list.
         return files;
@@ -1722,9 +1948,9 @@ async function init() {
             const resp = await fetch(`${API_BASE}/get_competition_details?id=${encodeURIComponent(id)}`);
             if (!resp.ok) return;
             const data = await resp.json();
-            if (!shareLinksTicketCurrent(ticket)) return;   // superseded, or the role/competition changed
-            reportPoolRefresh(data.refreshedFromPool);
-            renderShareLinks(data.shareLinks, id);
+            // Superseded, or the role changed: the links are not this response's to render
+            if (shareLinksTicketCurrent(ticket)) renderShareLinks(data.shareLinks, id);
+            noteSourceFiles(id, data);
         } catch (_e) {
             // The list just stays as it was; the next load shows the change.
         }
@@ -2197,32 +2423,40 @@ async function init() {
             btn.disabled = true;
             btn.textContent = 'Importing…';
 
-            let failed = 0;
-            for (const { name, source } of chosen) {
-                try {
-                    const resp = await fetch(
-                        `${API_BASE}/import_platform_file?competition=${encodeURIComponent(competitionId)}`
-                        + `&name=${encodeURIComponent(name)}&source=${encodeURIComponent(source)}`,
-                        { method: 'POST' });
-                    if (!resp.ok) {
+            // Generate waits until the imports have ended and the list is back
+            await whileFilesChange(competitionId, async () => {
+                let failed = 0;
+                for (const { name, source } of chosen) {
+                    try {
+                        const resp = await fetch(
+                            `${API_BASE}/import_platform_file?competition=${encodeURIComponent(competitionId)}`
+                            + `&name=${encodeURIComponent(name)}&source=${encodeURIComponent(source)}`,
+                            { method: 'POST' });
+                        if (!resp.ok) {
+                            failed++;
+                            if (resp.status === 503 || resp.status === 409) { poolDisabled = true; break; }
+                        }
+                    } catch (_e) {
                         failed++;
-                        if (resp.status === 503 || resp.status === 409) { poolDisabled = true; break; }
                     }
-                } catch (_e) {
-                    failed++;
                 }
-            }
 
-            const statusEl = document.getElementById('upload-status');
-            if (statusEl) {
-                statusEl.innerHTML = `<span style="color: var(--success-color);">Imported ${chosen.length - failed} file(s).</span>`
-                    + (failed ? ` <span style="color: var(--error-color);">Failed: ${failed}</span>` : '');
-            }
-            await loadCompetitionDetails(competitionId);
+                const statusEl = document.getElementById('upload-status');
+                if (statusEl) {
+                    statusEl.innerHTML = `<span style="color: var(--success-color);">Imported ${chosen.length - failed} file(s).</span>`
+                        + (failed ? ` <span style="color: var(--error-color);">Failed: ${failed}</span>` : '');
+                }
+                await loadCompetitionDetails(competitionId);
+            });
         });
     }
 
-    async function handleFiles(files: FileList, competitionId: string) {
+    /** Upload the dropped or picked files; Generate waits until the uploads have ended and the list is re-read */
+    function handleFiles(files: FileList, competitionId: string): Promise<void> {
+        return whileFilesChange(competitionId, () => uploadFiles(files, competitionId));
+    }
+
+    async function uploadFiles(files: FileList, competitionId: string) {
         const statusEl = document.getElementById('upload-status')!;
         let successCount = 0;
         let errors: string[] = [];
@@ -2261,6 +2495,7 @@ async function init() {
         statusEl.innerHTML = msg;
         
         if (successCount > 0) {
+             // Not awaited, but it takes Generate away before this returns
              loadCompetitionDetails(competitionId);
         }
     }
@@ -2351,7 +2586,10 @@ async function init() {
     type ModalAction =
         | { type: 'FILE', filename: string, competition: string }
         | { type: 'LINK', linkId: string, competition: string }
-        | { type: 'TRAINEE', trainee: Trainee, competition: string };
+        | { type: 'TRAINEE', trainee: Trainee, competition: string }
+        // Not a request of its own: confirming starts the generate run for
+        // the missing papers the prompt listed
+        | { type: 'GENERATE', competition: string, lines: string[] };
 
     let pendingAction: ModalAction | null = null;
     /** A delete/revoke request is running: the dialog stays open until it ends */
@@ -2398,6 +2636,7 @@ async function init() {
     });
     modalDialog.addEventListener('close', () => {
         pendingAction = null;
+        modalExtra.innerHTML = '';                // the Generate prompt's list and box
         modalCancel.classList.remove('hidden');   // the error variant hides it
         let target = modalReturnFocus;
         modalReturnFocus = null;
@@ -2436,6 +2675,38 @@ async function init() {
         modalConfirm.classList.remove('btn-primary');
         modalConfirm.classList.add('btn-danger');
         modalConfirm.disabled = false;
+
+        showModal(modalCancel);
+    }
+
+    /**
+     * "Papers are missing": what is missing, and a box that has to be ticked
+     * before the papers are generated without it. Nothing is remembered:
+     * every press of Generate asks again, with the list as it is then.
+     */
+    function openGenerateModal(competition: string, lines: string[]) {
+        pendingAction = { type: 'GENERATE', competition, lines };
+        modalTitle.textContent = 'Papers are missing';
+        modalMessage.textContent = 'These papers are missing. If you generate now, the packets are made without them:';
+        modalExtra.innerHTML = `
+            <ul class="missing-list" tabindex="0" aria-label="Missing papers">
+                ${lines.map(line => `<li>${escapeHtml(line)}</li>`).join('')}
+            </ul>
+            <label class="option-check missing-override">
+                <input type="checkbox" id="generate-override">
+                <span>Generate anyway, without the missing papers</span>
+            </label>`;
+
+        modalCancel.classList.remove('hidden');
+        modalCancel.disabled = false;
+        modalConfirm.textContent = 'Generate Papers';
+        modalConfirm.classList.remove('btn-danger');
+        modalConfirm.classList.add('btn-primary');
+        modalConfirm.disabled = true;   // until the box is ticked
+        const override = modalExtra.querySelector<HTMLInputElement>('#generate-override')!;
+        override.addEventListener('change', () => {
+            if (pendingAction?.type === 'GENERATE') modalConfirm.disabled = !override.checked;
+        });
 
         showModal(modalCancel);
     }
@@ -2512,6 +2783,13 @@ async function init() {
             closeModal();
             return;
         }
+        if (action.type === 'GENERATE') {
+            // Only with the box ticked (the button is disabled until then)
+            if (!modalExtra.querySelector<HTMLInputElement>('#generate-override')?.checked) return;
+            closeModal();
+            void runGenerate(action.competition, action.lines);
+            return;
+        }
 
         const btn = modalConfirm;
         const originalText = btn.textContent;
@@ -2552,16 +2830,20 @@ async function init() {
 
             btn.textContent = 'Deleting...';
             try {
-                const resp = await fetch(`${API_BASE}/delete_file?competition=${encodeURIComponent(action.competition)}&filename=${encodeURIComponent(action.filename)}`, {
-                    method: 'DELETE'
+                // Generate waits until the file is gone (the dialog can be closed
+                // mid-request) and the reload below has taken the old list away
+                await whileFilesChange(action.competition, async () => {
+                    const resp = await fetch(`${API_BASE}/delete_file?competition=${encodeURIComponent(action.competition)}&filename=${encodeURIComponent(action.filename)}`, {
+                        method: 'DELETE'
+                    });
+                    if (resp.ok) {
+                        modalBusy = false;
+                        closeIfOurs();
+                        if (action.competition === openedCompetitionId) loadCompetitionDetails(action.competition);
+                    } else {
+                        alert(readOnlyRefusal(resp.status, await resp.text()) ?? 'Failed to delete file.');
+                    }
                 });
-                if (resp.ok) {
-                    modalBusy = false;
-                    closeIfOurs();
-                    if (action.competition === openedCompetitionId) loadCompetitionDetails(action.competition);
-                } else {
-                    alert(readOnlyRefusal(resp.status, await resp.text()) ?? 'Failed to delete file.');
-                }
             } catch (_error) {
                 alert('Error deleting item');
             }

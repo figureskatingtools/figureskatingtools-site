@@ -78,6 +78,7 @@ Leave `DEV_FAKE_USER` unset to see the public landing page. See [server/README.m
 
 ```bash
 npm test --workspace=@figureskatingtools/shared-ui         # vitest
+npm test --workspace=site                                  # vitest: the pages' pure rule modules (site/test/)
 node --test server/*.test.js                               # router
 cd infra/functions && uv run --with-requirements requirements.txt \
   --with-requirements requirements-dev.txt python -m pytest tests -q   # platform API
