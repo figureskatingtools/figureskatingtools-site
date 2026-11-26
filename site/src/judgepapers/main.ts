@@ -776,19 +776,23 @@ async function init() {
     /** A generate run is going: from the press until its button is back */
     let generating = false;
     /**
-     * Re-reads of the file list (loadCompetitionDetails) still on their way.
-     * Counted on their own, because canGenerate alone does not hold through
-     * one: anything that re-renders the list meanwhile (a failed settings
-     * save putting the switch back) computes it again from the old list.
+     * Re-reads of the file list (loadCompetitionDetails) still on their way,
+     * per competition id. Counted on their own, because canGenerate alone
+     * does not hold through one: anything that re-renders the list meanwhile
+     * (a failed settings save putting the switch back) computes it again from
+     * the old list. Per competition, so a slow request of one that is no
+     * longer open does not hold back the one that is.
      */
-    let listLoads = 0;
+    const listLoads = new Map<string, number>();
     /**
      * The list on screen is what the backend would act on, and something of
-     * it can be generated. Not while the list is being re-read or while files
-     * of the open competition are changing.
+     * it can be generated. Not while the open competition's list is being
+     * re-read or its files are changing.
      */
-    const listReady = (): boolean =>
-        canGenerate && listLoads === 0 && !fileChanges.get(openedCompetitionId ?? '');
+    const listReady = (): boolean => {
+        const open = openedCompetitionId ?? '';
+        return canGenerate && !listLoads.get(open) && !fileChanges.get(open);
+    };
     /** Generate may be pressed: the list is ready and no run is going */
     const generateReady = (): boolean => listReady() && !generating;
 
@@ -1638,7 +1642,7 @@ async function init() {
         const ticket = issueDetailsTicket(id, ['full', 'generated', 'shareLinks']);
         // Settings state when the request leaves (see settingsRevision)
         const settingsAtIssue = { revision: settingsRevision, pending: pendingSettingsSaves > 0 };
-        listLoads += 1;
+        listLoads.set(id, (listLoads.get(id) ?? 0) + 1);
         try {
             const resp = await fetch(`${API_BASE}/get_competition_details?id=${encodeURIComponent(id)}`);
             if (!resp.ok) throw new Error('Failed to load details');
@@ -1726,7 +1730,9 @@ async function init() {
             if (ticketCurrent(ticket, 'full')) container.innerHTML = '<p class="text-error">Error loading files.</p>';
         } finally {
             // Superseded, failed or rendered: this re-read no longer holds Generate back
-            listLoads -= 1;
+            const left = (listLoads.get(id) ?? 1) - 1;
+            if (left > 0) listLoads.set(id, left);
+            else listLoads.delete(id);
             updateGenerateButton();
         }
     }
