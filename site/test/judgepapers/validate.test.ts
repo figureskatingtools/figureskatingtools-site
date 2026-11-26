@@ -1,8 +1,9 @@
 /**
  * Unit tests for the Judge Paper Creator's missing-papers rules
  * (`site/src/judgepapers/validate.ts`): which files a segment is expected to
- * have, which scheduled segments have no papers, and what the file list and
- * the Generate prompt are told about it.
+ * have once it has any, which scheduled segments are merely not uploaded yet
+ * and which are missing, and what the file list and the Generate prompt are
+ * told about it.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -110,11 +111,20 @@ describe('validateCategory', () => {
     expect(check.isValid).toBe(false);
   });
 
-  it('marks a category with only its calculation setup (#84)', () => {
+  it('expects nothing of a category with only its calculation setup, and says so', () => {
     const check = validateCategory({ 'Category General': SETUP });
     expect(check.noSegmentPapers).toBe(true);
-    expect(check.isValid).toBe(false);
-    expect(check.missingCount).toBe(1);
+    expect(check.isValid).toBe(true);
+    expect(check.missingCount).toBe(0);
+  });
+
+  it('checks only the segments that have a file: one segment is a whole category', () => {
+    // No Short Program anywhere, and nothing says there should be one
+    const check = validateCategory({
+      'Free Skating': files('Free Skating', ISU_SET),
+      'Category General': SETUP,
+    });
+    expect(check).toMatchObject({ isValid: true, missingBySegment: {}, missingCount: 0 });
   });
 
   it('has nothing to say about files whose segment is unknown', () => {
@@ -243,6 +253,7 @@ describe('missingReport', () => {
     expect(report.placeholders).toEqual([]);
     expect(report.generableSegments).toBe(1);
     expect(report.counts).toEqual({ 'JUNIORI Naiset': 0 });
+    expect(report.pending).toEqual({ 'JUNIORI Naiset': 0 });
   });
 
   it('works without a scheduleCheck key (an older backend)', () => {
@@ -273,54 +284,104 @@ describe('missingReport', () => {
     expect(report.generableSegments).toBe(1);
   });
 
-  it('puts a scheduled segment without papers in its category card', () => {
+  /** A segment of another category whose papers are uploaded: its day is being prepared */
+  const found = (over: Partial<ScheduleRow> = {}): ScheduleRow => scheduleRow({
+    name: 'JUNIORI Naiset Short Program', segment: 'Short Program', status: 'found',
+    prefix: 'PREFIX-Short Program', categoryKey: 'JUNIORI Naiset', date: '2026-09-12', startTime: '10:00', ...over,
+  });
+  const flags = (segments: Array<{ row: ScheduleRow, expected: boolean }>): Array<[string, boolean]> =>
+    segments.map(s => [s.row.segment, s.expected]);
+
+  it('notes a later segment of an uploaded category without calling it missing', () => {
     const report = missingReport({
       structure: complete,
       scheduleCheck: {
         rows: [
-          scheduleRow({ name: 'JUNIORI Naiset Short Program', segment: 'Short Program', status: 'found',
-                        prefix: 'PREFIX-Short Program', categoryKey: 'JUNIORI Naiset' }),
-          scheduleRow({ categoryKey: 'JUNIORI Naiset' }),
+          found(),
+          // Same day as the uploaded Short Program, and still not expected
+          scheduleRow({ categoryKey: 'JUNIORI Naiset', date: '2026-09-12', startTime: '17:00' }),
           scheduleRow({ name: 'JUNIORI Miehet Free Skating', category: 'JUNIORI Miehet', status: 'notNeeded', entries: 0 }),
         ],
       },
     });
-    expect(report.scheduled['JUNIORI Naiset'].map(r => r.segment)).toEqual(['Free Skating']);
+    expect(flags(report.scheduled['JUNIORI Naiset'])).toEqual([['Free Skating', false]]);
     expect(report.placeholders).toEqual([]);
-    expect(report.counts).toEqual({ 'JUNIORI Naiset': 1 });
-    expect(report.count).toBe(1);
-    expect(report.lines).toEqual([
-      'JUNIORI Naiset, Free Skating (Sun 13.9. 12:10, 26 entries): no papers uploaded',
-    ]);
+    expect(report.counts).toEqual({ 'JUNIORI Naiset': 0 });
+    expect(report.pending).toEqual({ 'JUNIORI Naiset': 1 });
+    expect(report.categories['JUNIORI Naiset'].isValid).toBe(true);
+    expect(report.count).toBe(0);
+    expect(report.lines).toEqual([]);
   });
 
-  it('gives a scheduled category with nothing uploaded a card of its own', () => {
+  it('marks the first segment of a forgotten category on a day that has papers (#84)', () => {
     const report = missingReport({
       structure: complete,
       scheduleCheck: {
         rows: [
-          scheduleRow({ date: '2026-09-11', startTime: '16:00', entries: 11,
-                        name: 'DEBYTANTTI Tytöt Free Skating', category: 'DEBYTANTTI Tytöt' }),
-          scheduleRow({ date: '2026-09-12', startTime: '9:00', entries: 11,
+          found(),
+          scheduleRow({ date: '2026-09-12', startTime: '16:00', entries: 11,
                         name: 'DEBYTANTTI Tytöt Short Program', category: 'DEBYTANTTI Tytöt', segment: 'Short Program' }),
+          // Its Free Skating waits for the result: quiet, even on that same day
+          scheduleRow({ date: '2026-09-12', startTime: '19:00', entries: 11,
+                        name: 'DEBYTANTTI Tytöt Free Skating', category: 'DEBYTANTTI Tytöt' }),
+        ],
+      },
+    });
+    expect(report.placeholders.map(p => [p.title, flags(p.segments)])).toEqual([
+      ['DEBYTANTTI Tytöt', [['Short Program', true], ['Free Skating', false]]],
+    ]);
+    expect(report.count).toBe(1);
+    expect(report.lines).toEqual([
+      'DEBYTANTTI Tytöt, Short Program (Sat 12.9. 16:00, 11 entries): no papers uploaded',
+    ]);
+  });
+
+  it('takes the first segment by day and start time, not by its place in the schedule list', () => {
+    const report = missingReport({
+      structure: complete,
+      scheduleCheck: {
+        rows: [
+          found(),
+          scheduleRow({ date: '2026-09-13', startTime: '9:00', name: 'SENIORI Naiset Free Skating', category: 'SENIORI Naiset' }),
+          scheduleRow({ date: '2026-09-12', startTime: '18:30', name: 'SENIORI Naiset Rhythm', category: 'SENIORI Naiset', segment: 'Rhythm' }),
+          scheduleRow({ date: '2026-09-12', startTime: '8:15', name: 'SENIORI Naiset Short Program', category: 'SENIORI Naiset', segment: 'Short Program' }),
+        ],
+      },
+    });
+    expect(flags(report.placeholders[0].segments)).toEqual([
+      ['Free Skating', false], ['Rhythm', false], ['Short Program', true],
+    ]);
+  });
+
+  it('leaves a category alone when it starts on a day nothing is uploaded for', () => {
+    const report = missingReport({
+      structure: complete,
+      scheduleCheck: {
+        rows: [
+          found(),
+          // Day 2 only: its papers are made during day 1
+          scheduleRow({ name: 'SENIORI Naiset Free Skating', category: 'SENIORI Naiset', date: '2026-09-13' }),
           // A card the schedule points at that is not in the list: its own placeholder
-          scheduleRow({ name: 'SENIORI Naiset Free Skating', category: 'SENIORI Naiset', categoryKey: 'Gone' }),
-          // Text that could not be split into category and segment
+          scheduleRow({ name: 'NOVIISI Tytöt Free Skating', category: 'NOVIISI Tytöt', categoryKey: 'Gone', date: '2026-09-13' }),
+          // Text that could not be split into category and segment, and no day
           scheduleRow({ name: 'Gaala Näytös', category: '', segment: 'Gaala Näytös', date: null, startTime: null, entries: 3 }),
         ],
       },
     });
-    expect(report.placeholders.map(p => [p.title, p.rows.length])).toEqual([
-      ['DEBYTANTTI Tytöt', 2], ['SENIORI Naiset', 1], ['Gaala Näytös', 1],
+    expect(report.placeholders.map(p => [p.title, p.segments.map(s => s.expected)])).toEqual([
+      ['SENIORI Naiset', [false]], ['NOVIISI Tytöt', [false]], ['Gaala Näytös', [false]],
     ]);
-    expect(report.count).toBe(4);
-    // In the order of the file list: by card title
-    expect(report.lines).toEqual([
-      'DEBYTANTTI Tytöt, Free Skating (Fri 11.9. 16:00, 11 entries): no papers uploaded',
-      'DEBYTANTTI Tytöt, Short Program (Sat 12.9. 9:00, 11 entries): no papers uploaded',
-      'Gaala Näytös (3 entries): no papers uploaded',
-      'SENIORI Naiset, Free Skating (Sun 13.9. 12:10, 26 entries): no papers uploaded',
-    ]);
+    expect(report.count).toBe(0);
+    expect(report.lines).toEqual([]);
+  });
+
+  it('expects nothing from the schedule while no segment at all is uploaded', () => {
+    const report = missingReport({
+      structure: {},
+      scheduleCheck: { rows: [scheduleRow({}), scheduleRow({ name: 'SENIORI Naiset Free Skating', category: 'SENIORI Naiset' })] },
+    });
+    expect(report.placeholders.flatMap(p => p.segments.map(s => s.expected))).toEqual([false, false]);
+    expect(report.count).toBe(0);
   });
 
   it('lists cards and placeholder cards in one order', () => {
@@ -330,9 +391,11 @@ describe('missingReport', () => {
         'D-category': { 'Category General': SETUP },
       },
       scheduleCheck: { rows: [
+        found({ name: 'B-category Short Program', category: 'B-category', categoryKey: 'B-category', date: '2026-09-13' }),
         scheduleRow({ name: 'E-category Free Skating', category: 'E-category' }),
         scheduleRow({ name: 'A-category Free Skating', category: 'A-category' }),
         scheduleRow({ name: 'C-category Free Skating', category: 'C-category' }),
+        scheduleRow({ name: 'D-category Free Skating', category: 'D-category', categoryKey: 'D-category' }),
       ] },
     });
     expect(report.lines.map(line => line.slice(0, 10))).toEqual([
@@ -341,23 +404,33 @@ describe('missingReport', () => {
     expect(report.count).toBe(5);
   });
 
-  it('counts a calculation-setup-only category once, by its scheduled segments when it has them', () => {
-    const structure = { 'A-Silmut, Tytöt': { 'Category General': SETUP } };
+  it('treats a calculation-setup-only category like one with nothing uploaded', () => {
+    const setupOnly = { 'A-Silmut, Tytöt': { 'Category General': SETUP } };
+    const row = scheduleRow({ name: 'A-SILMUT Tytöt Free Skating', category: 'A-SILMUT Tytöt', categoryKey: 'A-Silmut, Tytöt' });
 
-    const alone = missingReport({ structure });
-    expect(alone.counts).toEqual({ 'A-Silmut, Tytöt': 1 });
-    expect(alone.lines).toEqual(['A-Silmut, Tytöt: no segment papers uploaded']);
+    // No schedule: nothing says its papers should be here
+    const alone = missingReport({ structure: setupOnly });
+    expect(alone.categories['A-Silmut, Tytöt'].noSegmentPapers).toBe(true);
+    expect(alone.counts).toEqual({ 'A-Silmut, Tytöt': 0 });
+    expect(alone.pending).toEqual({ 'A-Silmut, Tytöt': 0 });
+    expect(alone.lines).toEqual([]);
     expect(alone.generableSegments).toBe(0);
 
-    const scheduled = missingReport({
-      structure,
-      scheduleCheck: { rows: [
-        scheduleRow({ name: 'A-SILMUT Tytöt Free Skating', category: 'A-SILMUT Tytöt', categoryKey: 'A-Silmut, Tytöt' }),
-      ] },
+    // Scheduled, but nothing is uploaded for that day
+    const later = missingReport({ structure: setupOnly, scheduleCheck: { rows: [found(), row] } });
+    expect(later.counts).toEqual({ 'A-Silmut, Tytöt': 0 });
+    expect(later.pending).toEqual({ 'A-Silmut, Tytöt': 1 });
+    expect(later.count).toBe(0);
+
+    // Scheduled on a day another category has papers for: forgotten
+    const forgotten = missingReport({
+      structure: { ...setupOnly, ...complete },
+      scheduleCheck: { rows: [found({ date: '2026-09-13' }), row] },
     });
-    expect(scheduled.counts).toEqual({ 'A-Silmut, Tytöt': 1 });
-    expect(scheduled.count).toBe(1);
-    expect(scheduled.lines).toEqual([
+    expect(forgotten.counts).toEqual({ 'A-Silmut, Tytöt': 1, 'JUNIORI Naiset': 0 });
+    expect(forgotten.pending['A-Silmut, Tytöt']).toBe(0);
+    expect(forgotten.count).toBe(1);
+    expect(forgotten.lines).toEqual([
       'A-SILMUT Tytöt, Free Skating (Sun 13.9. 12:10, 26 entries): no papers uploaded',
     ]);
   });

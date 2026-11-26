@@ -916,6 +916,26 @@ dialog.confirm-dialog::backdrop {
   white-space: nowrap;
 }
 
+/* Scheduled, not uploaded yet: a quiet note, nothing is wrong */
+.file-row--pending,
+.file-row--pending:hover {
+  background: none;
+  border: 1px dashed var(--line);
+  color: var(--ink-muted);
+}
+
+.pending-count {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  color: var(--ink-muted);
+}
+
+/* A category with no segment papers yet: neither the green nor the red edge */
+.is-pending .status-mark {
+  color: var(--ink-faint);
+}
+
 /* When a scheduled segment is skated, after its name */
 .segment-when {
   margin-left: 0.75rem;

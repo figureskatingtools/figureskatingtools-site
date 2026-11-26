@@ -30,7 +30,7 @@ export interface ScheduleRow {
     /** '' when the printed text could not be split */
     category: string;
     segment: string;
-    /** found = papers are uploaded; notNeeded = none, and no entries either */
+    /** found = papers are uploaded; missing = none; notNeeded = none, and no entries either */
     status: 'found' | 'missing' | 'notNeeded';
     prefix: string | null;
     /** The key of the row's category in `structure`, null when it has none */
@@ -48,9 +48,13 @@ export interface CategoryCheck {
     missingBySegment: Record<string, string[]>;
     /** Files expected once per category (the calculation setup) */
     missingCategoryFiles: string[];
-    /** The calculation setup is uploaded, but no segment has any papers */
+    /**
+     * The calculation setup is uploaded, but no segment has any papers yet.
+     * Nothing is expected of such a category by its files alone (isValid
+     * stays true); the competition schedule may say otherwise, see missingReport.
+     */
     noSegmentPapers: boolean;
-    /** Missing files, plus one for noSegmentPapers */
+    /** Missing files */
     missingCount: number;
 }
 
@@ -181,13 +185,14 @@ export function validateCategory(
     const hasCalcSetup = allFiles.some(f => f.suffix === CATEGORY_GENERAL_FILE);
     const realSegments = Object.keys(segments).filter(s => !SKIP_SEGMENTS.includes(s));
 
-    // The calculation setup is required once the category has a real segment.
-    // A category of unknown-segment files only has nothing to validate ...
+    // Papers are expected only where some are uploaded: a segment is checked
+    // once it has a file of its own, and the calculation setup is required
+    // once the category has such a segment. The papers of later segments
+    // often cannot be made before the earlier ones are skated, so a segment
+    // with nothing uploaded is never "missing" here.
     if (realSegments.length > 0 && !hasCalcSetup) {
         missingCategoryFiles.push(CATEGORY_GENERAL_FILE);
     }
-    // ... but one that holds the calculation setup and no segment at all is
-    // a category whose papers were never uploaded.
     const noSegmentPapers = hasCalcSetup && realSegments.length === 0;
 
     for (const segmentName of realSegments) {
@@ -199,7 +204,7 @@ export function validateCategory(
     }
 
     const missingCount = Object.values(missingBySegment).reduce((n, files) => n + files.length, 0)
-        + missingCategoryFiles.length + (noSegmentPapers ? 1 : 0);
+        + missingCategoryFiles.length;
     return {
         isValid: missingCount === 0,
         missingBySegment,
@@ -241,10 +246,20 @@ export function scheduleSegmentTitle(row: ScheduleRow): string {
     return row.category ? row.segment : '';
 }
 
+/** A segment of the competition schedule that has no papers, as the file list shows it */
+export interface ScheduledSegment {
+    row: ScheduleRow;
+    /**
+     * true = its papers should be here: marked missing, and asked about before
+     * generating. false = a quiet "not uploaded yet" note. See missingReport.
+     */
+    expected: boolean;
+}
+
 /** A scheduled category nothing is uploaded for: a card of its own in the list */
 export interface PlaceholderCategory {
     title: string;
-    rows: ScheduleRow[];
+    segments: ScheduledSegment[];
 }
 
 /** Everything that is missing in a competition, for the file list and the Generate prompt */
@@ -252,11 +267,13 @@ export interface MissingReport {
     /** Per category card (structure key); unrecognised files are left out */
     categories: Record<string, CategoryCheck>;
     /** Scheduled segments without papers, by the card they belong to */
-    scheduled: Record<string, ScheduleRow[]>;
+    scheduled: Record<string, ScheduledSegment[]>;
     /** Scheduled segments without papers whose category has no card */
     placeholders: PlaceholderCategory[];
     /** Missing things per card, as its header counts them */
     counts: Record<string, number>;
+    /** Scheduled segments per card that are not uploaded yet and not missing either */
+    pending: Record<string, number>;
     /** Missing things in all; 0 = nothing to mark, nothing to ask */
     count: number;
     /** FSM segments the backend can produce; 0 = nothing to generate */
@@ -265,29 +282,71 @@ export interface MissingReport {
     lines: string[];
 }
 
-function missingScheduleRows(data: unknown): ScheduleRow[] {
+function scheduleRows(data: unknown): ScheduleRow[] {
     const rows = (data as { scheduleCheck?: { rows?: unknown } | null } | null)?.scheduleCheck?.rows;
     if (!Array.isArray(rows)) return [];
     return rows
         .filter((r): r is ScheduleRow => Boolean(r) && typeof r === 'object'
-            && r.status === 'missing' && typeof r.name === 'string' && r.name !== '')
+            && typeof r.name === 'string' && r.name !== '')
         .map(r => ({
             ...r,
+            date: typeof r.date === 'string' && r.date !== '' ? r.date : null,
+            startTime: typeof r.startTime === 'string' && r.startTime !== '' ? r.startTime : null,
             category: typeof r.category === 'string' ? r.category : '',
             segment: typeof r.segment === 'string' ? r.segment : '',
             categoryKey: typeof r.categoryKey === 'string' ? r.categoryKey : null,
         }));
 }
 
+/** Minutes from midnight of an `HH:MM` start time; a row without one sorts last */
+function startMinutes(row: ScheduleRow): number {
+    const time = /^(\d{1,2}):(\d{2})/.exec(row.startTime ?? '');
+    return time ? Number(time[1]) * 60 + Number(time[2]) : Number.POSITIVE_INFINITY;
+}
+
+/** The earliest of these rows by day and start time; undefined when none has a day */
+function firstScheduled(rows: ScheduleRow[]): ScheduleRow | undefined {
+    let first: ScheduleRow | undefined;
+    for (const row of rows) {
+        if (row.date === null) continue;
+        if (!first || row.date < first.date!
+            || (row.date === first.date && startMinutes(row) < startMinutes(first))) {
+            first = row;
+        }
+    }
+    return first;
+}
+
+/** True when a category has papers of at least one skating segment */
+function hasSegmentPapers(segments: Record<string, FileData[]> | undefined): boolean {
+    return Object.keys(segments ?? {}).some(segment => !SKIP_SEGMENTS.includes(segment));
+}
+
 /**
- * What a competition is missing, from a `get_competition_details` response:
- * the expected files of every uploaded segment and category, and — when a
- * CompetitionSchedule is uploaded — the scheduled segments that have no
- * papers at all (`scheduleCheck`; absent or null = no schedule to check).
+ * What a competition is missing, from a `get_competition_details` response.
+ *
+ * Papers are expected only where some are uploaded, because a competition is
+ * rarely uploaded in one go: the papers of a later segment (a Free Skating
+ * in reverse order of the Short Program's result) are made once the earlier
+ * one is skated, and often only the first day exists before the competition.
+ *
+ * - A segment with at least one file of its own is expected to have all its
+ *   files; the calculation setup is expected once the category has such a
+ *   segment. These are the missing files.
+ * - A segment of the uploaded CompetitionSchedule with no papers
+ *   (`scheduleCheck`; absent or null = no schedule) is a quiet "not uploaded
+ *   yet" note, with one exception, the forgotten category of issue #84: when
+ *   NO segment of a category has papers, its first scheduled segment is
+ *   missing if it is skated on a day for which papers of another category
+ *   are uploaded. A first segment needs no earlier result, so on a day that
+ *   is being prepared it should be there. Later segments of that category,
+ *   and categories that start on a day nothing is uploaded for, stay quiet.
+ *
+ * Only missing things count, are listed for the prompt and mark a card.
  */
 export function missingReport(data: unknown): MissingReport {
     const report: MissingReport = {
-        categories: {}, scheduled: {}, placeholders: [], counts: {},
+        categories: {}, scheduled: {}, placeholders: [], counts: {}, pending: {},
         count: 0, generableSegments: 0, lines: [],
     };
     const rawStructure = (data as { structure?: unknown } | null)?.structure;
@@ -295,16 +354,37 @@ export function missingReport(data: unknown): MissingReport {
         Record<string, Record<string, FileData[]>>;
     const keys = Object.keys(structure).filter(key => key !== UNCATEGORIZED).sort();
 
-    for (const row of missingScheduleRows(data)) {
+    const rows = scheduleRows(data);
+    // The days being prepared: a segment skated that day has its papers here
+    const uploadedDays = new Set(rows.filter(row => row.status === 'found').map(row => row.date));
+
+    const byCard: Record<string, ScheduleRow[]> = {};
+    const byTitle: Array<{ title: string, rows: ScheduleRow[] }> = [];
+    for (const row of rows) {
+        if (row.status !== 'missing') continue;
         if (row.categoryKey !== null && keys.includes(row.categoryKey)) {
-            (report.scheduled[row.categoryKey] ??= []).push(row);
+            (byCard[row.categoryKey] ??= []).push(row);
             continue;
         }
         const title = scheduleCategoryTitle(row);
-        let group = report.placeholders.find(p => p.title === title);
-        if (!group) report.placeholders.push(group = { title, rows: [] });
+        let group = byTitle.find(g => g.title === title);
+        if (!group) byTitle.push(group = { title, rows: [] });
         group.rows.push(row);
     }
+
+    /** The rows of one card, in schedule order, each with whether its papers should be here */
+    const scheduledSegments = (cardRows: ScheduleRow[], started: boolean): ScheduledSegment[] => {
+        const first = started ? undefined : firstScheduled(cardRows);
+        const expected = first && uploadedDays.has(first.date) ? first : undefined;
+        return cardRows.map(row => ({ row, expected: row === expected }));
+    };
+
+    for (const key of Object.keys(byCard)) {
+        report.scheduled[key] = scheduledSegments(byCard[key], hasSegmentPapers(structure[key]));
+    }
+    report.placeholders = byTitle.map(group => ({
+        title: group.title, segments: scheduledSegments(group.rows, false),
+    }));
 
     const scheduledLine = (row: ScheduleRow): string => {
         const segment = scheduleSegmentTitle(row);
@@ -322,8 +402,9 @@ export function missingReport(data: unknown): MissingReport {
 
     for (const entry of entries) {
         if (entry.placeholder) {
-            for (const row of entry.placeholder.rows) report.lines.push(scheduledLine(row));
-            report.count += entry.placeholder.rows.length;
+            const expected = entry.placeholder.segments.filter(segment => segment.expected);
+            for (const segment of expected) report.lines.push(scheduledLine(segment.row));
+            report.count += expected.length;
             continue;
         }
         const key = entry.title;
@@ -342,11 +423,10 @@ export function missingReport(data: unknown): MissingReport {
             }
         }
         for (const file of check.missingCategoryFiles) report.lines.push(`${key}: ${file}`);
-        // The scheduled segments say the same thing, by name
-        const generic = check.noSegmentPapers && scheduled.length === 0;
-        if (generic) report.lines.push(`${key}: no segment papers uploaded`);
-        for (const row of scheduled) report.lines.push(scheduledLine(row));
-        report.counts[key] = check.missingCount - (check.noSegmentPapers && !generic ? 1 : 0) + scheduled.length;
+        const expected = scheduled.filter(segment => segment.expected);
+        for (const segment of expected) report.lines.push(scheduledLine(segment.row));
+        report.counts[key] = check.missingCount + expected.length;
+        report.pending[key] = scheduled.length - expected.length;
         report.count += report.counts[key];
     }
     return report;

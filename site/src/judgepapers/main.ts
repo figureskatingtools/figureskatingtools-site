@@ -41,7 +41,7 @@ import {
 import {
     CATEGORY_GENERAL_SEGMENT, cardOrder, missingReport, scheduleSegmentTitle, scheduleWhen, validateCompetition,
 } from './validate';
-import type { MissingReport, PlaceholderCategory, ScheduleRow } from './validate';
+import type { MissingReport, PlaceholderCategory, ScheduledSegment } from './validate';
 import { renderHelpTrigger, filesHelpHtml, judgingMethodHelpHtml, initHelp } from './help';
 import { openSendDialog, SENDABLE_FILE_RE } from './send';
 import {
@@ -422,7 +422,8 @@ function showPickCompetition() {
             <li>Select the competition in the top bar; this tool opens its workspace automatically.</li>
             <li><strong>Upload the PDF exports</strong> from <em>Figure Skating Manager</em> ${renderHelpTrigger('help-files-welcome', 'Which files do I need?', filesHelpHtml())}<br><span class="howto-caution">Export <strong>PlannedProgramContent</strong>, not <strong>PlannedProgramContentChecklist</strong> &mdash; they look similar but the Checklist won't work.</span></li>
             <li>PDFs uploaded for the same competition in another tool appear under <strong>Competition files</strong> — import them here without re-uploading.</li>
-            <li>The system groups the files into categories by their file names and marks what is missing: files a segment should have, and &mdash; when the competition schedule is uploaded &mdash; scheduled segments that have no papers at all.</li>
+            <li>The system groups the files into categories by their file names. A segment is checked once one of its files is uploaded: the files it should still have are marked missing. Segments you have not uploaded yet (a later day, or a Free Skating whose start order waits for the Short Program) are not expected.</li>
+            <li>With the competition schedule uploaded, the list also notes the scheduled segments that are not uploaded yet, and marks a category as missing when nothing of it is uploaded although its first segment is skated on a day you have uploaded papers for.</li>
             <li><strong>Check that every file sits under the right category</strong> — grouping goes by file name, so verify the listing before generating.</li>
             <li><strong>Synchronized skating:</strong> pick <strong>ISU</strong> or <strong>MUPI</strong> on the category card ${renderHelpTrigger('help-method-welcome', 'What do ISU and MUPI mean here?', judgingMethodHelpHtml())} — the default comes from the category registry, the choice applies to this competition only and decides which files are required.</li>
             <li>Click <strong>Generate Papers</strong> to create the combined PDF booklets and ZIP archives. If something is marked missing, you are shown the list and asked to confirm first.</li>
@@ -837,34 +838,58 @@ async function init() {
             <span class="missing-tag">Missing</span>
         </div>`;
 
-    /** A segment of the competition schedule that has no papers at all */
-    const scheduledSegmentHtml = (row: ScheduleRow): string => {
+    /** A quiet row for something that is not uploaded yet and not expected either */
+    const pendingRowHtml = (label: string): string => `
+        <div class="file-row file-row--pending">
+            <span class="file-name">${escapeHtml(label)}</span>
+        </div>`;
+
+    /**
+     * A segment of the competition schedule that has no papers: marked missing
+     * when they should be here, otherwise a quiet note (validate.ts missingReport).
+     */
+    const scheduledSegmentHtml = ({ row, expected }: ScheduledSegment): string => {
         const when = scheduleWhen(row);
         return `
-            <div class="segment-block segment-block--missing">
+            <div class="segment-block ${expected ? 'segment-block--missing' : 'segment-block--pending'}">
                 <h4 class="segment-title">${escapeHtml(scheduleSegmentTitle(row) || row.name)}${
                     when ? ` <span class="segment-when">${escapeHtml(when)}</span>` : ''}</h4>
-                <div class="file-list">${missingRowHtml('No papers uploaded')}</div>
+                <div class="file-list">${expected ? missingRowHtml('No papers uploaded') : pendingRowHtml('Not uploaded yet')}</div>
             </div>`;
     };
 
+    /** How a card looks: something is missing, nothing is uploaded yet, or all is there */
+    type CardState = 'invalid' | 'pending' | 'valid';
+    const STATUS_MARKS: Record<CardState, string> = { invalid: '⚠︎', pending: '○', valid: '✓' };
+
+    /** The right end of a card header: what is missing (red), what is not uploaded yet (grey), the arrow */
+    const cardTailHtml = (missingCount: number, pendingNote: string, collapsed: boolean): string => `
+        ${missingCount > 0 ? `<span class="missing-count">${missingCount} missing</span>` : ''}
+        ${pendingNote ? `<span class="pending-count">${escapeHtml(pendingNote)}</span>` : ''}
+        <span class="toggle-icon">${collapsed ? '▾' : '▴'}</span>`;
+
     /** A category of the competition schedule that has nothing uploaded */
-    const placeholderCardHtml = (placeholder: PlaceholderCategory): string => `
-        <div class="category-card category-card--placeholder">
-            <div class="category-header is-invalid">
-                <div class="category-head-lead">
-                     <span class="status-mark">⚠︎</span>
-                     <span class="category-title">${escapeHtml(placeholder.title)}</span>
+    const placeholderCardHtml = (placeholder: PlaceholderCategory): string => {
+        const missingCount = placeholder.segments.filter(segment => segment.expected).length;
+        const pendingCount = placeholder.segments.length - missingCount;
+        const state: CardState = missingCount > 0 ? 'invalid' : 'pending';
+        const collapsed = state !== 'invalid';
+        return `
+            <div class="category-card category-card--placeholder">
+                <div class="category-header is-${state}">
+                    <div class="category-head-lead">
+                         <span class="status-mark">${STATUS_MARKS[state]}</span>
+                         <span class="category-title">${escapeHtml(placeholder.title)}</span>
+                    </div>
+                    <div class="category-head-tail">
+                        ${cardTailHtml(missingCount, pendingCount > 0 ? `${pendingCount} not uploaded yet` : '', collapsed)}
+                    </div>
                 </div>
-                <div class="category-head-tail">
-                    <span class="missing-count">not uploaded</span>
-                    <span class="toggle-icon">▴</span>
+                <div class="category-content" style="display: ${collapsed ? 'none' : 'block'};">
+                    ${placeholder.segments.map(scheduledSegmentHtml).join('')}
                 </div>
-            </div>
-            <div class="category-content" style="display: block;">
-                ${placeholder.rows.map(scheduledSegmentHtml).join('')}
-            </div>
-        </div>`;
+            </div>`;
+    };
 
     function renderCompetitionView() {
         const container = document.getElementById('comp-files-container');
@@ -896,7 +921,8 @@ async function init() {
 
         // Several competition names in the files block Generate until the
         // wrong files are gone. Otherwise one segment that can be generated is
-        // enough: whatever is missing is marked below and asked about first.
+        // enough: whatever is missing is marked below and asked about first,
+        // and segments that are simply not uploaded yet are nobody's concern.
         const hasAlerts = Boolean(currentCompetitionData.alerts && currentCompetitionData.alerts.length > 0);
         canGenerate = !hasAlerts && missing.generableSegments > 0;
         if (!hasAlerts && !canGenerate) generateBlocker = NOTHING_TO_GENERATE;
@@ -960,14 +986,22 @@ async function init() {
             // show them so the user can delete them; nothing is expected of
             // them, so the report has no entry for that card.
             const check = missing.categories[category];
-            // Segments of the competition schedule with no papers at all
+            // Segments of the competition schedule with no papers at all:
+            // missing ones, and quiet "not uploaded yet" notes
             const scheduled = missing.scheduled[category] ?? [];
             const missingCount = missing.counts[category] ?? 0;
-            const isValid = missingCount === 0;
+            const pendingCount = missing.pending[category] ?? 0;
+            // Only the calculation setup is here: nothing to check yet, and
+            // nothing to generate, so neither a warning nor a green check
+            const noPapersYet = Boolean(check?.noSegmentPapers);
+            const state: CardState = missingCount > 0 ? 'invalid' : noPapersYet ? 'pending' : 'valid';
+            const pendingNote = pendingCount > 0 ? `${pendingCount} not uploaded yet`
+                : noPapersYet && scheduled.length === 0 ? 'no segment papers yet' : '';
 
-            const validityClass = isValid ? 'is-valid' : 'is-invalid';
-            const statusIcon = isValid ? '✓' : '⚠︎';
-            const isCollapsed = isValid;
+            const validityClass = `is-${state}`;
+            const statusIcon = STATUS_MARKS[state];
+            // Only a card with something missing opens by itself
+            const isCollapsed = state !== 'invalid';
 
             // Check for competition name conflict
             let catCompNameHtml = '';
@@ -1027,8 +1061,7 @@ async function init() {
                              ${catCompNameHtml}
                         </div>
                         <div class="category-head-tail">
-                            ${ missingCount > 0 ? `<span class="missing-count">${missingCount} missing</span>` : '' }
-                            <span class="toggle-icon">${isCollapsed ? '▾' : '▴'}</span>
+                            ${cardTailHtml(missingCount, pendingNote, isCollapsed)}
                         </div>
                     </div>
 
@@ -1038,10 +1071,10 @@ async function init() {
 
             // Only the calculation setup is uploaded, and the schedule names no
             // segment of this category: say it in general terms.
-            if (check?.noSegmentPapers && scheduled.length === 0) {
+            if (noPapersYet && scheduled.length === 0) {
                 html += `
-                    <div class="segment-block segment-block--missing">
-                        <div class="file-list">${missingRowHtml('No segment papers uploaded')}</div>
+                    <div class="segment-block segment-block--pending">
+                        <div class="file-list">${pendingRowHtml('No segment papers uploaded yet')}</div>
                     </div>`;
             }
 
