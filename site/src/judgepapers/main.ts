@@ -53,6 +53,7 @@ import {
     traineesSectionHtml,
     type Trainee,
 } from './trainees';
+import { closeCustomDialog, openCustomDialog, type GenerateOutcome } from './custom-dialog';
 
 // Inject the shared figureskatingtools.com nav styles once at startup
 injectSiteNavStyles();
@@ -205,6 +206,11 @@ appElement.innerHTML = `
                       <button id="btn-generate" class="btn btn-primary btn-generate" disabled>
                          Generate Papers
                       </button>
+                      <!-- Print a chosen part of the papers (custom-dialog.ts) -->
+                      <button type="button" id="btn-custom-generate" class="btn btn-custom-generate"
+                              aria-describedby="custom-generate-note" disabled>Custom generate…</button>
+                      <p id="custom-generate-note" class="generate-note custom-generate-note">Choose which
+                         days, people, segments and roles go into the print.</p>
                  </div>
             </div>
         </div>
@@ -315,6 +321,8 @@ function applyViewOnly(): void {
     document.getElementById('view-competition-details')?.classList.toggle('view-only', ro);
     const note = document.getElementById('view-only-note');
     if (note) note.hidden = !ro;
+    // Custom generate writes: an open dialog goes with the write access
+    if (ro) closeCustomDialog();
 }
 
 /**
@@ -326,6 +334,20 @@ function readOnlyRefusal(status: number, text: string): string | null {
     if (readPlatformError(status, text) !== 'platform_read_only') return null;
     void refreshActiveCompetition();
     return platformErrorMessage('platform_read_only', boundLabel ?? '');
+}
+
+/**
+ * The message for a Custom generate call the platform refused for good:
+ * view-only access, or the competition is gone or no longer shared (the
+ * selection is re-read then, which drops it). Null for any other failure.
+ */
+function customGenerateRefusal(status: number, text: string): string | null {
+    const readOnly = readOnlyRefusal(status, text);
+    if (readOnly) return readOnly;
+    const code = readPlatformError(status, text);
+    if (!code || !isGoneCompetitionError(code)) return null;
+    void refreshActiveCompetition();
+    return platformErrorMessage(code, boundLabel ?? '');
 }
 
 const COPY_LINK_TITLE = 'Copy a link to share (valid 5 days, or until the competition is deleted)';
@@ -708,6 +730,8 @@ async function init() {
         renderRetention();
         // The owner may have changed this user's role
         applyViewOnly();
+        // An open Custom generate dialog belongs to the competition it was opened in
+        if (getActiveCompetition()?.id !== boundPlatformId) closeCustomDialog();
         // ... which also decides which shared links are listed (all of them for
         // write, only the user's own for view-only): drop the stale rows and
         // fetch the list again for the new role.
@@ -830,6 +854,20 @@ async function init() {
     // and TS1 papers in Pattern Dance segments" (Papers to print).
     let calcSetupEverySegmentFor: string | null = null;
     let patternDanceAllPapersFor: string | null = null;
+    // Same for "Use Time Schedule as a Segment cover page" and the per-segment
+    // boxes under it, which used to fall back to the type's default on every
+    // options re-render (so right after a Generate). `base` is the last choice
+    // made with the global box, or what the boxes showed when the first one
+    // was touched; `prefixes` holds the segments set one by one since. A
+    // segment never touched follows `base`. Nothing remembered = the default.
+    let timeScheduleChoice: { competition: string, base: boolean, prefixes: Map<string, boolean> } | null = null;
+    /** The remembered time-schedule choices of `competition`, started from what its boxes show now */
+    function timeScheduleChoiceOf(competition: string, shown: boolean) {
+        if (!timeScheduleChoice || timeScheduleChoice.competition !== competition) {
+            timeScheduleChoice = { competition, base: shown, prefixes: new Map() };
+        }
+        return timeScheduleChoice;
+    }
     const MAX_COMBINED_COPIES = 50;
     // Whole number 1-50 from the copies field; anything else counts as 1.
     const clampCopies = (raw: string | number): number => {
@@ -1188,6 +1226,9 @@ async function init() {
         if (btn) {
             btn.disabled = !generateReady();
         }
+        // Custom generate is available exactly when Generate is
+        const customBtn = document.getElementById('btn-custom-generate') as HTMLButtonElement | null;
+        if (customBtn) customBtn.disabled = !generateReady();
         // Files are there, but nothing could be generated from them: say why
         const blocker = document.getElementById('generate-blocker');
         if (blocker) {
@@ -1489,38 +1530,16 @@ async function init() {
     });
 
     /**
-     * Generate the papers of `generateFor`: the competition Generate was
-     * pressed in, whatever is open later. `accepted` is the list of missing
-     * papers the user was shown and accepted (empty when nothing was missing);
-     * the run goes on only while that is still what is missing.
+     * The generate options as the options area shows them now. Generate and
+     * Custom generate send the same ones.
      */
-    async function runGenerate(generateFor: string, accepted: string[]) {
-        if (!currentCompetitionData || currentCompetitionData.id !== generateFor || !generateReady()) return;
-        // One run at a time: a re-render during the run (an ISU/MUPI switch,
-        // a reload) must not hand the button back.
-        generating = true;
-
-        const btn = document.getElementById('btn-generate') as HTMLButtonElement;
-        const originalText = 'Generate Papers';
-        /** Every way out of the run: the button is back, in whatever state the list allows */
-        const endRun = () => {
-            btn.innerHTML = originalText;
-            btn.classList.remove('btn-success');
-            generating = false;
-            updateGenerateButton();
-        };
-        
-        // Start Loading
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span>Generating...';
-
-        // Collect Options
+    function collectGenerateOptions(): Record<string, unknown> {
         // Toggle Logic Inversion:
         // UI Checkbox = "Use Time Schedule"
         // Backend 'segmentCover' = "Use Generated Cover Page"
         // So: Checked (Time Schedule) -> False (No Generated Cover)
         //     Unchecked (Cover Page)  -> True (Generated Cover)
-        
+
         const globalToggle = document.getElementById('global-use-time-schedule') as HTMLInputElement;
         const segmentToggles = document.querySelectorAll('.time-schedule-toggle') as NodeListOf<HTMLInputElement>;
         const omitToggle = document.getElementById('global-omit-segment-cover') as HTMLInputElement | null;
@@ -1528,7 +1547,7 @@ async function init() {
         const combinedCopies = document.getElementById('combined-schedule-copies') as HTMLInputElement | null;
         const calcSetupToggle = document.getElementById('global-calc-setup-every-segment') as HTMLInputElement | null;
         const patternDanceToggle = document.getElementById('global-pattern-dance-all-papers') as HTMLInputElement | null;
-        
+
         const options: any = {
             globalSegmentCover: globalToggle ? !globalToggle.checked : false,
             segmentCovers: {},
@@ -1549,7 +1568,7 @@ async function init() {
             // 1 sheet; unchecked = left out (the time schedule stays).
             globalPatternDanceAllPapers: patternDanceToggle ? patternDanceToggle.checked : false
         };
-        
+
         if (segmentToggles) {
             segmentToggles.forEach(t => {
                 const prefix = t.getAttribute('data-prefix');
@@ -1558,7 +1577,58 @@ async function init() {
                 }
             });
         }
-        
+        return options;
+    }
+
+    /** POST generate_judging_papers: the request of Generate, and of Custom generate's own run */
+    function requestGenerate(competitionId: string, options: unknown): Promise<Response> {
+        return fetch(`${API_BASE}/generate_judging_papers`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                workingFolder: competitionId,
+                options: options
+            })
+        });
+    }
+
+    /**
+     * A generate run starts. One run at a time: a re-render during the run
+     * (an ISU/MUPI switch, a reload) must not hand the button back, and
+     * Custom generate is unavailable meanwhile. Returns the Generate button,
+     * now showing the run, and `endRun`: every way out of the run, with the
+     * button back in whatever state the list allows.
+     */
+    function beginGenerateRun(): { btn: HTMLButtonElement, endRun: () => void } {
+        generating = true;
+
+        const btn = document.getElementById('btn-generate') as HTMLButtonElement;
+        const originalText = 'Generate Papers';
+        const endRun = () => {
+            btn.innerHTML = originalText;
+            btn.classList.remove('btn-success');
+            generating = false;
+            updateGenerateButton();
+        };
+
+        // Start Loading
+        updateGenerateButton();
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span>Generating...';
+        return { btn, endRun };
+    }
+
+    /**
+     * Generate the papers of `generateFor`: the competition Generate was
+     * pressed in, whatever is open later. `accepted` is the list of missing
+     * papers the user was shown and accepted (empty when nothing was missing);
+     * the run goes on only while that is still what is missing.
+     */
+    async function runGenerate(generateFor: string, accepted: string[]) {
+        if (!currentCompetitionData || currentCompetitionData.id !== generateFor || !generateReady()) return;
+        const { btn, endRun } = beginGenerateRun();
+        const options = collectGenerateOptions();
+
         try {
             // A judging-method switch or a trainee change may still be saving;
             // the backend reads both from metadata.json. Changes made while
@@ -1582,14 +1652,7 @@ async function init() {
                 endRun();
                 return;
             }
-            const resp = await fetch(`${API_BASE}/generate_judging_papers`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    workingFolder: generateFor,
-                    options: options
-                })
-            });
+            const resp = await requestGenerate(generateFor, options);
 
             if (resp.ok) {
                  // The papers are there, but something needs the operator's eye
@@ -1621,6 +1684,115 @@ async function init() {
             endRun();
         }
     }
+
+    /* ── Custom generate: print a chosen part of the papers (custom-dialog.ts) ── */
+
+    const LIST_CHANGED = 'The files or settings of the competition changed before the papers were '
+        + 'prepared. Check the file list and try again.';
+
+    /**
+     * Answers the "Papers are missing" prompt that Custom generate opened
+     * (null: none is open). True only for a confirm with the box ticked; the
+     * prompt closing or showing something else is a no.
+     */
+    let missingAnswer: ((confirmed: boolean) => void) | null = null;
+    function answerMissing(confirmed: boolean) {
+        const answer = missingAnswer;
+        missingAnswer = null;
+        answer?.(confirmed);
+    }
+
+    /**
+     * Generate's "Papers are missing" confirmation, for Custom generate's own
+     * run. Resolves true at once when nothing is missing.
+     */
+    function confirmMissingPapers(competition: string): Promise<boolean> {
+        if (competition !== openedCompetitionId) return Promise.resolve(false);
+        if (missing.count === 0) return Promise.resolve(true);
+        return new Promise(resolve => {
+            openGenerateModal(competition, missing.lines);
+            missingAnswer = resolve;
+        });
+    }
+
+    /**
+     * The generate run Custom generate needs when the stored papers are not
+     * the current ones: the same request and the same busy Generate button
+     * as runGenerate, so nothing else can start a run meanwhile. While the
+     * dialog is `watching`, the outcome is the dialog's to show. Once it is
+     * closed the run ends like any Generate: its warning or failure as a notice.
+     */
+    async function generateForCustom(competitionId: string, options: unknown,
+                                     watching: () => boolean): Promise<GenerateOutcome> {
+        // Called right after the user saw (and accepted) what is missing:
+        // generate only from the list that was on screen then
+        if (competitionId !== openedCompetitionId || !generateReady()) {
+            return { kind: 'refused', message: LIST_CHANGED };
+        }
+        const { btn, endRun } = beginGenerateRun();
+        let resp: Response;
+        try {
+            resp = await requestGenerate(competitionId, options);
+        } catch (_e) {
+            endRun();
+            if (!watching()) showNotice('Generation Error', 'Network error or server unreachable.');
+            return { kind: 'network' };
+        }
+        const text = await resp.text().catch(() => '');
+        if (!resp.ok) {
+            endRun();
+            if (!watching()) {
+                const refusal = readOnlyRefusal(resp.status, text);
+                showNotice('Generation Failed', refusal
+                    ? escapeHtml(refusal)
+                    : `An error occurred while generating papers:<br><br>${escapeHtml(text)}`);
+            }
+            return { kind: 'http', status: resp.status, text: text.trim() };
+        }
+        const warning = generateWarning(text);
+        if (warning && !watching() && competitionId === openedCompetitionId) {
+            showNotice('Papers generated with a warning', escapeHtml(warning));
+        }
+        btn.innerHTML = 'Completed!';
+        btn.classList.add('btn-success');
+        setTimeout(endRun, 3000);
+        // At once, not after the success animation: the dialog goes straight
+        // on to its list, and the Generated files behind it are the new ones
+        if (competitionId === openedCompetitionId) void loadCompetitionDetails(competitionId);
+        return { kind: 'ok', warning };
+    }
+
+    // Custom generate: the same guard as Generate, then the dialog takes over
+    document.getElementById('btn-custom-generate')?.addEventListener('click', () => {
+        if (!currentCompetitionData || !generateReady() || viewOnly()) return;
+        const competitionId: string = currentCompetitionData.id;
+        // Collected once: the index is asked about, and the papers are made
+        // with, the options as they are now
+        const options = collectGenerateOptions();
+        openCustomDialog({
+            apiBase: API_BASE,
+            competitionId,
+            options,
+            settle: async () => {
+                // As in runGenerate: a settings change may still be saving, and
+                // only the list the user saw is acted on
+                await settingsSettled();
+                return competitionId === openedCompetitionId && listReady() ? null : LIST_CHANGED;
+            },
+            confirmMissing: () => confirmMissingPapers(competitionId),
+            generate: watching => generateForCustom(competitionId, options, watching),
+            refusal: customGenerateRefusal,
+            notify: (title, message) => showNotice(title, escapeHtml(message)),
+            poolRefreshed: reportPoolRefresh,
+            reloadDetails: () => {
+                if (competitionId === openedCompetitionId) void loadCompetitionDetails(competitionId);
+            },
+            filesCreated: () => void refreshGeneratedFiles(competitionId).catch(() => null),
+            freshDownloadUrl: async fileName =>
+                (await refreshGeneratedFiles(competitionId))?.find(g => g.fileName === fileName)?.url,
+            returnFocus: () => document.getElementById('btn-custom-generate'),
+        });
+    });
 
     // Global handler
     (window as any).promptDeleteFile = (filename: string) => {
@@ -2110,13 +2282,19 @@ async function init() {
         if (!combinedSchedule) combinedScheduleCopies = 1;
         const calcSetupEverySegment = calcSetupEverySegmentFor === data.id;
         const patternDanceAllPapers = patternDanceAllPapersFor === data.id;
+        // The user's "Use Time Schedule" choices, when this competition has any
+        const remembered = timeScheduleChoice && timeScheduleChoice.competition === data.id ? timeScheduleChoice : null;
+        const useTimeScheduleFor = (prefix: string): boolean =>
+            remembered ? remembered.prefixes.get(prefix) ?? remembered.base : defaultUseTimeSchedule;
+        // The global box is on exactly when every segment's box is
+        const globalUseTimeSchedule = segments.every(s => useTimeScheduleFor(s.prefix));
 
         optionsArea.innerHTML = `
             <h3 class="options-title">Global Settings</h3>
 
             <div class="option-row">
                 <label class="option-check">
-                    <input type="checkbox" id="global-use-time-schedule" ${defaultUseTimeSchedule ? 'checked' : ''}>
+                    <input type="checkbox" id="global-use-time-schedule" ${globalUseTimeSchedule ? 'checked' : ''}>
                     <span>Use Time Schedule as a Segment cover page</span>
                 </label>
             </div>
@@ -2150,7 +2328,7 @@ async function init() {
                 <div id="segment-options-list" class="segment-options-list hidden">
                     ${segments.map(s => `
                         <label class="segment-option">
-                            <input type="checkbox" class="time-schedule-toggle" data-prefix="${escapeAttr(s.prefix)}" ${defaultUseTimeSchedule ? 'checked' : ''}>
+                            <input type="checkbox" class="time-schedule-toggle" data-prefix="${escapeAttr(s.prefix)}" ${useTimeScheduleFor(s.prefix) ? 'checked' : ''}>
                             <span>${escapeHtml(s.label)}</span>
                         </label>
                     `).join('')}
@@ -2257,6 +2435,8 @@ async function init() {
         globalToggle.addEventListener('change', () => {
              const isChecked = globalToggle.checked;
              segmentToggles.forEach(t => t.checked = isChecked);
+             // Every segment follows the global choice again
+             timeScheduleChoice = { competition: data.id, base: isChecked, prefixes: new Map() };
         });
         
         // Listen to individual toggles to update global
@@ -2268,6 +2448,8 @@ async function init() {
                 } else if (allChecked) {
                     globalToggle.checked = true;
                 }
+                const prefix = t.getAttribute('data-prefix');
+                if (prefix) timeScheduleChoiceOf(data.id, defaultUseTimeSchedule).prefixes.set(prefix, t.checked);
             });
         });
         
@@ -2514,6 +2696,9 @@ async function init() {
             if (pool) pool.innerHTML = '';
             // An open trainee editor belongs to the previous competition
             closeTraineeDialog();
+            // ... and so do an open Custom generate dialog and the time-schedule choices
+            closeCustomDialog();
+            timeScheduleChoice = null;
             renderTrainees();
         }
         showView('view-competition-details');
@@ -2635,6 +2820,7 @@ async function init() {
         if (modalBusy) e.preventDefault();
     });
     modalDialog.addEventListener('close', () => {
+        answerMissing(false);                     // Custom generate's prompt was not confirmed
         pendingAction = null;
         modalExtra.innerHTML = '';                // the Generate prompt's list and box
         modalCancel.classList.remove('hidden');   // the error variant hides it
@@ -2664,6 +2850,7 @@ async function init() {
 
     /** The destructive variant: Cancel + a red confirm button, Cancel focused */
     function openConfirmModal(action: ModalAction, title: string, messageHtml: string, confirmLabel: string) {
+        answerMissing(false);   // the dialog shows something else now
         pendingAction = action;
         modalTitle.textContent = title;
         modalMessage.innerHTML = messageHtml;
@@ -2685,6 +2872,7 @@ async function init() {
      * every press of Generate asks again, with the list as it is then.
      */
     function openGenerateModal(competition: string, lines: string[]) {
+        answerMissing(false);
         pendingAction = { type: 'GENERATE', competition, lines };
         modalTitle.textContent = 'Papers are missing';
         modalMessage.textContent = 'These papers are missing. If you generate now, the packets are made without them:';
@@ -2757,6 +2945,7 @@ async function init() {
     }
 
     function openErrorModal(title: string, message: string) {
+        answerMissing(false);
         pendingAction = null; // No action to take on confirm
         modalTitle.textContent = title;
         modalMessage.innerHTML = message;
@@ -2786,8 +2975,11 @@ async function init() {
         if (action.type === 'GENERATE') {
             // Only with the box ticked (the button is disabled until then)
             if (!modalExtra.querySelector<HTMLInputElement>('#generate-override')?.checked) return;
+            // Custom generate asked: it goes on with its own run
+            const forCustom = missingAnswer !== null;
             closeModal();
-            void runGenerate(action.competition, action.lines);
+            if (forCustom) answerMissing(true);
+            else void runGenerate(action.competition, action.lines);
             return;
         }
 
