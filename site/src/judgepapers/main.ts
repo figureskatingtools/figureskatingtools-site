@@ -776,13 +776,19 @@ async function init() {
     /** A generate run is going: from the press until its button is back */
     let generating = false;
     /**
+     * Re-reads of the file list (loadCompetitionDetails) still on their way.
+     * Counted on their own, because canGenerate alone does not hold through
+     * one: anything that re-renders the list meanwhile (a failed settings
+     * save putting the switch back) computes it again from the old list.
+     */
+    let listLoads = 0;
+    /**
      * The list on screen is what the backend would act on, and something of
-     * it can be generated. Not while the list is being re-read (canGenerate is
-     * off until the new one is rendered) or while files of the open
-     * competition are changing.
+     * it can be generated. Not while the list is being re-read or while files
+     * of the open competition are changing.
      */
     const listReady = (): boolean =>
-        canGenerate && !fileChanges.get(openedCompetitionId ?? '');
+        canGenerate && listLoads === 0 && !fileChanges.get(openedCompetitionId ?? '');
     /** Generate may be pressed: the list is ready and no run is going */
     const generateReady = (): boolean => listReady() && !generating;
 
@@ -1632,6 +1638,7 @@ async function init() {
         const ticket = issueDetailsTicket(id, ['full', 'generated', 'shareLinks']);
         // Settings state when the request leaves (see settingsRevision)
         const settingsAtIssue = { revision: settingsRevision, pending: pendingSettingsSaves > 0 };
+        listLoads += 1;
         try {
             const resp = await fetch(`${API_BASE}/get_competition_details?id=${encodeURIComponent(id)}`);
             if (!resp.ok) throw new Error('Failed to load details');
@@ -1717,6 +1724,10 @@ async function init() {
 
         } catch (_e) {
             if (ticketCurrent(ticket, 'full')) container.innerHTML = '<p class="text-error">Error loading files.</p>';
+        } finally {
+            // Superseded, failed or rendered: this re-read no longer holds Generate back
+            listLoads -= 1;
+            updateGenerateButton();
         }
     }
 
